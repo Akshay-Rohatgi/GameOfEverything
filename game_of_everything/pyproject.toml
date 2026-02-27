@@ -1,0 +1,23 @@
+[project]
+name = "game_of_everything"
+version = "0.1.0"
+description = "game_of_everything using crewAI"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "crewai[bedrock,tools]==1.9.3",
+    "langchain-aws>=1.1.0",
+]
+
+[project.scripts]
+kickoff = "game_of_everything.main:kickoff"
+run_crew = "game_of_everything.main:kickoff"
+plot = "game_of_everything.main:plot"
+run_with_trigger = "game_of_everything.main:run_with_trigger"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "flow"

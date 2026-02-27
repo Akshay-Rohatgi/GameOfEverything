@@ -1,0 +1,220 @@
+parse_request_task:
+  description: >
+    Analyze the user's request: "{initial_prompt}" and break it down into context, initial access vectors, and post-exploitation goals.
+  expected_output: >
+    A structured object containing the parsed components of the request.
+  agent: request_parser_agent
+
+map_atoms_task:
+  description: >
+    You have been given a ParsedRequest as context from the previous task. It contains:
+    - `initial_access_vectors`: a list of strings describing how the attacker gains initial access.
+    - `post_exploitation_goals`: a list of strings describing what the attacker wants to achieve after gaining access.
+
+    If you don't have a parsedRequest please run the tool called `search_vulnerability_atoms` with the query "NOT_WORKING" to get it before starting this task.
+
+    YOUR INSTRUCTIONS (follow them in order):
+    1. Read the ParsedRequest output from context. Identify every item in `initial_access_vectors` and `post_exploitation_goals`.
+    2. For EACH item, call the `search_vulnerability_atoms` tool with a concise search query derived from that item.
+       Example: if an access vector is "SMB share with anonymous access containing a sensitive file", call:
+       Action: search_vulnerability_atoms
+       Action Input: {"query": "insecure samba share anonymous access"}
+    3. The tool may return MULTIPLE Atom results separated by "--- ATOM: <id> ---" headers.
+       For each result, read the Atom markdown carefully:
+       - Extract the Atom's `id` (the string after "--- ATOM:") and its `required_vars` from the frontmatter.
+       - Evaluate how well it matches the user's specific requirement.
+       Map ALL Atoms that are necessary to fully implement the requirement. A single requirement may
+       need several complementary Atoms (e.g., "Samba share containing a backup file with credentials"
+       needs both a `samba_insecure_share` atom AND a `sensitive_file` atom). However, only include
+       an Atom if it is genuinely required — do not include loosely related ones.
+       If none of the returned Atoms are a good fit, issue a more specific follow-up search query.
+    4. Map the user's specific requirements to the selected Atom's parameters using its `required_vars`.
+    5. Build a MappedRequest with:
+       - `section`: a short label summarizing the overall scenario.
+       - `mapped_initial_access_atoms`: list of MappedAtom objects for initial access.
+       - `mapped_post_exploitation_goal_atoms`: list of MappedAtom objects for post-exploitation.
+
+    Each MappedAtom must have:
+    - `name`: the exact Atom id (e.g., "samba_insecure_share")
+    - `context`: a brief explanation of why this Atom was chosen
+    - `parameters`: a dict of key-value pairs matching the Atom's required_vars (e.g., {"share_name": "public", "path": "/srv/share"})
+
+    IMPORTANT: You MUST call the search tool at least once. Do NOT skip the tool or guess Atom names.
+  expected_output: >
+    A structured MappedRequest JSON object with `section`, `mapped_initial_access_atoms`, and `mapped_post_exploitation_goal_atoms`.
+    Each mapped atom must have `name` (the Atom id), `context` (why it was chosen), and `parameters` (a dict of config values).
+  agent: mapping_agent
+
+validate_mapping_task:
+  description: >
+    You are auditing the Mapping Agent's output. You have two pieces of context:
+      1. The ParsedRequest (from parse_request_task) — your source of truth for
+         what the user actually asked for.
+      2. The MappedRequest (from map_atoms_task) — the mapper's output to audit.
+
+    YOUR INSTRUCTIONS:
+
+    STEP 1 — Extract the raw requirement strings.
+    Read `initial_access_vectors` and `post_exploitation_goals` from the
+    ParsedRequest. Note which list each string belongs to.
+
+    STEP 2 — Independently atomize each requirement string.
+    For each string, reason about what discrete atomic building blocks it implies.
+    Break compound requirements into individual, specific descriptions.
+    Example:
+      "an exposed phpMyAdmin instance with authentication disabled containing a
+       database with a user table of weak credentials usable for SSH login"
+      → atomized descriptions:
+          - "install phpMyAdmin web interface"
+          - "phpMyAdmin authentication disabled or bypassed"
+          - "database user table containing weak plaintext credentials"
+          - "SSH user account with weak password"
+
+    STEP 3 — Search for the best-matching Atom for each atomized description.
+    For EACH atomized description, call:
+      Action: search_vulnerability_atoms
+      Action Input: {"query": "<atomized description>", "n_results": 1}
+    Record the Atom `id` returned (the string after "--- ATOM:").
+
+    STEP 4 — Diff against the existing MappedRequest.
+    The MappedRequest output from the map_atoms_task is available in your context
+    (injected automatically). Read it and extract all Atom names already present
+    in `mapped_initial_access_atoms` and `mapped_post_exploitation_goal_atoms`.
+
+    STEP 5 — Add any missing Atoms.
+    For each Atom `id` you found in Step 3 that does NOT appear in the current
+    MappedRequest, create a new MappedAtom:
+      - `name`: the Atom id exactly as returned by the tool
+      - `context`: why this atom is needed (reference the original requirement string)
+      - `parameters`: a dict populated from the Atom's `required_vars` (read from
+        the returned markdown) and any specific values from the user's request
+
+    Add it to `mapped_initial_access_atoms` if it relates to an initial access
+    vector, or `mapped_post_exploitation_goal_atoms` if it relates to a
+    post-exploitation goal.
+
+    STEP 6 — Output the final MappedRequest.
+    Return a MappedRequest that merges the original mapper's atoms with any you
+    added. Keep the original `section` value. If no atoms were missing, return
+    the MappedRequest unchanged.
+
+    You MUST call `search_vulnerability_atoms` for every atomized description.
+    Never skip a search or invent Atom names.
+  expected_output: >
+    A structured MappedRequest JSON object with `section`,
+    `mapped_initial_access_atoms`, and `mapped_post_exploitation_goal_atoms`.
+    This is either identical to the input MappedRequest (if complete) or extended
+    with any Atoms the original mapper missed. Each MappedAtom has `name`,
+    `context`, and `parameters`.
+  agent: mapping_validator_agent
+
+enumerate_dependencies_task:
+  description: >
+    You have been given a validated MappedRequest as context from the previous
+    task. Your job is to identify all OS-level packages implicitly required by
+    the scenario and add a `install_package` atom for each one not already present.
+
+    STEP 1 — Read all atoms.
+    List every atom in `mapped_initial_access_atoms` and
+    `mapped_post_exploitation_goal_atoms`, including their `name`, `context`,
+    and `parameters`.
+
+    STEP 2 — Identify required packages.
+    For each atom, reason about what Ubuntu/Debian packages it needs at runtime:
+      - `samba_insecure_share`            → samba
+      - `sensitive_file` with a .zip path → zip
+      - `set_suid` on a non-base binary   → that binary's apt package
+        (e.g. binary_path "/usr/bin/vim" → package "vim",
+               binary_path "/usr/bin/find" → already in base, skip)
+      - Any atom whose `context` mentions SSH as the access method,
+        OR any scenario where a `create_user` atom is present and the overall
+        context implies SSH login                                → openssh-server
+
+    Also read the `section` field and all atom `context` strings for any service
+    or tool names that imply additional packages not covered above.
+
+    STEP 3 — Deduplicate and diff.
+    Build a flat list of all required package names. Remove any for which an
+    `install_package` atom already exists in `mapped_initial_access_atoms`
+    with matching `parameters.package_name`.
+
+    STEP 4 — Confirm atom format via RAG.
+    For each missing package, call:
+      Action: search_vulnerability_atoms
+      Action Input: {"query": "install package <package_name>", "n_results": 1}
+    Read the returned atom to confirm the `id` is `install_package` and note
+    its `required_vars`. This grounds your output in real atom data.
+
+    STEP 5 — Build and add the new MappedAtoms.
+    For each missing package, create:
+      - `name`: "install_package"
+      - `context`: "<package_name> is required by <atom_name> to function at runtime"
+      - `parameters`: {"package_name": "<package_name>"}
+    Append each to `mapped_initial_access_atoms`.
+
+    STEP 6 — Return the updated MappedRequest.
+    Output a MappedRequest identical to the input except for the newly appended
+    install_package atoms. Keep `section` and all existing atoms unchanged.
+
+    You MUST call `search_vulnerability_atoms` for each missing package.
+    Never skip the tool or invent atom names.
+  expected_output: >
+    A MappedRequest JSON object identical to the input except that
+    `mapped_initial_access_atoms` now includes one `install_package` MappedAtom
+    per implicitly required package that was not already present.
+    Each new atom has `name`: "install_package", a clear `context`, and
+    `parameters`: {"package_name": "<package>"}.
+  agent: dependency_enumeration_agent
+
+sequence_atoms_task:
+  description: >
+    You have been given a validated MappedRequest as context from the previous
+    task. It contains two lists of MappedAtom objects:
+      - `mapped_initial_access_atoms`: atoms needed to establish initial access.
+      - `mapped_post_exploitation_goal_atoms`: atoms needed for post-exploitation.
+
+    YOUR TASK: Produce a single, flat, correctly ordered list of ALL these atoms
+    combined, so that a deployment script executed top-to-bottom will succeed.
+
+    STEP 1 — List every atom.
+    Write out each atom's `name` and its `parameters`. Do this for both lists.
+
+    STEP 2 — Reason about dependencies.
+    For each atom, explicitly state:
+      - What it needs to already exist before it can run (files, directories,
+        users, services, packages).
+      - Which other atom(s) in the list create those prerequisites.
+
+    Apply these rules:
+      a. `install_package` atoms always run first.
+      b. `create_user` runs before any atom whose parameters reference that username.
+      c. `samba_insecure_share` runs before `sensitive_file` if the file_path
+         is inside the share's path (the share creates the directory).
+      d. All `mapped_initial_access_atoms` run before all
+         `mapped_post_exploitation_goal_atoms`.
+      e. Within a group, preserve original order unless a dependency rule overrides.
+
+    STEP 3 — Output the ordered list.
+    Return a SequencedRequest with a single `atoms` field: a list of MappedAtom
+    objects in the determined execution order. Each MappedAtom must include its
+    original `name`, `context`, and `parameters` unchanged.
+  expected_output: >
+    A SequencedRequest JSON object with a single `atoms` field containing all
+    MappedAtom objects in correct dependency-resolved execution order.
+    Each atom retains its original `name`, `context`, and `parameters`.
+  agent: sequencing_agent
+
+generate_snippets_task:
+  description: >
+    Generate the actual shell script snippets for each sequenced Atom.
+    Sequenced atoms: {sequenced_atoms}
+  expected_output: >
+    A list of GeneratedSnippet objects containing the code.
+  agent: snippet_generation_agent
+
+validate_snippets_task:
+  description: >
+    Validate the generated snippets.
+  expected_output: >
+    Validated GeneratedSnippet objects.
+  agent: testing_agent
