@@ -11,9 +11,13 @@ from game_of_everything.models import (
     SequencedRequest, GeneratedSnippets
 )
 from game_of_everything.tools.search_atoms_tool import SearchAtomsTool
+from game_of_everything.tools.read_atom_tool import ReadAtomTool
+from game_of_everything.script_postprocessor import apply_post_processors
 # from langchain_aws import ChatBedrock
 from dotenv import load_dotenv
+import json
 import rich
+from datetime import datetime
 
 from crewai.events.event_context import (
     _event_context_config,
@@ -180,62 +184,93 @@ class GoEFlow(Flow[GoEState]):
 
     @listen(engineer_requirements)
     def generate_implementation(self):
-        """Step 2: Generate and validate implementation snippets."""
-        print("Skipping generation and validation for testing...")
-        # # Define Agents
-        # generator = Agent(config=self.agents_config["snippet_generation_agent"]) # type: ignore
-        # tester = Agent(config=self.agents_config["testing_agent"]) # type: ignore
+        """Step 2: Generate implementation snippets for each sequenced atom."""
+        if not self.state.sequenced_request:
+            print("No sequenced atoms to generate snippets for. Skipping.")
+            return
 
-        # # Define Tasks
-        # generate_task = Task(
-        #     config=self.tasks_config["generate_snippets_task"], # type: ignore
-        #     agent=generator,
-        # )
-        # validate_task = Task(
-        #     config=self.tasks_config["validate_snippets_task"], # type: ignore
-        #     agent=tester,
-        #     context=[generate_task],
-        #     output_pydantic=GeneratedSnippets
-        # )
+        model_id = "anthropic.claude-sonnet-4-6"
+        if not model_id.startswith("us.") and not model_id.startswith("eu."):
+            model_id = f"us.{model_id}"
 
-        # implementation_crew = Crew(
-        #     agents=[generator, tester],
-        #     tasks=[generate_task, validate_task],
-        #     process=Process.sequential,
-        #     verbose=False
-        # )
+        llm = LLM(
+            model=f"bedrock/{model_id}",
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
+            region=os.getenv("AWS_REGION", "us-east-1"),
+        )
 
-        # # Pass inputs to the implementation crew
-        # implementation_crew.kickoff(inputs={
-        #     "sequenced_atoms": str([atom.model_dump() for atom in (self.state.sequenced_request or [])]),
-        #     "parsed_request": str(self.state.parsed_request.model_dump() if self.state.parsed_request else "{}"),
-        #     "mapped_atoms": str(self.state.mapped_request.model_dump() if self.state.mapped_request else "{}")
-        # })
+        sequenced_atoms_json = json.dumps(
+            [atom.model_dump() for atom in self.state.sequenced_request],
+            indent=2,
+        )
 
-        print("Implementation generation complete (skipped).")
+        snippet_generator = Agent(
+            config=self.agents_config["snippet_generation_agent"],
+            llm=llm,
+            tools=[ReadAtomTool(), SearchAtomsTool()],
+            verbose=True,
+            step_callback=lambda step: print(f"[SNIPPET-GEN] {step}"),
+        ) # type: ignore
+
+        generate_task = Task(
+            config=self.tasks_config["generate_snippets_task"], # type: ignore
+            agent=snippet_generator,
+            output_pydantic=GeneratedSnippets,
+        )
+
+        generation_crew = Crew(
+            agents=[snippet_generator],
+            tasks=[generate_task],
+            process=Process.sequential,
+            verbose=True,
+            function_calling_llm=llm,
+        )
+
+        generation_crew.kickoff(inputs={"sequenced_atoms_json": sequenced_atoms_json})
+
+        if generate_task.output.pydantic: # type: ignore
+            self.state.generated_snippets = generate_task.output.pydantic.snippets # type: ignore
+
+        rich.print("\n[bold green]=== GENERATED SNIPPETS ===[/bold green]")
+        if self.state.generated_snippets:
+            for snippet in self.state.generated_snippets:
+                rich.print(f"\n  [bold cyan]--- {snippet.atom_name} ---[/bold cyan]")
+                rich.print(f"  [yellow]code_snippet:[/yellow]\n{snippet.code_snippet}")
+                rich.print(f"  [blue]testing_snippet:[/blue]\n{snippet.testing_snippet}")
+        else:
+            rich.print("  (no snippets generated)")
 
     @listen(generate_implementation)
     def finalize_script(self):
-        """Step 3: Synthesize the final script."""
-        print("Skipping final synthesis for testing...")
-        
-        # final_script = "#!/bin/bash\n"
-        # final_script += f"# Generated for request: {self.state.raw_request}\n\n"
-        
-        # if self.state.generated_snippets:
-        #     for snippet in self.state.generated_snippets:
-        #         if snippet.validated:
-        #             final_script += f"# Atom: {snippet.atom_name}\n"
-        #             final_script += snippet.code_snippet + "\n\n"
-        # else:
-        #     final_script += "echo 'No snippets were generated or validated.'\n"
+        """Step 3: Concatenate snippets through the post-processor pipeline and write the final script."""
+        if not self.state.generated_snippets:
+            print("No generated snippets to finalize. Skipping.")
+            return
 
-        # self.state.final_script = final_script
-        
-        # # Output the final result
-        # print("\n--- FINAL DEPLOYMENT SCRIPT ---")
-        # print(self.state.final_script)
-        # print("--- END OF SCRIPT ---")
+        # Concatenate snippets in order, separated by labelled section headers
+        sections = []
+        for snippet in self.state.generated_snippets:
+            header = f"# --- {snippet.atom_name} ---"
+            sections.append(f"{header}\n{snippet.code_snippet}")
+        raw_script = "\n\n".join(sections)
+
+        # Run through the extensible post-processor pipeline
+        # (injects shebang, adds set -e, normalises blank lines, ...)
+        final_script = apply_post_processors(raw_script)
+        self.state.final_script = final_script
+
+        # Write to output/<timestamp>_deploy.sh
+        output_dir = Path(__file__).parent.parent.parent.parent / "output"
+        output_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = output_dir / f"{timestamp}_deploy.sh"
+        out_path.write_text(final_script, encoding="utf-8")
+        out_path.chmod(0o755)
+
+        rich.print("\n[bold magenta]=== FINAL DEPLOYMENT SCRIPT ===[/bold magenta]")
+        rich.print(final_script)
+        rich.print(f"\n[bold green]Written to:[/bold green] {out_path}")
 
 def kickoff():
     goe_flow = GoEFlow()

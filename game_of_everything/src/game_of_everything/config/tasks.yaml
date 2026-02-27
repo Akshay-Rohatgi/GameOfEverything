@@ -206,10 +206,79 @@ sequence_atoms_task:
 
 generate_snippets_task:
   description: >
-    Generate the actual shell script snippets for each sequenced Atom.
-    Sequenced atoms: {sequenced_atoms}
+    Generate a Bash code snippet and a testing snippet for every Atom in the
+    following sequenced atom list:
+
+    {sequenced_atoms_json}
+
+    Each entry in the list is a JSON object with:
+      - `name`: the atom id (e.g. "samba_insecure_share")
+      - `context`: why this atom was chosen
+      - `parameters`: a dict of values to substitute (may be null if none needed)
+
+    YOUR INSTRUCTIONS (follow in order for EACH atom):
+
+    STEP 1 — Read the atom definition.
+    Call `read_atom` with the atom's `name`.
+    Example:
+      Action: read_atom
+      Action Input: {{"atom_name": "samba_insecure_share"}}
+
+    STEP 2 — Reason about the security intent.
+    Read the atom's `context` field (from the JSON entry). This is the mapper's
+    explanation of WHY this atom was chosen and WHAT security flaw it should
+    introduce. Use it to resolve any ambiguity the atom template leaves open:
+      - The atom defines the SHAPE of the script; the context defines the INTENT.
+      - If the context says "weak credential for SSH lateral movement", make the
+        password obviously guessable (e.g. same as the username, or from a
+        common wordlist like `rockyou`).
+      - If the context implies an insider-threat or sloppy-developer scenario,
+        the sensitive file should look plausible (e.g. a backed-up SSH private key
+        or a credentials.txt with real-looking entries).
+      - If the context names a specific binary, service, or path, use that
+        even if the atom's `parameters` dict left it null.
+      - When the context and `parameters` agree, `parameters` takes precedence
+        for any value it explicitly supplies. For everything else, let context guide you.
+
+    STEP 3 — Generate the code_snippet.
+    Using the atom's Logic Requirements, Synthesis Guidance, your context
+    reasoning from STEP 2, and the substituted parameters:
+      - Write the Bash commands that implement the configuration/vulnerability.
+      - Substitute all placeholders with values from `parameters` (or context-
+        derived defaults where parameters are null).
+      - Do NOT include a shebang line (#!/bin/bash). That is added automatically.
+      - Add a brief inline comment above each logical block explaining the
+        security rationale (e.g. `# world-readable share for anonymous enumeration`).
+
+    STEP 4 — Generate the testing_snippet.
+    Using the atom's Testing Guidance:
+      - Write a minimal Bash one-liner or short block that verifies the security
+        state was achieved (e.g. confirms the SUID bit is set, the share is
+        browseable, the file is readable by the intended user).
+      - Do NOT include a shebang line.
+
+    STEP 5 — Build the GeneratedSnippet.
+    For this atom, create a GeneratedSnippet with:
+      - `atom_name`: the atom's `name`
+      - `code_snippet`: your generated Bash commands (string)
+      - `testing_snippet`: your verification commands (string)
+      - `mapped_atom`: the full MappedAtom object (name, context, parameters)
+      - `validated`: false
+
+    Repeat STEPS 1-5 for every atom in the list.
+    Collect all GeneratedSnippet objects into a GeneratedSnippets wrapper.
+
+    IMPORTANT:
+    - You MUST call `read_atom` for every single atom. No exceptions.
+    - The atom markdown is a scaffold. The `context` field is your brief for
+      security intent — use it to make decisions the template leaves open.
+    - Process atoms in the order given; do not reorder them.
+    - Never merge multiple atoms' commands into one snippet.
   expected_output: >
-    A list of GeneratedSnippet objects containing the code.
+    A GeneratedSnippets JSON object with a `snippets` field containing one
+    GeneratedSnippet per atom, in the same order as the input list.
+    Each GeneratedSnippet has: `atom_name` (str), `code_snippet` (str),
+    `testing_snippet` (str), `mapped_atom` (MappedAtom object), `validated` (false).
   agent: snippet_generation_agent
 
 validate_snippets_task:
