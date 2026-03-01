@@ -50,6 +50,16 @@ class TestVerdict(BaseModel):
     reasoning: str
 
 
+class DiagnosticResult(BaseModel):
+    """
+    Output from the Diagnostic Agent's analysis and fix attempt for a failing snippet.
+    """
+    fixed_code_snippet: str
+    fixed_testing_snippet: str
+    diagnosis: str           # what went wrong and what was changed
+    confidence: str          # "high", "medium", or "low"
+
+
 class TestResult(BaseModel):
     """
     Captures the full test outcome for a single snippet across both layers.
@@ -57,6 +67,7 @@ class TestResult(BaseModel):
     atom_name: str
     layer1_verdict: TestVerdict
     layer2_verdicts: Optional[List[TestVerdict]] = None  # one per cumulative probe (snippets 0..N)
+    diagnostic_results: Optional[List[DiagnosticResult]] = None  # all diagnosis attempts (L1 retries + L2 diag)
     error: Optional[str] = None
 
 class SequencedRequest(BaseModel):

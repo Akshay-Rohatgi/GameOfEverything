@@ -343,3 +343,53 @@ validate_snippets_task:
     A TestVerdict JSON object with `passed` (boolean) and `reasoning` (string
     citing specific evidence from stdout/stderr/exit_code).
   agent: testing_agent
+
+diagnose_snippet_task:
+  description: >
+    A vulnerability snippet failed validation during Docker container testing.
+    Diagnose the failure and produce a corrected version.
+
+    FAILURE CONTEXT:
+    - Atom: {atom_name}
+    - Security intent: {atom_context}
+    - Parameters: {atom_parameters}
+    - Retry attempt: {attempt_number} of 2
+
+    ORIGINAL SNIPPETS:
+    - Code snippet that was applied:
+    {original_code_snippet}
+
+    - Testing snippet that was run:
+    {original_testing_snippet}
+
+    FAILURE EVIDENCE:
+    - Stderr from applying code_snippet:
+    {apply_stderr}
+
+    - Testing snippet exit code: {l1_exit_code}
+    - Testing snippet stdout:
+    {l1_stdout}
+    - Testing snippet stderr:
+    {l1_stderr}
+
+    - Testing Agent's verdict: {verdict_reasoning}
+
+    YOUR TASK:
+    1. Use `read_atom` to read the full atom definition for "{atom_name}" and
+       understand the Logic Requirements, Synthesis Guidance, and Testing Guidance.
+    2. Analyze all failure evidence — apply_stderr, l1 output, and verdict reasoning.
+    3. Optionally use `exec_in_container` with container_id "goe_target" to run
+       diagnostic commands and inspect the actual container state.
+    4. Determine the root cause of the failure.
+    5. Produce a complete, idempotent replacement for both code_snippet and
+       testing_snippet that fixes the issue.
+
+    Return a DiagnosticResult with:
+    - `fixed_code_snippet`: The corrected Bash commands (no shebang).
+    - `fixed_testing_snippet`: The corrected verification commands (no shebang).
+    - `diagnosis`: 2-4 sentence explanation of root cause and fix.
+    - `confidence`: "high", "medium", or "low".
+  expected_output: >
+    A DiagnosticResult JSON object with `fixed_code_snippet` (str),
+    `fixed_testing_snippet` (str), `diagnosis` (str), and `confidence` (str).
+  agent: diagnostic_agent

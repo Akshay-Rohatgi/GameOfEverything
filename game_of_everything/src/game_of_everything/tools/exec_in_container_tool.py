@@ -44,6 +44,7 @@ class ExecInContainerTool(BaseTool):
             exit_code, output = container.exec_run(
                 cmd=["bash", "-c", snippet],
                 demux=True,
+                privileged=True,
             )
             stdout = (output[0] or b"").decode("utf-8", errors="replace")
             stderr = (output[1] or b"").decode("utf-8", errors="replace")
