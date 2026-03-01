@@ -33,11 +33,31 @@ class GeneratedSnippet(BaseModel):
     atom_name: str
     code_snippet: str
     testing_snippet: str
+    attack_snippet: Optional[str] = None  # Layer 2: adversarial probe from attacker container
     mapped_atom: MappedAtom
     validated: bool = False
 
     def set_validated(self, validated: bool):
         self.validated = validated
+
+
+class TestVerdict(BaseModel):
+    """
+    LLM-produced judgment on whether a command's output indicates success
+    for a given atom's expected state or exploit.
+    """
+    passed: bool
+    reasoning: str
+
+
+class TestResult(BaseModel):
+    """
+    Captures the full test outcome for a single snippet across both layers.
+    """
+    atom_name: str
+    layer1_verdict: TestVerdict
+    layer2_verdicts: Optional[List[TestVerdict]] = None  # one per cumulative probe (snippets 0..N)
+    error: Optional[str] = None
 
 class SequencedRequest(BaseModel):
     """

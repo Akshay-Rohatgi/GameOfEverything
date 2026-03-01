@@ -257,15 +257,31 @@ generate_snippets_task:
         browseable, the file is readable by the intended user).
       - Do NOT include a shebang line.
 
-    STEP 5 — Build the GeneratedSnippet.
+    STEP 5 — Generate the attack_snippet (or null).
+    Determine whether this atom has an EXTERNAL ATTACK SURFACE — meaning an
+    attacker on a separate machine could probe or exploit it over the network.
+      - If YES (e.g. samba_insecure_share, create_user with SSH context):
+        Write a Bash command that probes the vulnerability from an attacker's
+        perspective. The attacker container is Kali-based and addresses the
+        target by hostname `target` on a Docker bridge network.
+        Examples:
+          - samba_insecure_share: `smbclient -L //target/<share_name> -N`
+          - create_user with SSH: `sshpass -p '<password>' ssh -o StrictHostKeyChecking=no <username>@target id`
+        Do NOT include a shebang line.
+      - If NO (e.g. install_package, set_suid, sensitive_file with no network
+        exposure): set attack_snippet to null.
+        These atoms only affect local state and are fully covered by Layer 1.
+
+    STEP 6 — Build the GeneratedSnippet.
     For this atom, create a GeneratedSnippet with:
       - `atom_name`: the atom's `name`
       - `code_snippet`: your generated Bash commands (string)
       - `testing_snippet`: your verification commands (string)
+      - `attack_snippet`: your attack probe command (string or null)
       - `mapped_atom`: the full MappedAtom object (name, context, parameters)
       - `validated`: false
 
-    Repeat STEPS 1-5 for every atom in the list.
+    Repeat STEPS 1-6 for every atom in the list.
     Collect all GeneratedSnippet objects into a GeneratedSnippets wrapper.
 
     IMPORTANT:
@@ -274,16 +290,56 @@ generate_snippets_task:
       security intent — use it to make decisions the template leaves open.
     - Process atoms in the order given; do not reorder them.
     - Never merge multiple atoms' commands into one snippet.
+    - For attack_snippet: only atoms with NETWORK-FACING services get one.
+      Local-only atoms (install_package, set_suid, sensitive_file not exposed
+      via a service) must have attack_snippet set to null.
   expected_output: >
     A GeneratedSnippets JSON object with a `snippets` field containing one
     GeneratedSnippet per atom, in the same order as the input list.
     Each GeneratedSnippet has: `atom_name` (str), `code_snippet` (str),
-    `testing_snippet` (str), `mapped_atom` (MappedAtom object), `validated` (false).
+    `testing_snippet` (str), `attack_snippet` (str or null),
+    `mapped_atom` (MappedAtom object), `validated` (false).
   agent: snippet_generation_agent
 
 validate_snippets_task:
   description: >
-    Validate the generated snippets.
+    You are judging the output of a command that was executed inside a Docker
+    container as part of vulnerability snippet testing.
+
+    CONTEXT:
+    - Atom: {atom_name}
+    - Security intent: {atom_context}
+    - Test layer: {layer}
+    - Command executed: {snippet_executed}
+
+    RAW OUTPUT:
+    - Exit code: {exit_code}
+    - STDOUT:
+    {stdout}
+    - STDERR:
+    {stderr}
+
+    YOUR TASK:
+    Analyze the exit code, stdout, and stderr in the context of the atom's
+    security intent and the command that was executed. Determine whether the
+    output indicates the intended configuration or vulnerability was successfully
+    applied (for Layer 1 internal state checks) or successfully exploited
+    (for Layer 2 external attack probes).
+
+    Consider:
+    1. Does the exit code indicate success? (0 is usually good, but some tools
+       return 0 on partial failure or non-zero on success with warnings.)
+    2. Are there positive indicators in stdout? (Expected usernames, share names,
+       file contents, permission bits, service status messages, etc.)
+    3. Are there failure indicators in stderr? (Access denied, connection refused,
+       authentication failed, etc. — but warnings and deprecation notices are
+       NOT failures.)
+    4. Is the output consistent with what the atom's security intent describes?
+
+    Return a TestVerdict with:
+    - `passed`: true if the evidence confirms success, false if it indicates failure.
+    - `reasoning`: 1-3 sentences citing specific evidence from the output.
   expected_output: >
-    Validated GeneratedSnippet objects.
+    A TestVerdict JSON object with `passed` (boolean) and `reasoning` (string
+    citing specific evidence from stdout/stderr/exit_code).
   agent: testing_agent

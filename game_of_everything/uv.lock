@@ -876,12 +876,14 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "crewai", extra = ["bedrock", "tools"] },
+    { name = "docker" },
     { name = "langchain-aws" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "crewai", extras = ["bedrock", "tools"], specifier = "==1.9.3" },
+    { name = "docker", specifier = ">=7.0.0" },
     { name = "langchain-aws", specifier = ">=1.1.0" },
 ]
 

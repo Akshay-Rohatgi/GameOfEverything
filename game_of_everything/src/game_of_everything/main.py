@@ -8,10 +8,11 @@ from crewai import Agent, Task, Crew, Process, LLM
 from crewai.flow import Flow, listen, start
 from game_of_everything.models import (
     ParsedRequest, MappedRequest, GeneratedSnippet, MappedAtom, 
-    SequencedRequest, GeneratedSnippets
+    SequencedRequest, GeneratedSnippets, TestVerdict, TestResult
 )
 from game_of_everything.tools.search_atoms_tool import SearchAtomsTool
 from game_of_everything.tools.read_atom_tool import ReadAtomTool
+from game_of_everything.tools.test_environment import TestEnvironmentTool
 from game_of_everything.script_postprocessor import apply_post_processors
 # from langchain_aws import ChatBedrock
 from dotenv import load_dotenv
@@ -43,6 +44,7 @@ class GoEState(BaseModel):
     mapped_request: Optional[MappedRequest] = None
     sequenced_request: Optional[List[MappedAtom]] = None
     generated_snippets: Optional[List[GeneratedSnippet]] = None
+    test_results: Optional[List[TestResult]] = None
     final_script: Optional[str] = None
 
 class GoEFlow(Flow[GoEState]):
@@ -238,19 +240,254 @@ class GoEFlow(Flow[GoEState]):
                 rich.print(f"\n  [bold cyan]--- {snippet.atom_name} ---[/bold cyan]")
                 rich.print(f"  [yellow]code_snippet:[/yellow]\n{snippet.code_snippet}")
                 rich.print(f"  [blue]testing_snippet:[/blue]\n{snippet.testing_snippet}")
+                if snippet.attack_snippet:
+                    rich.print(f"  [red]attack_snippet:[/red]\n{snippet.attack_snippet}")
+                else:
+                    rich.print(f"  [dim]attack_snippet: null (no external attack surface)[/dim]")
         else:
             rich.print("  (no snippets generated)")
 
+    # ------------------------------------------------------------------
+    # Step 3: Test snippets in Docker containers
+    # ------------------------------------------------------------------
+
+    def _make_llm(self) -> LLM:
+        """Create a Bedrock LLM instance (shared helper to avoid repetition)."""
+        model_id = "anthropic.claude-sonnet-4-6"
+        if not model_id.startswith("us.") and not model_id.startswith("eu."):
+            model_id = f"us.{model_id}"
+        return LLM(
+            model=f"bedrock/{model_id}",
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
+            region=os.getenv("AWS_REGION", "us-east-1"),
+        )
+
+    def _run_verdict_crew(
+        self,
+        llm: LLM,
+        atom_name: str,
+        atom_context: str,
+        layer: str,
+        snippet_executed: str,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+    ) -> TestVerdict:
+        """Kick off a one-task Testing Agent crew to judge command output.
+
+        The LLM receives the atom context + raw output and returns a TestVerdict.
+        No tools needed — pure reasoning about the output text.
+        """
+        tester = Agent(
+            config=self.agents_config["testing_agent"],
+            llm=llm,
+            verbose=True,
+            step_callback=lambda step: print(f"[TESTER] {step}"),
+        )  # type: ignore
+
+        verdict_task = Task(
+            config=self.tasks_config["validate_snippets_task"],  # type: ignore
+            agent=tester,
+            output_pydantic=TestVerdict,
+        )
+
+        verdict_crew = Crew(
+            agents=[tester],
+            tasks=[verdict_task],
+            process=Process.sequential,
+            verbose=True,
+            function_calling_llm=llm,
+        )
+
+        verdict_crew.kickoff(
+            inputs={
+                "atom_name": atom_name,
+                "atom_context": atom_context,
+                "layer": layer,
+                "snippet_executed": snippet_executed,
+                "exit_code": str(exit_code),
+                "stdout": stdout or "(empty)",
+                "stderr": stderr or "(empty)",
+            }
+        )
+
+        if verdict_task.output.pydantic:  # type: ignore
+            return verdict_task.output.pydantic  # type: ignore
+
+        # Fallback: if pydantic parsing failed, treat as failure
+        return TestVerdict(
+            passed=False,
+            reasoning="Failed to parse LLM verdict output into TestVerdict.",
+        )
+
     @listen(generate_implementation)
+    def test_snippets(self):
+        """Step 3: Test generated snippets in Docker containers.
+
+        Hybrid architecture:
+        - Python loop controls progression (apply snippet, run checks, decide stop/continue).
+        - LLM (Testing Agent) judges each command's output — no hardcoded output parsing.
+
+        Incremental cumulative testing:
+        - After applying snippet N and passing Layer 1, re-run Layer 2 probes for
+          ALL snippets 0..N that have an attack_snippet. This catches dependency
+          misordering and regressions at the exact snippet that caused them.
+        """
+        if not self.state.generated_snippets:
+            print("No generated snippets to test. Skipping.")
+            return
+
+        snippets = self.state.generated_snippets
+        llm = self._make_llm()
+        env = TestEnvironmentTool()
+        results: List[TestResult] = []
+
+        try:
+            rich.print("\n[bold yellow]=== SETTING UP TEST ENVIRONMENT ===[/bold yellow]")
+            env.setup()
+            rich.print("[green]Test environment ready (target + attacker containers on goe_test_net)[/green]")
+
+            for i, snippet in enumerate(snippets):
+                rich.print(f"\n[bold cyan]=== TESTING SNIPPET {i}: {snippet.atom_name} ===[/bold cyan]")
+
+                # --- Apply the code_snippet on the target ---
+                rich.print(f"  [yellow]Applying code_snippet...[/yellow]")
+                apply_exit, apply_stdout, apply_stderr = env.exec_in_target(snippet.code_snippet)
+                rich.print(f"  Apply exit code: {apply_exit}")
+                if apply_stderr:
+                    rich.print(f"  [dim]Apply stderr: {apply_stderr[:500]}[/dim]")
+
+                # --- Layer 1: run testing_snippet, ask LLM to judge ---
+                rich.print(f"  [blue]Running Layer 1 (internal state check)...[/blue]")
+                l1_exit, l1_stdout, l1_stderr = env.exec_in_target(snippet.testing_snippet)
+                rich.print(f"  Layer 1 exit code: {l1_exit}")
+
+                l1_verdict = self._run_verdict_crew(
+                    llm=llm,
+                    atom_name=snippet.atom_name,
+                    atom_context=snippet.mapped_atom.context,
+                    layer="internal state check",
+                    snippet_executed=snippet.testing_snippet,
+                    exit_code=l1_exit,
+                    stdout=l1_stdout,
+                    stderr=l1_stderr,
+                )
+
+                rich.print(f"  Layer 1 verdict: {'[green]PASS[/green]' if l1_verdict.passed else '[red]FAIL[/red]'}")
+                rich.print(f"  Reasoning: {l1_verdict.reasoning}")
+
+                if not l1_verdict.passed:
+                    # Layer 1 failure — stop the chain; downstream atoms may depend on this one
+                    snippet.set_validated(False)
+                    results.append(TestResult(
+                        atom_name=snippet.atom_name,
+                        layer1_verdict=l1_verdict,
+                        layer2_verdicts=None,
+                        error=f"Layer 1 failed — chain stopped at snippet {i}.",
+                    ))
+                    rich.print(f"  [bold red]Layer 1 FAILED for {snippet.atom_name}. Stopping test chain.[/bold red]")
+                    # Mark all remaining snippets as not validated
+                    for remaining in snippets[i + 1:]:
+                        remaining.set_validated(False)
+                    break
+
+                # --- Layer 2: re-run ALL accumulated attack probes 0..i ---
+                l2_verdicts: List[TestVerdict] = []
+                has_l2_failure = False
+
+                for j in range(i + 1):
+                    if snippets[j].attack_snippet:
+                        rich.print(f"  [red]Running Layer 2 probe for snippet {j} ({snippets[j].atom_name})...[/red]")
+                        a_exit, a_stdout, a_stderr = env.exec_in_attacker(snippets[j].attack_snippet)
+
+                        verdict = self._run_verdict_crew(
+                            llm=llm,
+                            atom_name=snippets[j].atom_name,
+                            atom_context=snippets[j].mapped_atom.context,
+                            layer="external attack probe",
+                            snippet_executed=snippets[j].attack_snippet,
+                            exit_code=a_exit,
+                            stdout=a_stdout,
+                            stderr=a_stderr,
+                        )
+                        l2_verdicts.append(verdict)
+
+                        status = '[green]PASS[/green]' if verdict.passed else '[red]FAIL[/red]'
+                        rich.print(f"    Snippet {j} ({snippets[j].atom_name}) Layer 2: {status}")
+                        rich.print(f"    Reasoning: {verdict.reasoning}")
+
+                        if not verdict.passed:
+                            has_l2_failure = True
+                            # Distinguish regression from first-time failure
+                            if j < i:
+                                rich.print(f"    [bold red]⚠ REGRESSION: snippet {j} Layer 2 was passing, now fails after snippet {i}[/bold red]")
+
+                # Set validated: both layers must pass (or Layer 2 is N/A)
+                all_l2_passed = all(v.passed for v in l2_verdicts) if l2_verdicts else True
+                snippet.set_validated(l1_verdict.passed and all_l2_passed)
+
+                results.append(TestResult(
+                    atom_name=snippet.atom_name,
+                    layer1_verdict=l1_verdict,
+                    layer2_verdicts=l2_verdicts if l2_verdicts else None,
+                ))
+
+            self.state.test_results = results
+
+            # --- Summary ---
+            rich.print("\n[bold magenta]=== TEST SUMMARY ===[/bold magenta]")
+            for result in results:
+                l1_status = '[green]PASS[/green]' if result.layer1_verdict.passed else '[red]FAIL[/red]'
+                if result.layer2_verdicts:
+                    l2_all = all(v.passed for v in result.layer2_verdicts)
+                    l2_status = f"[green]PASS[/green] ({len(result.layer2_verdicts)} probes)" if l2_all else f"[red]FAIL[/red]"
+                else:
+                    l2_status = "[dim]N/A[/dim]"
+                rich.print(f"  {result.atom_name}: L1={l1_status} L2={l2_status}")
+                if result.error:
+                    rich.print(f"    [red]{result.error}[/red]")
+
+        finally:
+            rich.print("\n[bold yellow]=== TEARING DOWN TEST ENVIRONMENT ===[/bold yellow]")
+            env.teardown()
+            rich.print("[green]Test environment cleaned up.[/green]")
+
+    @listen(test_snippets)
     def finalize_script(self):
-        """Step 3: Concatenate snippets through the post-processor pipeline and write the final script."""
+        """Step 4: Concatenate validated snippets through the post-processor pipeline and write the final script."""
         if not self.state.generated_snippets:
             print("No generated snippets to finalize. Skipping.")
             return
 
-        # Concatenate snippets in order, separated by labelled section headers
+        # Only include validated snippets in the final script
+        validated = [s for s in self.state.generated_snippets if s.validated]
+        skipped = [s for s in self.state.generated_snippets if not s.validated]
+
+        if skipped:
+            rich.print("\n[bold yellow]=== SKIPPED SNIPPETS (validation failed) ===[/bold yellow]")
+            for s in skipped:
+                rich.print(f"  [red]✗[/red] {s.atom_name}")
+                # Find the test result with failure reasoning
+                if self.state.test_results:
+                    for tr in self.state.test_results:
+                        if tr.atom_name == s.atom_name:
+                            if not tr.layer1_verdict.passed:
+                                rich.print(f"    Layer 1: {tr.layer1_verdict.reasoning}")
+                            if tr.layer2_verdicts:
+                                for v in tr.layer2_verdicts:
+                                    if not v.passed:
+                                        rich.print(f"    Layer 2: {v.reasoning}")
+                            if tr.error:
+                                rich.print(f"    Error: {tr.error}")
+
+        if not validated:
+            rich.print("[bold red]No snippets passed validation. No deployment script generated.[/bold red]")
+            return
+
+        # Concatenate validated snippets in order, separated by labelled section headers
         sections = []
-        for snippet in self.state.generated_snippets:
+        for snippet in validated:
             header = f"# --- {snippet.atom_name} ---"
             sections.append(f"{header}\n{snippet.code_snippet}")
         raw_script = "\n\n".join(sections)

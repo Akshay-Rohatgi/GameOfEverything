@@ -135,9 +135,13 @@ for generated_snippet in sequenced_request:
 - **Dependency Enumeration Agent**: Operational. Reads the validated `MappedRequest`, reasons about implicit OS package requirements per atom (samba → `samba`, zip file → `zip`, SSH context → `openssh-server`, non-base SUID binary → its apt package), diffs against existing `install_package` atoms, confirms format via RAG, and appends new `install_package` MappedAtoms. `GoEState.mapped_request` is populated from `dep_task.output.pydantic`.
 - **Sequencing Agent**: Operational. Receives the dependency-enriched `MappedRequest` via context, applies ordering rules (`install_package` first → `create_user` → share before file if path overlaps → initial access before post-exploitation), outputs `SequencedRequest`. `GoEState.sequenced_request` populated from `sequence_task.output.pydantic.atoms`.
 - **`SearchAtomsTool`**: Updated to accept an optional `n_results` parameter (default `3`), allowing validator and dep-enumerator to call with `n_results=1` for best-match-only lookups.
-- **Configuration** (`agents.yaml` / `tasks.yaml`): Fully defined for Parser, Mapper, Validator, Dep-Enumerator, and Sequencer. Task context chain: `parse → map → validate → dep_enumerate → sequence`.
+- **`ReadAtomTool`** (`read_atom`): reads the full markdown of any Atom from `atoms/` by id. Used by the Snippet Generation Agent to fetch Logic Requirements, Synthesis Guidance, and Testing Guidance at generation time.
+- **`script_postprocessor.py`**: Extensible post-processing pipeline (`SCRIPT_POST_PROCESSORS: List[Callable[[str], str]]`). Current processors (applied in order): `inject_shebang` (strips stray shebangs, prepends exactly one `#!/bin/bash`), `ensure_set_e` (inserts `set -e` after the shebang), `normalize_blank_lines` (collapses 3+ blank lines to 2).
+- **Snippet Generation Agent**: Operational. Receives `sequenced_atoms_json` (serialized `SequencedRequest`), calls `read_atom` per atom, uses the atom's `context` field as the security intent brief to resolve ambiguities the template leaves open (password strength, binary choice, file content, etc.), substitutes `parameters`, and emits `code_snippet` + `testing_snippet` per atom. Outputs `GeneratedSnippets`. No shebang in generated snippets — injected by post-processor.
+- **`finalize_script` flow step**: Concatenates `code_snippet` fields separated by `# --- <atom_name> ---` headers, runs the result through `apply_post_processors`, writes to `output/<timestamp>_deploy.sh` (mode 0755).
+- **Configuration** (`agents.yaml` / `tasks.yaml`): Fully defined for all agents including `snippet_generation_agent`. Task context chain: `parse → map → validate → dep_enumerate → sequence`. Snippet generation task injects sequenced atoms via `inputs` rather than crewAI `context`.
 - **Atoms Library**: `create_user.md`, `install_package.md`, `samba_insecure_share.md`, `sensitive_file.md`, `set_suid.md`.
-- **Flow State** (`GoEState`): `raw_request`, `parsed_request`, `mapped_request` (from `dep_task`), `sequenced_request` (from `sequence_task`), `generated_snippets`, `final_script`.
+- **Flow State** (`GoEState`): `raw_request`, `parsed_request`, `mapped_request` (from `dep_task`), `sequenced_request` (from `sequence_task`), `generated_snippets` (from `generate_task`), `final_script` (written to `output/`).
 
 ### 🐛 Known Bugs & Workarounds
 
@@ -172,10 +176,142 @@ _event_context_config.set(EventContextConfig(
 ```
 
 ### 🚧 In Progress
-- **Active agents**: `engineer_requirements` runs Parser → Mapper → Validator → Dep-Enumerator → Sequencer. Snippet Generation and Testing steps are stubbed/commented.
-- **Context injection**: All data flow is prompt-based via crewAI `context=[...]`. CrewAI concatenates prior task raw outputs into each subsequent task's prompt as plain text. There is no programmatic structured handoff.
+- **Context injection**: All data flow is prompt-based via crewAI `context=[...]` or `inputs={}`. There is no programmatic structured handoff.
 
 ### 🎯 Next Steps
-1. **Reduce RAG token cost**: Currently each ChromaDB result returns the full Atom markdown. Investigate embedding a condensed representation (e.g., only frontmatter + section headers) to reduce tokens passed to the Mapping Agent without losing the information needed for parameter extraction.
-2. **Snippet Generation + Testing**: Activate and refine the commented-out generation and validation stages.
-3. **Non-interactive trigger**: Implement `run_with_trigger` in `main.py` to support passing a request via JSON payload instead of `input()`.
+1. **Non-interactive trigger**: Implement `run_with_trigger` in `main.py` to support passing a request via JSON payload instead of `input()`.
+2. **Reduce RAG token cost**: Investigate embedding only frontmatter + section headers to reduce tokens passed to the Mapping Agent.
+3. **Agentic retry on test failure**: Extend the Testing Agent to autonomously run diagnostic commands via `ExecInContainerTool` / `AttackFromContainerTool` when a verdict is ambiguous, and optionally regenerate a failing snippet.
+
+---
+
+## 🧪 Testing Architecture (Implemented)
+
+Snippet validation uses two distinct layers with different trust boundaries, orchestrated by a **hybrid Python loop + LLM verdict** architecture.
+
+### Design Principles
+
+1. **LLM judges all command output.** Command outputs are messy, version-dependent, and context-sensitive. Rather than hardcoding expected outputs or regex patterns per atom, the Testing Agent (LLM) receives the atom's security intent + raw stdout/stderr/exit code and reasons about whether the output indicates success. This scales to any atom without per-atom parsing logic.
+
+2. **Incremental cumulative testing.** After applying snippet N and passing its Layer 1 check, Layer 2 probes run for **all snippets 0..N** that have an `attack_snippet`. This catches:
+   - **Dependency misordering**: If the Sequencing Agent put SSH login before user creation, the SSH probe fails immediately at that step — not masked by a later "all-at-once" run where the dependency is accidentally satisfied.
+   - **Regressions**: If snippet N breaks snippet M's (M < N) functionality (e.g. a firewall rule closing a port), the re-run of snippet M's probe catches it at the exact snippet that caused the regression.
+
+3. **Python loop controls progression; LLM only judges.** The incremental cumulative protocol is too structured for a single agent invocation to execute correctly. Python controls: which snippet to apply, when to stop, which probes to re-run. The LLM only interprets command output — it never decides what to run.
+
+4. **Kali-based attacker container.** The `kalilinux/kali-rolling` base image is larger than Alpine, but Kali's apt repos ship pre-packaged offensive tools (metasploit, hydra, nmap, smbclient, sshpass). As the atom library grows beyond basic SMB/SSH, every new attack vector would require sourcing and building tools on Alpine. Kali eliminates that tax — additional tools are one `apt install` away with no custom repos.
+
+### Layer 1 — Internal (state verification)
+Run the `testing_snippet` inside the target container via `docker exec`. Answers: *"Was the configuration applied correctly?"*
+- Tests filesystem state, service status, user existence, permissions, SUID bits — from root's perspective on the target machine.
+- **Execution**: `TestEnvironmentTool.exec_in_target(snippet)` — runs `docker exec goe_target bash -c "<snippet>"`, returns stdout/stderr/exit code.
+- **Judgment**: The raw output is passed to a one-task Testing Agent crew (`validate_snippets_task`) which returns a `TestVerdict(passed, reasoning)`.
+- **Failure behavior**: A Layer 1 failure stops the entire test chain — downstream atoms may depend on this one. All remaining snippets are marked `validated = False`.
+
+### Layer 2 — External (attack simulation)
+Run the `attack_snippet` from the Kali attacker container against the target on the same Docker bridge network. Answers: *"Is the initial access vector actually exploitable?"*
+- Tests reachability, service exposure, and exploit success from an unauthenticated adversary's perspective.
+- **Execution**: `TestEnvironmentTool.exec_in_attacker(snippet)` — runs `docker exec goe_attacker bash -c "<snippet>"`.
+- **Judgment**: Same one-task Testing Agent crew, same `TestVerdict` output.
+- **Incremental re-run**: After applying snippet N, Layer 2 runs for all snippets 0..N that have an `attack_snippet`. Regressions are flagged with a warning distinguishing "first-time failure" from "regression (was passing, now fails)."
+- **Failure behavior**: Layer 2 failures flag the specific access vector as broken but do NOT stop the chain. Other probes continue.
+
+### `attack_snippet` field
+A third output produced by the Snippet Generation Agent alongside `code_snippet` and `testing_snippet`:
+```python
+class GeneratedSnippet(BaseModel):
+    atom_name: str
+    code_snippet: str
+    testing_snippet: str      # Layer 1: internal state check
+    attack_snippet: Optional[str] = None  # Layer 2: adversarial probe from attacker container
+    mapped_atom: MappedAtom
+    validated: bool = False
+```
+Atoms with no external attack surface (e.g. `install_package`, `set_suid`) leave `attack_snippet` as `None` and skip Layer 2.
+
+### LLM Verdict Model
+```python
+class TestVerdict(BaseModel):
+    passed: bool
+    reasoning: str  # 1-3 sentences citing specific evidence from stdout/stderr
+
+class TestResult(BaseModel):
+    atom_name: str
+    layer1_verdict: TestVerdict
+    layer2_verdicts: Optional[List[TestVerdict]] = None  # one per cumulative probe run
+    error: Optional[str] = None
+```
+
+### Docker Network Topology
+```
+docker network create goe_test_net
+docker run -d --name goe_target --hostname target --network goe_test_net ubuntu:22.04 sleep infinity
+docker run -d --name goe_attacker --hostname attacker --network goe_test_net goe-attacker:latest sleep infinity
+```
+- Target: `ubuntu:22.04` — snippets are applied here via `docker exec`.
+- Attacker: `kalilinux/kali-rolling` + pre-installed offensive tools — attack probes run here.
+- Both containers remain running for the entire test loop (avoids per-probe startup overhead).
+- Both are torn down in a `finally` block after testing completes.
+
+### Container Lifecycle (`TestEnvironmentTool`)
+A Python helper class (not a crewAI tool) at `tools/test_environment.py` that owns Docker lifecycle via the `docker` Python SDK:
+1. `setup()` — create bridge network, start target + attacker containers (builds Kali image from `docker/attacker/Dockerfile`). Force-cleans any stale resources from previous failed runs.
+2. `exec_in_target(snippet)` — `docker exec goe_target bash -c "<snippet>"`, returns `(exit_code, stdout, stderr)`.
+3. `exec_in_attacker(snippet)` — `docker exec goe_attacker bash -c "<snippet>"`, returns `(exit_code, stdout, stderr)`.
+4. `teardown()` — stop + remove both containers and network.
+
+### Hybrid Testing Loop (`test_snippets` flow step)
+The `test_snippets` method in `GoEFlow` is decorated with `@listen(generate_implementation)` and runs before `finalize_script`:
+
+```
+engineer_requirements → generate_implementation → test_snippets → finalize_script
+```
+
+Pseudocode:
+```python
+env = TestEnvironmentTool()
+env.setup()
+try:
+    for i, snippet in enumerate(snippets):
+        # Apply code_snippet on target
+        env.exec_in_target(snippet.code_snippet)
+
+        # Layer 1: run testing_snippet, LLM judges output
+        l1_exit, l1_stdout, l1_stderr = env.exec_in_target(snippet.testing_snippet)
+        l1_verdict = run_verdict_crew(atom=snippet, layer="internal", output=...)
+        if not l1_verdict.passed:
+            mark snippet + all remaining as validated=False, STOP
+            break
+
+        # Layer 2: re-run ALL attack probes for snippets 0..i
+        l2_verdicts = []
+        for j in range(i + 1):
+            if snippets[j].attack_snippet:
+                a_exit, a_stdout, a_stderr = env.exec_in_attacker(snippets[j].attack_snippet)
+                verdict = run_verdict_crew(atom=snippets[j], layer="external", output=...)
+                l2_verdicts.append(verdict)
+                if not verdict.passed and j < i:
+                    WARN: "regression — snippet j was passing, now fails after snippet i"
+
+        snippet.validated = l1_passed and all(l2_passed)
+finally:
+    env.teardown()
+```
+
+`run_verdict_crew()` creates a one-task crew with the Testing Agent, passes atom context + raw output via `inputs`, kicks off, and returns the `TestVerdict`. Each call is a lightweight LLM invocation — no tools, pure reasoning.
+
+### Components Implemented
+| Component | Type | Location |
+|---|---|---|
+| `attack_snippet` field | `GeneratedSnippet` model | `models.py` |
+| `TestVerdict`, `TestResult` | Pydantic models | `models.py` |
+| `TestEnvironmentTool` | Python helper | `tools/test_environment.py` |
+| `ExecInContainerTool` | crewAI `BaseTool` | `tools/exec_in_container_tool.py` |
+| `AttackFromContainerTool` | crewAI `BaseTool` | `tools/attack_from_container_tool.py` |
+| Kali attacker image | Dockerfile | `docker/attacker/Dockerfile` |
+| `testing_agent` | Agent config | `config/agents.yaml` |
+| `validate_snippets_task` | Task config (verdict) | `config/tasks.yaml` |
+| `test_snippets` flow step | Flow method | `main.py` |
+| Updated `finalize_script` | Flow method | `main.py` (only includes `validated=True` snippets) |
+
+**Note**: `ExecInContainerTool` and `AttackFromContainerTool` are implemented as crewAI `BaseTool`s but are **not used in the current test loop** — the loop calls `TestEnvironmentTool` directly. These tools exist for a future enhancement where the Testing Agent can autonomously run diagnostic commands (e.g. "the SMB probe failed, let me check if samba is running") as part of an agentic retry loop.
