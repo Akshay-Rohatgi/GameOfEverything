@@ -141,7 +141,21 @@ for generated_snippet in sequenced_request:
 - **`finalize_script` flow step**: Concatenates `code_snippet` fields separated by `# --- <atom_name> ---` headers, runs the result through `apply_post_processors`, writes to `output/<timestamp>_deploy.sh` (mode 0755).
 - **Configuration** (`agents.yaml` / `tasks.yaml`): Fully defined for all agents including `snippet_generation_agent`. Task context chain: `parse → map → validate → dep_enumerate → sequence`. Snippet generation task injects sequenced atoms via `inputs` rather than crewAI `context`.
 - **Atoms Library**: `create_user.md`, `install_package.md`, `samba_insecure_share.md`, `sensitive_file.md`, `set_suid.md`.
-- **Flow State** (`GoEState`): `raw_request`, `parsed_request`, `mapped_request` (from `dep_task`), `sequenced_request` (from `sequence_task`), `generated_snippets` (from `generate_task`), `final_script` (written to `output/`).
+- **Flow State** (`GoEState`): `raw_request`, `parsed_request`, `mapped_request` (from `dep_task`), `sequenced_request` (from `sequence_task`), `generated_snippets` (from `generate_task`), `test_results` (from `test_snippets`), `final_script` (written to `output/`).
+- **Testing Infrastructure** (full detail in Testing Architecture section):
+  - `test_snippets` flow step — hybrid Python loop + LLM verdict architecture with incremental cumulative two-layer validation.
+  - `TestEnvironmentTool` (`tools/test_environment.py`) — Docker lifecycle (network + goe_target Ubuntu + goe_attacker Kali containers).
+  - `ExecInContainerTool` (`tools/exec_in_container_tool.py`) — crewAI `BaseTool` used by the Diagnostic Agent.
+  - `AttackFromContainerTool` (`tools/attack_from_container_tool.py`) — crewAI `BaseTool` for adversarial probes.
+  - Kali attacker Dockerfile at `docker/attacker/Dockerfile` (`kalilinux/kali-rolling`).
+  - `testing_agent` + `validate_snippets_task` — lightweight LLM verdict crew (pure reasoning, no tools).
+  - `_run_verdict_crew()` / `_make_llm()` helper methods in `main.py`.
+- **Diagnostic Agent** (L1 retry + L2 diagnose-and-log):
+  - `diagnostic_agent` in `agents.yaml`, `diagnose_snippet_task` in `tasks.yaml`.
+  - `_run_diagnostic_crew()` helper in `main.py`.
+  - On Layer 1 failure: up to **2 retries**. Each retry calls Diagnostic Agent (tools: `ReadAtomTool` + `ExecInContainerTool`), which returns a `DiagnosticResult` with fixed snippets. The patched snippets are re-applied and re-tested.
+  - On Layer 2 failure: Diagnostic Agent runs for **logging only** (no retry). Diagnosis stored in `TestResult.diagnostic_results`.
+  - `finalize_script` displays full diagnostic history for skipped snippets (diagnosis, confidence, whether code/tests were modified).
 
 ### 🐛 Known Bugs & Workarounds
 
@@ -181,7 +195,7 @@ _event_context_config.set(EventContextConfig(
 ### 🎯 Next Steps
 1. **Non-interactive trigger**: Implement `run_with_trigger` in `main.py` to support passing a request via JSON payload instead of `input()`.
 2. **Reduce RAG token cost**: Investigate embedding only frontmatter + section headers to reduce tokens passed to the Mapping Agent.
-3. **Agentic retry on test failure**: Extend the Testing Agent to autonomously run diagnostic commands via `ExecInContainerTool` / `AttackFromContainerTool` when a verdict is ambiguous, and optionally regenerate a failing snippet.
+3. **End-to-end integration test**: Run the full GoE flow against a real user request and validate that all layers and the Diagnostic Agent work correctly in combination.
 
 ---
 
@@ -235,10 +249,17 @@ class TestVerdict(BaseModel):
     passed: bool
     reasoning: str  # 1-3 sentences citing specific evidence from stdout/stderr
 
+class DiagnosticResult(BaseModel):
+    fixed_code_snippet: str        # corrected snippet (may be unchanged if fix is elsewhere)
+    fixed_testing_snippet: str     # corrected testing snippet
+    diagnosis: str                 # root cause explanation + what was changed
+    confidence: str                # "high" | "medium" | "low"
+
 class TestResult(BaseModel):
     atom_name: str
     layer1_verdict: TestVerdict
     layer2_verdicts: Optional[List[TestVerdict]] = None  # one per cumulative probe run
+    diagnostic_results: Optional[List[DiagnosticResult]] = None  # L1 retries + L2 logs
     error: Optional[str] = None
 ```
 
@@ -269,31 +290,51 @@ engineer_requirements → generate_implementation → test_snippets → finalize
 
 Pseudocode:
 ```python
+MAX_DIAGNOSTIC_RETRIES = 2
 env = TestEnvironmentTool()
 env.setup()
 try:
     for i, snippet in enumerate(snippets):
-        # Apply code_snippet on target
-        env.exec_in_target(snippet.code_snippet)
+        diagnostic_attempts = []
+        l1_passed = False
 
-        # Layer 1: run testing_snippet, LLM judges output
-        l1_exit, l1_stdout, l1_stderr = env.exec_in_target(snippet.testing_snippet)
-        l1_verdict = run_verdict_crew(atom=snippet, layer="internal", output=...)
-        if not l1_verdict.passed:
+        for attempt in range(MAX_DIAGNOSTIC_RETRIES + 1):
+            # Apply (or re-apply patched) code_snippet on target
+            env.exec_in_target(snippet.code_snippet)
+
+            # Layer 1: run testing_snippet, LLM judges output
+            l1_exit, l1_stdout, l1_stderr = env.exec_in_target(snippet.testing_snippet)
+            l1_verdict = run_verdict_crew(atom=snippet, layer="internal", output=...)
+            if l1_verdict.passed:
+                l1_passed = True
+                break
+            # Layer 1 failed — run Diagnostic Agent if retries remain
+            if attempt < MAX_DIAGNOSTIC_RETRIES:
+                diag = run_diagnostic_crew(atom=snippet, failure_context=...)
+                diagnostic_attempts.append(diag)
+                snippet.code_snippet = diag.fixed_code_snippet
+                snippet.testing_snippet = diag.fixed_testing_snippet
+
+        if not l1_passed:
             mark snippet + all remaining as validated=False, STOP
             break
 
         # Layer 2: re-run ALL attack probes for snippets 0..i
-        l2_verdicts = []
+        l2_verdicts, l2_diagnostics = [], []
         for j in range(i + 1):
-            if snippets[j].attack_snippet:
-                a_exit, a_stdout, a_stderr = env.exec_in_attacker(snippets[j].attack_snippet)
+            attack = snippets[j].attack_snippet
+            if attack:
+                a_exit, a_stdout, a_stderr = env.exec_in_attacker(attack)
                 verdict = run_verdict_crew(atom=snippets[j], layer="external", output=...)
                 l2_verdicts.append(verdict)
-                if not verdict.passed and j < i:
-                    WARN: "regression — snippet j was passing, now fails after snippet i"
+                if not verdict.passed:
+                    if j < i:
+                        WARN: "regression — snippet j was passing, now fails after snippet i"
+                    l2_diag = run_diagnostic_crew(atom=snippets[j], ...)  # log only, no retry
+                    l2_diagnostics.append(l2_diag)
 
-        snippet.validated = l1_passed and all(l2_passed)
+        snippet.validated = l1_passed and all(v.passed for v in l2_verdicts)
+        TestResult.diagnostic_results = diagnostic_attempts + l2_diagnostics
 finally:
     env.teardown()
 ```
@@ -304,14 +345,18 @@ finally:
 | Component | Type | Location |
 |---|---|---|
 | `attack_snippet` field | `GeneratedSnippet` model | `models.py` |
-| `TestVerdict`, `TestResult` | Pydantic models | `models.py` |
+| `TestVerdict`, `TestResult`, `DiagnosticResult` | Pydantic models | `models.py` |
 | `TestEnvironmentTool` | Python helper | `tools/test_environment.py` |
 | `ExecInContainerTool` | crewAI `BaseTool` | `tools/exec_in_container_tool.py` |
 | `AttackFromContainerTool` | crewAI `BaseTool` | `tools/attack_from_container_tool.py` |
 | Kali attacker image | Dockerfile | `docker/attacker/Dockerfile` |
 | `testing_agent` | Agent config | `config/agents.yaml` |
+| `diagnostic_agent` | Agent config | `config/agents.yaml` |
 | `validate_snippets_task` | Task config (verdict) | `config/tasks.yaml` |
+| `diagnose_snippet_task` | Task config (diagnosis) | `config/tasks.yaml` |
 | `test_snippets` flow step | Flow method | `main.py` |
-| Updated `finalize_script` | Flow method | `main.py` (only includes `validated=True` snippets) |
+| `_run_verdict_crew()` | Helper method | `main.py` |
+| `_run_diagnostic_crew()` | Helper method | `main.py` |
+| Updated `finalize_script` | Flow method | `main.py` (validates snippets; shows diagnostic history for skipped) |
 
-**Note**: `ExecInContainerTool` and `AttackFromContainerTool` are implemented as crewAI `BaseTool`s but are **not used in the current test loop** — the loop calls `TestEnvironmentTool` directly. These tools exist for a future enhancement where the Testing Agent can autonomously run diagnostic commands (e.g. "the SMB probe failed, let me check if samba is running") as part of an agentic retry loop.
+**Note**: The test loop calls `TestEnvironmentTool` directly for all Layer 1 and Layer 2 command execution. `ExecInContainerTool` is used by the **Diagnostic Agent** to run interactive diagnostic commands inside the target container (e.g. checking service status, inspecting file permissions). `AttackFromContainerTool` is available but currently not used by any agent — reserved for future agentic attack probing.

@@ -10,11 +10,11 @@
    - **Embeddings**: Amazon Bedrock (`amazon.titan-embed-text-v2:0`).
    - **Tool**: `SearchAtomsTool` (`search_vulnerability_atoms`) in `tools/search_atoms_tool.py` — semantic search with configurable `n_results` (default 3, supports 1 for best-match-only).
    - **Sync**: `scripts/rag_gen.py` handles ingestion with modification-time tracking; `scripts/query.py` for manual testing.
-3. **Agentic Flow (`GoEFlow`)** — two active flow steps:
+3. **Agentic Flow (`GoEFlow`)** — four active flow steps:
    - `engineer_requirements`: sequential crewAI crew running **Request Parser** → **Mapping Agent** → **Mapping Validator** → **Dependency Enumerator** → **Sequencing Agent**.
    - `generate_implementation`: separate crew running **Snippet Generation Agent** (with `ReadAtomTool` + `SearchAtomsTool`); outputs `GeneratedSnippets`.
-   - `finalize_script`: concatenates snippets, runs post-processor pipeline, writes `output/<timestamp>_deploy.sh`.
-   - Testing step designed but not yet implemented (see Testing Architecture below).
+   - `test_snippets`: hybrid Python loop + LLM verdict two-layer testing with Diagnostic Agent retry/log (see Testing Architecture below).
+   - `finalize_script`: concatenates validated snippets, runs post-processor pipeline, writes `output/<timestamp>_deploy.sh`. Displays diagnostic history for skipped snippets.
 
 ### 4. Snippet Generation Agent
 Receives `sequenced_atoms_json` (serialized `SequencedRequest`) via `inputs`. For each atom:
@@ -88,6 +88,23 @@ class GeneratedSnippets(BaseModel):
 
 class SequencedRequest(BaseModel):
     atoms: List[MappedAtom]  # dependency-resolved execution order
+
+class TestVerdict(BaseModel):
+    passed: bool
+    reasoning: str  # 1-3 sentences citing specific evidence from stdout/stderr
+
+class DiagnosticResult(BaseModel):
+    fixed_code_snippet: str       # corrected snippet (may be unchanged)
+    fixed_testing_snippet: str    # corrected testing snippet
+    diagnosis: str                # root cause + what was changed
+    confidence: str               # "high" | "medium" | "low"
+
+class TestResult(BaseModel):
+    atom_name: str
+    layer1_verdict: TestVerdict
+    layer2_verdicts: Optional[List[TestVerdict]] = None  # one per cumulative probe run
+    diagnostic_results: Optional[List[DiagnosticResult]] = None  # L1 retries + L2 logs
+    error: Optional[str] = None
 ```
 
 ## Flow State (`GoEState`)
@@ -98,11 +115,12 @@ class SequencedRequest(BaseModel):
 | `mapped_request` | `dep_task.output.pydantic` (post dep-enumeration) |
 | `sequenced_request` | `sequence_task.output.pydantic.atoms` |
 | `generated_snippets` | `generate_task.output.pydantic.snippets` |
+| `test_results` | populated by `test_snippets` flow step |
 | `final_script` | post-processor output, written to `output/<timestamp>_deploy.sh` |
 
 ## Configuration Files
-- `config/agents.yaml`: Defines `request_parser_agent`, `mapping_agent`, `mapping_validator_agent`, `dependency_enumeration_agent`, `sequencing_agent`, `snippet_generation_agent`, `testing_agent`.
-- `config/tasks.yaml`: Defines `parse_request_task`, `map_atoms_task`, `validate_mapping_task`, `enumerate_dependencies_task`, `sequence_atoms_task`, `generate_snippets_task`, `validate_snippets_task`.
+- `config/agents.yaml`: Defines `request_parser_agent`, `mapping_agent`, `mapping_validator_agent`, `dependency_enumeration_agent`, `sequencing_agent`, `snippet_generation_agent`, `testing_agent`, `diagnostic_agent`.
+- `config/tasks.yaml`: Defines `parse_request_task`, `map_atoms_task`, `validate_mapping_task`, `enumerate_dependencies_task`, `sequence_atoms_task`, `generate_snippets_task`, `validate_snippets_task`, `diagnose_snippet_task`.
 - Task context chain: `parse → map → validate → dep_enumerate → sequence`
 
 ## Known Bugs & Workarounds
@@ -147,60 +165,74 @@ llm = LLM(model=f"bedrock/{model_id}", ...)
 | `set_suid` | Sets SUID bit on a binary for privilege escalation | `binary_path` |
 
 ## Next Steps
-1. **Testing Agent + Docker validation**: Implement two-layer snippet testing (see Testing Architecture below).
-2. **Non-interactive trigger**: Implement `run_with_trigger` in `main.py` to accept requests via JSON payload.
-3. **Reduce RAG token cost**: Return condensed atom representations (frontmatter + headers only) instead of full markdown.
+1. **Non-interactive trigger**: Implement `run_with_trigger` in `main.py` to accept requests via JSON payload.
+2. **Reduce RAG token cost**: Return condensed atom representations (frontmatter + headers only) instead of full markdown.
+3. **End-to-end integration test**: Run the full GoE flow against a real user request and validate all layers and the Diagnostic Agent in combination.
 
 ---
 
-## Testing Architecture Design
+## Testing Architecture
 
-Snippet validation uses two distinct layers with different trust boundaries.
+Snippet validation uses two distinct layers with an LLM verdict and a Diagnostic Agent for automated repair, orchestrated by a **hybrid Python loop** (not a single agent invocation). All components are implemented.
+
+### Design Principles
+1. **LLM judges all command output.** Command output is messy and context-dependent. Rather than hardcoded patterns, the Testing Agent receives atom security intent + raw stdout/stderr/exit code and reasons about success.
+2. **Incremental cumulative testing.** After snippet N passes Layer 1, Layer 2 probes run for **all snippets 0..N**. This catches sequencing bugs (e.g. SSH probe fails because user wasn't created yet) and regressions (snippet N breaks M's previously passing probe).
+3. **Python loop controls progression; LLM only judges.** The structured incremental protocol is too precise for a single agent. Python decides what to run and when to stop; the LLM interprets output.
+4. **Kali attacker container.** `kalilinux/kali-rolling` ships pre-packaged offensive tools (metasploit, hydra, nmap, smbclient, sshpass). No custom tool builds needed — `apt install` covers new attack vectors.
 
 ### Layer 1 — Internal (state verification)
-Run `testing_snippet` inside the target container via `docker exec`. Answers: *"Was the configuration applied correctly?"*
+Run `testing_snippet` in the target container via `docker exec`. Answers: *"Was the configuration applied correctly?"*
 - Tests filesystem state, service status, user existence, permissions, SUID bits — from root's perspective.
-- **Tool**: `ExecInContainerTool` — `docker exec <id> bash -c "<snippet>"`, returns stdout/stderr/exit code.
-- **Failure signal**: non-zero exit code or assertion mismatch.
+- **Execution**: `TestEnvironmentTool.exec_in_target(snippet)` → returns `(exit_code, stdout, stderr)`.
+- **Judgment**: `_run_verdict_crew()` sends atom context + raw output to a one-task Testing Agent crew; returns `TestVerdict`.
+- **Failure with retry**: On failure, `_run_diagnostic_crew()` fires the Diagnostic Agent (tools: `ReadAtomTool` + `ExecInContainerTool`), which returns a `DiagnosticResult` with patched snippets. Re-apply and re-test. Up to **2 retries**. Chain stops if all retries exhausted.
 
 ### Layer 2 — External (attack simulation)
-Spin up a separate attacker container on the same Docker bridge network. Answers: *"Is the access vector actually exploitable?"*
+Run `attack_snippet` from the Kali attacker container against the target on the same Docker bridge. Answers: *"Is the access vector actually exploitable?"*
 - Tests reachability and exploit success from an unauthenticated adversary's perspective.
-- **Attacker container**: Alpine + `openssh-client` + `samba-client` (plain BusyBox lacks these clients).
-- **Tool**: `AttackFromContainerTool` — takes target hostname, attack type (`ssh`, `smb`), and parameters; runs probe; returns pass/fail + output.
-- **Examples**: `smbclient -L //<target>/<share> -N` for anonymous SMB; `sshpass -p <pw> ssh <user>@<target> id` for SSH.
-- Atoms with no external attack surface (`install_package`, `create_user`) set `attack_snippet = None` and skip Layer 2.
-
-### `attack_snippet` field
-Added to `GeneratedSnippet` (see Data Models above). Produced by the Snippet Generation Agent at generation time — it already has the atom markdown and context in scope.
+- **Execution**: `TestEnvironmentTool.exec_in_attacker(attack_snippet)` → returns `(exit_code, stdout, stderr)`.
+- **Judgment**: same one-task Testing Agent crew; returns `TestVerdict`.
+- **Incremental re-run**: after snippet N, Layer 2 runs for all 0..N that have `attack_snippet`. Regressions flagged with a warning.
+- **Failure — diagnose-and-log only**: Diagnostic Agent runs for L2 failures but **no retry** — results stored in `TestResult.diagnostic_results`. Chain continues.
+- Atoms with no external attack surface (`install_package`, `create_user`) leave `attack_snippet = None` and skip Layer 2.
 
 ### Docker Network Topology
 ```
 docker network create goe_test_net
-docker run -d --name target --network goe_test_net ubuntu:22.04
-docker run --rm --network goe_test_net <attacker-image> <attack_snippet>
+docker run -d --name goe_target --hostname target --network goe_test_net ubuntu:22.04 sleep infinity
+docker run -d --name goe_attacker --hostname attacker --network goe_test_net goe-attacker:latest sleep infinity
 ```
-Both containers addressed by hostname. Both torn down after the test crew finishes.
+- Target: `ubuntu:22.04` — snippets applied here via `docker exec`.
+- Attacker: built from `docker/attacker/Dockerfile` (`kalilinux/kali-rolling` + smbclient, sshpass, nmap, hydra, metasploit-framework, etc.).
+- Both run for the entire test loop, torn down in a `finally` block.
 
-### Container Lifecycle (`TestEnvironmentTool` — Python helper, not crewAI tool)
-1. `setup()` — create bridge network, start target container.
-2. `apply_and_verify(snippets)` — execute snippets sequentially; Layer 1 check after each.
-3. `run_external_probes(snippets)` — start attacker container; run `attack_snippet` per atom against fully-configured target.
-4. `teardown()` — stop + remove both containers and network.
+### Diagnostic Agent
+`diagnostic_agent` + `diagnose_snippet_task` in config files; `_run_diagnostic_crew()` in `main.py`.
 
-### Hybrid Testing Strategy
-- Apply snippets sequentially; Layer 1 (internal) check after each atom. Failure stops the chain early.
-- After all atoms pass Layer 1, run all Layer 2 (external) probes against the fully-configured machine.
-- Layer 2 failures flag a specific access vector without blocking other probes.
-- `validated = True` when both layers pass (or `attack_snippet` is `None` and Layer 1 passes).
+Receives: atom name + markdown (via `ReadAtomTool`), original snippets, apply stderr, L1/L2 exit code + stdout/stderr, verdict reasoning, attempt number. Can run diagnostic commands in the target container via `ExecInContainerTool`. Returns `DiagnosticResult`:
+```python
+class DiagnosticResult(BaseModel):
+    fixed_code_snippet: str    # corrected snippet (may be unchanged)
+    fixed_testing_snippet: str
+    diagnosis: str             # root cause + what was changed
+    confidence: str            # "high" | "medium" | "low"
+```
+Fallback on parse failure: returns original snippets unchanged so the retry proceeds without crashing.
 
-### New Components Required
-| Component | Type | Purpose |
+### Components
+| Component | Type | Location |
 |---|---|---|
-| `attack_snippet` field | `GeneratedSnippet` model change | Adversarial probe command |
-| `TestEnvironmentTool` | Python helper | Docker network + container lifecycle |
-| `ExecInContainerTool` | crewAI `BaseTool` | Layer 1: `docker exec` inside target |
-| `AttackFromContainerTool` | crewAI `BaseTool` | Layer 2: probe from attacker container |
-| Attacker image | Dockerfile or pre-built | Alpine + `openssh-client` + `samba-client` |
-| Updated snippet generation task | `agents.yaml` / `tasks.yaml` | Add `attack_snippet` generation step |
-| `test_snippets` flow step | `main.py` | `@listen(generate_implementation)` before `finalize_script` |
+| `attack_snippet` field | `GeneratedSnippet` model | `models.py` |
+| `TestVerdict`, `TestResult`, `DiagnosticResult` | Pydantic models | `models.py` |
+| `TestEnvironmentTool` | Python helper (Docker lifecycle) | `tools/test_environment.py` |
+| `ExecInContainerTool` | crewAI `BaseTool` | `tools/exec_in_container_tool.py` |
+| `AttackFromContainerTool` | crewAI `BaseTool` | `tools/attack_from_container_tool.py` |
+| Kali attacker image | Dockerfile | `docker/attacker/Dockerfile` |
+| `testing_agent` | Agent config | `config/agents.yaml` |
+| `diagnostic_agent` | Agent config | `config/agents.yaml` |
+| `validate_snippets_task` | Task config | `config/tasks.yaml` |
+| `diagnose_snippet_task` | Task config | `config/tasks.yaml` |
+| `test_snippets` | Flow method | `main.py` |
+| `_run_verdict_crew()` | Helper method | `main.py` |
+| `_run_diagnostic_crew()` | Helper method | `main.py` |
