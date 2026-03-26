@@ -38,7 +38,6 @@ TOOL_TO_PACKAGE: Dict[str, str] = {
     "redis-cli":    "redis-tools",
     "psql":         "postgresql-client",
     "mysql":        "default-mysql-client",
-    "mongosh":      "mongosh",
     "ftp":          "ftp",
     "ncat":         "ncat",
     "nc":           "netcat-traditional",
@@ -56,6 +55,21 @@ TOOL_TO_PACKAGE: Dict[str, str] = {
     "nslookup":     "dnsutils",
     "msfconsole":   "metasploit-framework",
     "msfvenom":     "metasploit-framework",
+}
+
+# Tools that cannot be installed via apt (no Kali/Debian package available) and
+# require a custom install command instead. These are handled separately in
+# ensure_attacker_tools() after the apt-based installs.
+MONGOSH_VERSION = "2.3.1"
+TOOL_TO_INSTALL_CMD: Dict[str, str] = {
+    "mongosh": (
+        f"wget -q 'https://downloads.mongodb.com/compass/mongosh-{MONGOSH_VERSION}-linux-x64.tgz'"
+        f" -O /tmp/mongosh.tgz"
+        f" && tar -xzf /tmp/mongosh.tgz -C /tmp"
+        f" && mv '/tmp/mongosh-{MONGOSH_VERSION}-linux-x64/bin/mongosh' /usr/local/bin/mongosh"
+        f" && chmod +x /usr/local/bin/mongosh"
+        f" && rm -rf /tmp/mongosh*"
+    ),
 }
 
 
@@ -152,8 +166,9 @@ class TestEnvironmentTool:
         # Collect every tool name referenced in any attack snippet
         referenced: Set[str] = set()
         # Word-boundary pattern to avoid partial matches (e.g. "curl" in "curly")
+        all_known_tools = set(TOOL_TO_PACKAGE) | set(TOOL_TO_INSTALL_CMD)
         for snippet in attack_snippets:
-            for tool in TOOL_TO_PACKAGE:
+            for tool in all_known_tools:
                 if re.search(rf"(?<![\w-]){re.escape(tool)}(?![\w-])", snippet):
                     referenced.add(tool)
 
@@ -179,41 +194,56 @@ class TestEnvironmentTool:
             logger.info("ensure_attacker_tools: all referenced tools already present.")
             return
 
-        # Map missing tools to their apt packages (deduplicated)
-        packages_to_install: Set[str] = {
-            TOOL_TO_PACKAGE[t] for t in missing_tools if t in TOOL_TO_PACKAGE
-        }
-        logger.info(
-            f"ensure_attacker_tools: installing missing packages: {sorted(packages_to_install)}"
-        )
+        # Split missing tools: apt-installable vs custom install (e.g. mongosh via tarball)
+        apt_tools = {t for t in missing_tools if t in TOOL_TO_PACKAGE}
+        custom_tools = {t for t in missing_tools if t in TOOL_TO_INSTALL_CMD}
 
-        # Run apt-get update once per session
-        if not self._attacker_apt_updated:
-            logger.info("ensure_attacker_tools: running apt-get update in attacker container...")
-            upd_exit, upd_out, upd_err = self._exec_in_container(
-                self.attacker_container, "apt-get update -qq"
-            )
-            if upd_exit != 0:
-                logger.warning(
-                    f"ensure_attacker_tools: apt-get update failed (exit {upd_exit}): {upd_err}"
-                )
-            self._attacker_apt_updated = True
-
-        pkg_list = " ".join(sorted(packages_to_install))
-        install_cmd = (
-            f"DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends {pkg_list}"
-        )
-        inst_exit, inst_out, inst_err = self._exec_in_container(
-            self.attacker_container, install_cmd
-        )
-        if inst_exit != 0:
-            logger.warning(
-                f"ensure_attacker_tools: install failed (exit {inst_exit}): {inst_err[:500]}"
-            )
-        else:
+        # --- apt-based installs ---
+        if apt_tools:
+            packages_to_install: Set[str] = {TOOL_TO_PACKAGE[t] for t in apt_tools}
             logger.info(
-                f"ensure_attacker_tools: successfully installed: {sorted(packages_to_install)}"
+                f"ensure_attacker_tools: installing via apt: {sorted(packages_to_install)}"
             )
+
+            # Run apt-get update once per session
+            if not self._attacker_apt_updated:
+                logger.info("ensure_attacker_tools: running apt-get update in attacker container...")
+                upd_exit, _, upd_err = self._exec_in_container(
+                    self.attacker_container, "apt-get update -qq"
+                )
+                if upd_exit != 0:
+                    logger.warning(
+                        f"ensure_attacker_tools: apt-get update failed (exit {upd_exit}): {upd_err}"
+                    )
+                self._attacker_apt_updated = True
+
+            pkg_list = " ".join(sorted(packages_to_install))
+            install_cmd = (
+                f"DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends {pkg_list}"
+            )
+            inst_exit, _, inst_err = self._exec_in_container(
+                self.attacker_container, install_cmd
+            )
+            if inst_exit != 0:
+                logger.warning(
+                    f"ensure_attacker_tools: apt install failed (exit {inst_exit}): {inst_err[:500]}"
+                )
+            else:
+                logger.info(
+                    f"ensure_attacker_tools: successfully installed via apt: {sorted(packages_to_install)}"
+                )
+
+        # --- custom installs (direct binary downloads, etc.) ---
+        for tool in custom_tools:
+            logger.info(f"ensure_attacker_tools: installing '{tool}' via custom method...")
+            cmd = TOOL_TO_INSTALL_CMD[tool]
+            inst_exit, _, inst_err = self._exec_in_container(self.attacker_container, cmd)
+            if inst_exit != 0:
+                logger.warning(
+                    f"ensure_attacker_tools: custom install of '{tool}' failed (exit {inst_exit}): {inst_err[:500]}"
+                )
+            else:
+                logger.info(f"ensure_attacker_tools: successfully installed '{tool}' via custom method.")
 
     def exec_in_target(self, snippet: str) -> Tuple[int, str, str]:
         """Run a bash snippet inside the target container.

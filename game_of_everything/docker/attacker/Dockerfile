@@ -31,17 +31,19 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install mongosh from the official MongoDB apt repository.
-# mongosh is not in Kali/Debian default repos — requires MongoDB's own repo.
+# Install mongosh via direct binary download from MongoDB's download CDN.
+# This avoids external apt repo configuration entirely (no GPG keys, no version-locked
+# repo URLs, no Kali/Debian compatibility issues). MongoDB's CDN retains all releases
+# so pinned versions stay downloadable. To upgrade: bump MONGOSH_VERSION.
 # Needed by: mongodb_disable_auth, database_expose atoms.
-RUN wget -qO- https://www.mongodb.org/static/pgp/server-7.0.asc | \
-    gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg && \
-    echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
-    > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends mongosh && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+ARG MONGOSH_VERSION=2.3.1
+RUN wget -q "https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-x64.tgz" \
+        -O /tmp/mongosh.tgz \
+    && tar -xzf /tmp/mongosh.tgz -C /tmp \
+    && mv "/tmp/mongosh-${MONGOSH_VERSION}-linux-x64/bin/mongosh" /usr/local/bin/mongosh \
+    && chmod +x /usr/local/bin/mongosh \
+    && rm -rf /tmp/mongosh* \
+    && mongosh --version
 
 # Default to bash for exec usage
 CMD ["sleep", "infinity"]
