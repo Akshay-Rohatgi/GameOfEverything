@@ -12,7 +12,7 @@ Used to provide realism and a pivot point for pentesters.
 3. Ensure the home directory has appropriate (or weak) permissions.
 
 ### Common Patterns:
-- **Default User:** `useradd -m -s /bin/bash operator`
+- **Default User:** `useradd -m -s /bin/bash sys_admin`
 - **Service Account:** `useradd -r -s /usr/sbin/nologin web_dev`
 
 ### Testing Guidance:
@@ -21,5 +21,5 @@ Used to provide realism and a pivot point for pentesters.
 3. (If password set) Attempt to switch user: `printf "<password>\n" | su - <username>`
 
 ### Synthesis Guidance:
-Generate the user creation command. For example, if the context implies a "sloppy developer," consider adding the user to a non-standard group or leaving a sensitive file in their home directory. If a password is provided, include the password setting command as well. If a weak password is implied, use the get_rockyou_password() tool 
+Generate the user creation command. For example, if the context implies a "sloppy developer," consider adding the user to a non-standard group or leaving a sensitive file in their home directory. If a password is provided, include the password setting command as well. If a weak password is implied, use the get_rockyou_password() tool. Usernames should be realistic and fit the scenario like "dev" or "sys_admin", avoid names similar to default system accounts. 
 

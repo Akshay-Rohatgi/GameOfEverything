@@ -147,7 +147,8 @@ for generated_snippet in sequenced_request:
   - `TestEnvironmentTool` (`tools/test_environment.py`) — Docker lifecycle (network + goe_target Ubuntu + goe_attacker Kali containers).
   - `ExecInContainerTool` (`tools/exec_in_container_tool.py`) — crewAI `BaseTool` used by the Diagnostic Agent.
   - `AttackFromContainerTool` (`tools/attack_from_container_tool.py`) — crewAI `BaseTool` for adversarial probes.
-  - Kali attacker Dockerfile at `docker/attacker/Dockerfile` (`kalilinux/kali-rolling`).
+  - Kali attacker Dockerfile at `docker/attacker/Dockerfile` (`kalilinux/kali-rolling`). Pre-installed toolset expanded to cover all current atoms: `smbclient`, `sshpass`, `openssh-client`, `nmap`, `hydra`, `curl`, `wget`, `netcat-traditional`, `ncat`, `metasploit-framework`, `redis-tools` (`redis-cli`), `postgresql-client` (`psql`), `default-mysql-client` (`mysql`), `ftp`, `dnsutils`, `nikto`, `enum4linux`, plus `mongosh` from the official MongoDB apt repo (separate `RUN` layer).
+  - **`TestEnvironmentTool.ensure_attacker_tools()`** — dynamic safety net called in `test_snippets()` after `env.setup()`. Scans all `attack_snippet` strings for known tool names (word-boundary regex), runs `which <tool>` in the attacker container to find missing ones, then `apt-get install`s them at runtime. `apt-get update` is run at most once per session (`_attacker_apt_updated` flag). `TOOL_TO_PACKAGE` constant in `test_environment.py` maps ~20 command names to apt package names.
   - `testing_agent` + `validate_snippets_task` — lightweight LLM verdict crew (pure reasoning, no tools).
   - `_run_verdict_crew()` / `_make_llm()` helper methods in `main.py`.
 - **Diagnostic Agent** (L1 retry + L2 diagnose-and-log):

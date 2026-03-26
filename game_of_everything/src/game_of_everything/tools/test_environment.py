@@ -12,8 +12,9 @@ this class only runs commands and returns raw results.
 """
 
 import logging
+import re
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import Dict, List, Set, Tuple, Optional
 
 import docker
 from docker.errors import NotFound, APIError
@@ -29,6 +30,34 @@ ATTACKER_DOCKERFILE_DIR = str(
 )
 ATTACKER_IMAGE_TAG = "goe-attacker:latest"
 
+# Maps attacker-side command names to their apt package names (Kali/Debian).
+# Used by ensure_attacker_tools() to detect and install missing tools at runtime.
+# The Dockerfile pre-installs all of these; this mapping is the fallback safety net
+# for tools the LLM may reference that aren't in the static image.
+TOOL_TO_PACKAGE: Dict[str, str] = {
+    "redis-cli":    "redis-tools",
+    "psql":         "postgresql-client",
+    "mysql":        "default-mysql-client",
+    "mongosh":      "mongosh",
+    "ftp":          "ftp",
+    "ncat":         "ncat",
+    "nc":           "netcat-traditional",
+    "smbclient":    "smbclient",
+    "sshpass":      "sshpass",
+    "ssh":          "openssh-client",
+    "hydra":        "hydra",
+    "nmap":         "nmap",
+    "curl":         "curl",
+    "wget":         "wget",
+    "nikto":        "nikto",
+    "enum4linux":   "enum4linux",
+    "wpscan":       "wpscan",
+    "dig":          "dnsutils",
+    "nslookup":     "dnsutils",
+    "msfconsole":   "metasploit-framework",
+    "msfvenom":     "metasploit-framework",
+}
+
 
 class TestEnvironmentTool:
     """Manages Docker network + container lifecycle for snippet testing."""
@@ -38,6 +67,10 @@ class TestEnvironmentTool:
         self.network = None
         self.target_container = None
         self.attacker_container = None
+        # Tracks whether `apt-get update` has been run in the attacker container
+        # this session, so we only pay the cost once even if ensure_attacker_tools
+        # is called multiple times.
+        self._attacker_apt_updated: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -96,6 +129,91 @@ class TestEnvironmentTool:
     # ------------------------------------------------------------------
     # Command execution
     # ------------------------------------------------------------------
+
+    def ensure_attacker_tools(self, attack_snippets: List[str]) -> None:
+        """Scan attack_snippets for tool references and install any that are missing.
+
+        This is a safety net for cases where the Snippet Generation Agent uses a
+        tool not pre-installed in the static Dockerfile image. The Dockerfile
+        should cover 95%+ of cases; this method handles the rest without requiring
+        an image rebuild.
+
+        Runs `apt-get update` at most once per TestEnvironmentTool instance
+        (tracked by `_attacker_apt_updated`) to minimise latency.
+
+        Args:
+            attack_snippets: List of attack_snippet strings to scan for tool names.
+        """
+        if self.attacker_container is None:
+            raise RuntimeError(
+                "Attacker container not started. Call setup() before ensure_attacker_tools()."
+            )
+
+        # Collect every tool name referenced in any attack snippet
+        referenced: Set[str] = set()
+        # Word-boundary pattern to avoid partial matches (e.g. "curl" in "curly")
+        for snippet in attack_snippets:
+            for tool in TOOL_TO_PACKAGE:
+                if re.search(rf"(?<![\w-]){re.escape(tool)}(?![\w-])", snippet):
+                    referenced.add(tool)
+
+        if not referenced:
+            logger.info("ensure_attacker_tools: no known tools referenced in attack_snippets.")
+            return
+
+        logger.info(f"ensure_attacker_tools: tools referenced in snippets: {sorted(referenced)}")
+
+        # Check which tools are actually missing via `which`
+        missing_tools: Set[str] = set()
+        for tool in referenced:
+            exit_code, _, _ = self._exec_in_container(
+                self.attacker_container, f"which {tool}"
+            )
+            if exit_code != 0:
+                missing_tools.add(tool)
+                logger.info(f"  '{tool}' not found in attacker container.")
+            else:
+                logger.debug(f"  '{tool}' already present.")
+
+        if not missing_tools:
+            logger.info("ensure_attacker_tools: all referenced tools already present.")
+            return
+
+        # Map missing tools to their apt packages (deduplicated)
+        packages_to_install: Set[str] = {
+            TOOL_TO_PACKAGE[t] for t in missing_tools if t in TOOL_TO_PACKAGE
+        }
+        logger.info(
+            f"ensure_attacker_tools: installing missing packages: {sorted(packages_to_install)}"
+        )
+
+        # Run apt-get update once per session
+        if not self._attacker_apt_updated:
+            logger.info("ensure_attacker_tools: running apt-get update in attacker container...")
+            upd_exit, upd_out, upd_err = self._exec_in_container(
+                self.attacker_container, "apt-get update -qq"
+            )
+            if upd_exit != 0:
+                logger.warning(
+                    f"ensure_attacker_tools: apt-get update failed (exit {upd_exit}): {upd_err}"
+                )
+            self._attacker_apt_updated = True
+
+        pkg_list = " ".join(sorted(packages_to_install))
+        install_cmd = (
+            f"DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends {pkg_list}"
+        )
+        inst_exit, inst_out, inst_err = self._exec_in_container(
+            self.attacker_container, install_cmd
+        )
+        if inst_exit != 0:
+            logger.warning(
+                f"ensure_attacker_tools: install failed (exit {inst_exit}): {inst_err[:500]}"
+            )
+        else:
+            logger.info(
+                f"ensure_attacker_tools: successfully installed: {sorted(packages_to_install)}"
+            )
 
     def exec_in_target(self, snippet: str) -> Tuple[int, str, str]:
         """Run a bash snippet inside the target container.

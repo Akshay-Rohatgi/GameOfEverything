@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
-from pydantic import BaseModel
+import json
+from pydantic import BaseModel, field_validator
 
 class ParsedRequest(BaseModel):
     """
@@ -17,6 +18,30 @@ class MappedAtom(BaseModel):
     name: str
     context: str
     parameters: Optional[dict] = None
+
+    @field_validator('parameters', mode='before')
+    @classmethod
+    def coerce_parameters(cls, v):
+        """Tolerate LLM outputs that append backtick-markdown text after a JSON
+        dict (e.g. '{}` \n2. `other_atom...'). json.JSONDecoder.raw_decode parses
+        as much valid JSON as possible and ignores trailing characters."""
+        if v is None or isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            v_stripped = v.strip()
+            if not v_stripped:
+                return None
+            try:
+                return json.loads(v_stripped)
+            except json.JSONDecodeError:
+                try:
+                    obj, _ = json.JSONDecoder().raw_decode(v_stripped)
+                    if isinstance(obj, dict):
+                        return obj
+                except json.JSONDecodeError:
+                    pass
+                return {}
+        return v
 
 class MappedRequest(BaseModel):
     """

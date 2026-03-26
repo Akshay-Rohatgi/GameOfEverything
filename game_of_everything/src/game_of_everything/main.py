@@ -420,6 +420,16 @@ class GoEFlow(Flow[GoEState]):
             env.setup()
             rich.print("[green]Test environment ready (target + attacker containers on goe_test_net)[/green]")
 
+            # Scan all attack_snippets upfront and ensure the attacker container
+            # has every tool they reference. The Dockerfile pre-installs the full
+            # known set; this is a safety net for any tool the LLM chose that
+            # isn't in the static image (installs it via apt at runtime).
+            all_attack_snippets = [s.attack_snippet for s in snippets if s.attack_snippet]
+            if all_attack_snippets:
+                rich.print("[yellow]Checking attacker container for required tools...[/yellow]")
+                env.ensure_attacker_tools(all_attack_snippets)
+                rich.print("[green]Attacker tools verified.[/green]")
+
             MAX_DIAGNOSTIC_RETRIES = 2
 
             for i, snippet in enumerate(snippets):

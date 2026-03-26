@@ -38,6 +38,10 @@ map_atoms_task:
     - `name`: the exact Atom id (e.g., "samba_insecure_share")
     - `context`: a brief explanation of why this Atom was chosen
     - `parameters`: a dict of key-value pairs matching the Atom's required_vars (e.g., {"share_name": "public", "path": "/srv/share"})
+      For atoms whose `required_vars` is empty, use an empty JSON object: `"parameters": {}`
+      CRITICAL: Do NOT write any text, comments, or backticks after the closing `}` of a parameters value.
+              The entire MappedAtom object must be valid JSON. Annotations like
+              `{}` followed by a backtick or newline will break parsing.
 
     IMPORTANT: You MUST call the search tool at least once. Do NOT skip the tool or guess Atom names.
   expected_output: >
@@ -97,6 +101,11 @@ validate_mapping_task:
     Return a MappedRequest that merges the original mapper's atoms with any you
     added. Keep the original `section` value. If no atoms were missing, return
     the MappedRequest unchanged.
+
+    CRITICAL JSON RULE: The entire output must be a single valid JSON object.
+    For any atom whose `required_vars` is empty, set `"parameters": {}`.
+    Do NOT append any text, backticks, or comments after the closing `}` of a
+    parameters value. Any trailing characters will break JSON parsing.
 
     You MUST call `search_vulnerability_atoms` for every atomized description.
     Never skip a search or invent Atom names.
@@ -176,32 +185,30 @@ sequence_atoms_task:
     YOUR TASK: Produce a single, flat, correctly ordered list of ALL these atoms
     combined, so that a deployment script executed top-to-bottom will succeed.
 
-    STEP 1 — List every atom.
-    Write out each atom's `name` and its `parameters`. Do this for both lists.
+    Think through these steps internally before producing your output:
+    1. List every atom's `name` and `parameters` from both lists.
+    2. Reason about dependencies — what each atom needs to exist before it runs,
+       and which other atoms provide those prerequisites.
+    3. Apply these ordering rules:
+       a. `install_package` atoms always run first.
+       b. `create_user` runs before any atom whose parameters reference that username.
+       c. `samba_insecure_share` runs before `sensitive_file` if the file_path
+          is inside the share's path (the share creates the directory).
+       d. All `mapped_initial_access_atoms` run before all
+          `mapped_post_exploitation_goal_atoms`.
+       e. Within a group, preserve original order unless a dependency rule overrides.
 
-    STEP 2 — Reason about dependencies.
-    For each atom, explicitly state:
-      - What it needs to already exist before it can run (files, directories,
-        users, services, packages).
-      - Which other atom(s) in the list create those prerequisites.
-
-    Apply these rules:
-      a. `install_package` atoms always run first.
-      b. `create_user` runs before any atom whose parameters reference that username.
-      c. `samba_insecure_share` runs before `sensitive_file` if the file_path
-         is inside the share's path (the share creates the directory).
-      d. All `mapped_initial_access_atoms` run before all
-         `mapped_post_exploitation_goal_atoms`.
-      e. Within a group, preserve original order unless a dependency rule overrides.
-
-    STEP 3 — Output the ordered list.
-    Return a SequencedRequest with a single `atoms` field: a list of MappedAtom
-    objects in the determined execution order. Each MappedAtom must include its
-    original `name`, `context`, and `parameters` unchanged.
+    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
+    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
+    no backticks, no explanations. Do all reasoning internally.
+    The JSON object must be a SequencedRequest with a single `atoms` field: a list
+    of MappedAtom objects in the determined execution order. Each MappedAtom must
+    include its original `name`, `context`, and `parameters` unchanged.
   expected_output: >
-    A SequencedRequest JSON object with a single `atoms` field containing all
-    MappedAtom objects in correct dependency-resolved execution order.
-    Each atom retains its original `name`, `context`, and `parameters`.
+    A single SequencedRequest JSON object — no surrounding text or markdown.
+    It has one `atoms` field containing all MappedAtom objects in correct
+    dependency-resolved execution order. Each atom retains its original
+    `name`, `context`, and `parameters`.
   agent: sequencing_agent
 
 generate_snippets_task:
@@ -246,6 +253,7 @@ generate_snippets_task:
       - Write the Bash commands that implement the configuration/vulnerability.
       - Substitute all placeholders with values from `parameters` (or context-
         derived defaults where parameters are null).
+      - Ensure that generated usernames, share names, file paths, and credential values are realistic and fit the scenario. Avoid obviously fake values like "password123" or "user1" unless the context implies a very weak credential. Use the get_rockyou_password() tool for weak passwords when appropriate. For file paths, use plausible locations (e.g. /srv/share for samba, or /home/<username>/backup.zip for a sensitive file in a user's home).
       - Do NOT include a shebang line (#!/bin/bash). That is added automatically.
       - Add a brief inline comment above each logical block explaining the
         security rationale (e.g. `# world-readable share for anonymous enumeration`).
@@ -264,9 +272,26 @@ generate_snippets_task:
         Write a Bash command that probes the vulnerability from an attacker's
         perspective. The attacker container is Kali-based and addresses the
         target by hostname `target` on a Docker bridge network.
+
+        AVAILABLE TOOLS on the attacker container (pre-installed):
+          bash, curl, wget, nmap, hydra, smbclient, sshpass, openssh-client,
+          netcat-traditional, ncat, metasploit-framework,
+          redis-cli (from redis-tools), psql (from postgresql-client),
+          mysql (from default-mysql-client), mongosh,
+          ftp, dig/nslookup (from dnsutils), nikto, enum4linux
+
+        Prefer tools from this list in your attack_snippet. Any tool NOT in
+        this list will be dynamically installed at test time, but using a
+        listed tool avoids delays. For HTTP-based probes, prefer curl.
+
         Examples:
-          - samba_insecure_share: `smbclient -L //target/<share_name> -N`
-          - create_user with SSH: `sshpass -p '<password>' ssh -o StrictHostKeyChecking=no <username>@target id`
+          - samba_insecure_share:       `smbclient -L //target/<share_name> -N`
+          - create_user with SSH:       `sshpass -p '<password>' ssh -o StrictHostKeyChecking=no <username>@target id`
+          - redis_disable_auth:         `redis-cli -h target ping && redis-cli -h target keys '*'`
+          - postgres_rce:               `PGPASSWORD='' psql -U <db_user> -h target -c '\du'`
+          - database_expose (MySQL):    `mysql -h target -u root --password= -e 'show databases;'`
+          - mongodb_disable_auth:       `mongosh --host target --eval "db.adminCommand('listDatabases')"`
+          - ftp_anon_upload:            `curl -T /etc/hostname ftp://target/<upload_dir>/test.txt --user anonymous:`
         Do NOT include a shebang line.
       - If NO (e.g. install_package, set_suid, sensitive_file with no network
         exposure): set attack_snippet to null.
