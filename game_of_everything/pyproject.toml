@@ -14,8 +14,6 @@ dependencies = [
 kickoff = "game_of_everything.main:kickoff"
 run_crew = "game_of_everything.main:kickoff"
 plot = "game_of_everything.main:plot"
-run_with_trigger = "game_of_everything.main:run_with_trigger"
-build_attacker = "game_of_everything.main:build_attacker_image"
 
 [build-system]
 requires = ["hatchling"]

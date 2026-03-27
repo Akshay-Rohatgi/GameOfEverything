@@ -1,0 +1,25 @@
+# Default model used when an agent has no explicit override.
+default:
+  provider: bedrock
+  model_id: anthropic.claude-sonnet-4-6
+  region: us-east-1  # overridden by AWS_REGION env var
+
+# Per-agent overrides. Keys must match agents.yaml keys.
+# Uncomment and modify to assign different models to specific agents.
+# agents:
+#   request_parser_agent:
+#     model_id: anthropic.claude-haiku-3-5
+#   mapping_agent:
+#     model_id: anthropic.claude-sonnet-4-6
+#   mapping_validator_agent:
+#     model_id: anthropic.claude-haiku-3-5
+#   dependency_enumeration_agent:
+#     model_id: anthropic.claude-haiku-3-5
+#   sequencing_agent:
+#     model_id: anthropic.claude-haiku-3-5
+#   snippet_generation_agent:
+#     model_id: anthropic.claude-sonnet-4-6
+#   testing_agent:
+#     model_id: anthropic.claude-haiku-3-5
+#   diagnostic_agent:
+#     model_id: anthropic.claude-sonnet-4-6
