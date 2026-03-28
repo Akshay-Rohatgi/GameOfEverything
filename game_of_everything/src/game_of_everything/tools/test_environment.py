@@ -113,6 +113,18 @@ class TestEnvironmentTool:
         )
         logger.info(f"Started target container: {TARGET_NAME} ({TARGET_IMAGE})")
 
+        # Bootstrap target with tools that generated snippets commonly rely on.
+        # ubuntu:22.04 base image omits curl, wget, and other utilities.
+        logger.info("Bootstrapping target container with base tools...")
+        bootstrap_cmd = (
+            "apt-get update -qq && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+            "curl wget ca-certificates gnupg lsb-release"
+        )
+        exit_code, _, stderr = self._exec_in_container(self.target_container, bootstrap_cmd)
+        if exit_code != 0:
+            logger.warning(f"Target bootstrap had non-zero exit ({exit_code}): {stderr[:300]}")
+
         # Build the attacker image from the Kali Dockerfile
         logger.info(f"Building attacker image from {ATTACKER_DOCKERFILE_DIR}...")
         self.client.images.build(
@@ -244,6 +256,27 @@ class TestEnvironmentTool:
                 )
             else:
                 logger.info(f"ensure_attacker_tools: successfully installed '{tool}' via custom method.")
+
+    def copy_to_target(self, content: str, remote_path: str) -> None:
+        """Write a string as a file inside the target container.
+
+        Uses base64 encoding to safely transfer arbitrary content regardless
+        of special characters. Creates parent directories automatically.
+
+        Args:
+            content: File content to write.
+            remote_path: Absolute path inside the target container.
+        """
+        import base64
+        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        # base64 output only contains A-Za-z0-9+/= — safe in single-quoted shell strings
+        cmd = (
+            f"mkdir -p \"$(dirname '{remote_path}')\" && "
+            f"echo '{b64}' | base64 -d > '{remote_path}'"
+        )
+        exit_code, _, stderr = self._exec_in_container(self.target_container, cmd)
+        if exit_code != 0:
+            raise RuntimeError(f"copy_to_target failed for {remote_path}: {stderr}")
 
     def exec_in_target(self, snippet: str) -> Tuple[int, str, str]:
         """Run a bash snippet inside the target container.

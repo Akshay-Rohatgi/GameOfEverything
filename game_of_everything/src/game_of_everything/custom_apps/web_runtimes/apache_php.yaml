@@ -1,0 +1,30 @@
+id: apache_php
+description: Apache 2.4 + PHP on Ubuntu 22.04. PHP files in /var/www/html/ are executed automatically.
+required_packages:
+  - apache2
+  - php
+  - libapache2-mod-php
+  - php-mysql
+  - php-sqlite3
+app_dir: /var/www/html
+file_extension: .php
+port: 80
+service_name: apache2
+setup_notes: >
+  Apache serves PHP files automatically once libapache2-mod-php is installed.
+  No additional configuration is needed for basic PHP execution. The app file
+  is placed directly in /var/www/html/. MySQL or SQLite can be used as the
+  database backend — php-mysql provides mysqli functions, php-sqlite3 provides
+  the SQLite3 class.
+deploy_reference: |
+  # Copy app file
+  cp /tmp/goe_app/app.php /var/www/html/app.php
+  chmod 644 /var/www/html/app.php
+
+  # Run database setup
+  bash /tmp/goe_app/setup_db.sh
+
+  # Start Apache
+  service apache2 start || systemctl start apache2
+service_start_cmd: "service apache2 start || systemctl start apache2"
+healthcheck: "curl -s -o /dev/null -w '%{http_code}' http://localhost/app.php"

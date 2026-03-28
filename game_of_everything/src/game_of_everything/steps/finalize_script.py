@@ -24,13 +24,14 @@ def run_finalize_script(
         agents_config: Loaded agents.yaml dict (unused — included for interface consistency).
         tasks_config: Loaded tasks.yaml dict (unused — included for interface consistency).
     """
-    if not state.generated_snippets:
+    if not state.generated_snippets and not state.resolved_custom_apps:
         print("No generated snippets to finalize. Skipping.")
         return
 
     # Only include validated snippets in the final script
-    validated = [s for s in state.generated_snippets if s.validated]
-    skipped = [s for s in state.generated_snippets if not s.validated]
+    all_snippets = state.generated_snippets or []
+    validated = [s for s in all_snippets if s.validated]
+    skipped = [s for s in all_snippets if not s.validated]
 
     if skipped:
         rich.print("\n[bold yellow]=== SKIPPED SNIPPETS (validation failed) ===[/bold yellow]")
@@ -57,12 +58,21 @@ def run_finalize_script(
                                 if dr.fixed_testing_snippet and dr.fixed_testing_snippet != getattr(s, 'testing_snippet', ''):
                                     rich.print(f"         [dim]Testing snippet was modified in this attempt[/dim]")
 
-    if not validated:
+    # Prepend validated custom app deploy snippets (position 0: before all misconfig atoms)
+    custom_sections = []
+    for app in state.resolved_custom_apps:
+        if app.validation_passed:
+            header = f"# --- custom_app/{app.vector.vuln_atom_id} ---"
+            custom_sections.append(f"{header}\n{app.deploy_snippet}")
+        else:
+            rich.print(f"  [yellow]Skipping custom app '{app.vector.vuln_atom_id}' (validation failed)[/yellow]")
+
+    if not validated and not custom_sections:
         rich.print("[bold red]No snippets passed validation. No deployment script generated.[/bold red]")
         return
 
-    # Concatenate validated snippets in order, separated by labelled section headers
-    sections = []
+    # Concatenate: custom apps first, then misconfig snippets in sequenced order
+    sections = custom_sections[:]
     for snippet in validated:
         header = f"# --- {snippet.atom_name} ---"
         sections.append(f"{header}\n{snippet.code_snippet}")

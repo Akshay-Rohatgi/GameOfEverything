@@ -2,6 +2,36 @@ from typing import Dict, List, Optional
 import json
 from pydantic import BaseModel, field_validator
 
+
+class CustomVector(BaseModel):
+    """Inputs to CustomAppFlow — which vulnerability, runtime, and attack goal to use."""
+    vuln_atom_id: str                           # e.g. "sqli_union", "ssti_jinja2"
+    attack_chain_goal: str                      # e.g. "credential_theft", "rce_via_webshell"
+    runtime_id: str                             # e.g. "apache_php", "flask", "express"
+    install_path: str = "/var/www/html/app"
+    port: int = 80
+    db_name: Optional[str] = None
+    db_user: Optional[str] = None
+    db_password: Optional[str] = None
+    seed_username: Optional[str] = None         # OS user whose creds are seeded into the app DB
+    seed_password: Optional[str] = None
+    synthesis_context: str = ""                 # From SynthesizedScenario.custom_app_scope
+
+
+class SynthesizedScenario(BaseModel):
+    """
+    Fully elaborated scenario produced by the synthesis step.
+    Resolves all implicit decisions before any parsing or mapping happens.
+    """
+    narrative: str                              # Full box description, all config decisions explicit
+    attack_narrative: str                       # End-to-end attacker path
+    shared_resources: List[str]                 # e.g. "MySQL serves app backend + misconfig surface"
+    explicit_decisions: List[str]               # What the LLM decided that wasn't in the prompt
+    misconfig_scope: str                        # What to hand to the misconfig pipeline
+    custom_app_scope: Optional[str] = None      # Human-readable description of custom app(s)
+    custom_vectors: List[CustomVector] = []     # Structured vectors for CustomAppFlow
+
+
 class ParsedRequest(BaseModel):
     """
     Represents the parsed user request, broken down into logical sections.
@@ -94,6 +124,40 @@ class TestResult(BaseModel):
     layer2_verdicts: Optional[List[TestVerdict]] = None  # one per cumulative probe (snippets 0..N)
     diagnostic_results: Optional[List[DiagnosticResult]] = None  # all diagnosis attempts (L1 retries + L2 diag)
     error: Optional[str] = None
+
+class GeneratedApp(BaseModel):
+    """All files and snippets produced by the generate_app step."""
+    app_filename: str           # e.g. "app.php", "app.py", "app.js"
+    app_source: str             # Full source of the single app file
+    schema_sql: Optional[str] = None   # CREATE TABLE statements (None if no DB)
+    seed_sql: Optional[str] = None     # INSERT seed data (None if no DB)
+    setup_db_sh: Optional[str] = None  # Script to create DB, user, apply schema and seed (None if no DB)
+    deploy_snippet: str         # Bash to deploy the app and start the web server
+    testing_snippet: str        # Layer 1: internal state check
+    attack_snippet: str         # Layer 2: external exploit from attacker container
+
+
+class ResolvedCustomApp(BaseModel):
+    """A generated and validated custom app ready to be sequenced into the deploy script."""
+    vector: CustomVector
+    deploy_snippet: str
+    testing_snippet: str
+    attack_snippet: str
+    validation_passed: bool
+
+
+class CustomAppState(BaseModel):
+    """State object for CustomAppFlow."""
+    vector: Optional[CustomVector] = None
+    vuln_atom_content: Optional[str] = None    # Full atom markdown from web_vuln_atoms ChromaDB
+    attack_goal: Optional[dict] = None          # Loaded attack goal YAML
+    web_runtime: Optional[dict] = None          # Loaded web runtime YAML
+    generated_app: Optional[GeneratedApp] = None
+    layer1_verdict: Optional["TestVerdict"] = None
+    layer2_verdict: Optional["TestVerdict"] = None
+    generate_attempts: int = 0
+    resolved: Optional[ResolvedCustomApp] = None
+
 
 class SequencedRequest(BaseModel):
     """

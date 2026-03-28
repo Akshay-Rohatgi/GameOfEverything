@@ -1,6 +1,4 @@
-"""Step 1: Parse user request → map to atoms → validate → enumerate deps → sequence."""
-
-from typing import Optional
+"""Step 1: Parse synthesized scenario → map to atoms → validate → enumerate deps → sequence."""
 
 import rich
 from crewai import Agent, Task, Crew, Process
@@ -23,21 +21,28 @@ def run_engineer_requirements(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
-    user_input: Optional[str] = None,
 ) -> None:
     """Run the full engineering crew: parse → map → validate → dep-enumerate → sequence.
+
+    Reads from state.raw_request and state.synthesized_scenario (set by
+    synthesize_scenario step). The parser extracts structured fields from
+    the scenario rather than reasoning about the raw prompt.
 
     Args:
         state: Flow state to mutate in-place.
         agents_config: Loaded agents.yaml dict.
         tasks_config: Loaded tasks.yaml dict.
-        user_input: Optional pre-supplied request. Falls back to interactive input().
     """
-    if user_input is None:
-        user_input = input("Enter your vulnerable environment request: ")
-    state.raw_request = user_input
+    # Build the prompt the parser will work from.  When a synthesized scenario
+    # exists, the parser focuses on misconfig_scope (the part of the scenario
+    # relevant to the existing atom pipeline).  The raw prompt is still passed
+    # as initial_prompt for record-keeping.
+    if state.synthesized_scenario:
+        parser_prompt = state.synthesized_scenario.misconfig_scope
+    else:
+        parser_prompt = state.raw_request or ""
 
-    print(f"Engineering requirements for: {user_input}")
+    print(f"Engineering requirements for: {parser_prompt}")
 
     # --- Agents ---
     search_atoms_tool = SearchAtomsTool()
@@ -119,7 +124,7 @@ def run_engineer_requirements(
         function_calling_llm=make_llm(),
     )
 
-    engineering_crew.kickoff(inputs={"initial_prompt": user_input})
+    engineering_crew.kickoff(inputs={"initial_prompt": parser_prompt})
 
     # --- Populate state ---
     state.parsed_request = parse_task.output.pydantic  # type: ignore

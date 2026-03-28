@@ -1,0 +1,53 @@
+id: flask
+description: Python 3 + Flask on Ubuntu 22.04. App runs as a systemd service on real machines, nohup fallback in Docker.
+required_packages:
+  - python3
+  - python3-flask
+  - python3-pip
+app_dir: /opt/webapp
+file_extension: .py
+port: 5000
+service_name: webapp
+setup_notes: >
+  Flask is installed via apt (python3-flask). The app.py must call
+  app.run(host='0.0.0.0', port=5000) to be reachable from other containers.
+  Use sqlite3 (Python stdlib) for simple DB needs or install python3-mysqldb
+  via apt for MySQL. Jinja2 is included with Flask — render_template_string()
+  is available for SSTI.
+  The deploy_snippet must create a systemd unit file AND use the detection
+  pattern below so it works both on real machines (systemd) and in Docker (nohup).
+deploy_reference: |
+  # Copy app file
+  mkdir -p /opt/webapp
+  cp /tmp/goe_app/app.py /opt/webapp/app.py
+
+  # Run database setup
+  bash /tmp/goe_app/setup_db.sh
+
+  # Create systemd service unit (used on real machines; ignored in Docker)
+  cat > /etc/systemd/system/webapp.service << 'EOF'
+  [Unit]
+  Description=Vulnerable Web App
+  After=network.target
+
+  [Service]
+  ExecStart=/usr/bin/python3 /opt/webapp/app.py
+  Restart=always
+  WorkingDirectory=/opt/webapp
+
+  [Install]
+  WantedBy=multi-user.target
+  EOF
+
+  # Start: systemd on real machines, nohup fallback in Docker
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable webapp
+    systemctl start webapp
+  else
+    cd /opt/webapp && nohup python3 app.py > /var/log/webapp.log 2>&1 &
+    sleep 2
+  fi
+service_start_cmd: |
+  if [ -d /run/systemd/system ]; then systemctl start webapp; else cd /opt/webapp && nohup python3 app.py > /var/log/webapp.log 2>&1 & sleep 2; fi
+healthcheck: "curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/"

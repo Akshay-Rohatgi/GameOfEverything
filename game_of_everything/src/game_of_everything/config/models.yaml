@@ -6,6 +6,10 @@ default:
 
 # Per-agent overrides. Keys must match agents.yaml keys.
 # Uncomment and modify to assign different models to specific agents.
+agents:
+  # app_generation_agent writes complex multi-file app code — use Opus for quality.
+  app_generation_agent:
+    model_id: anthropic.claude-opus-4-6-v1
 # agents:
 #   request_parser_agent:
 #     model_id: anthropic.claude-haiku-3-5

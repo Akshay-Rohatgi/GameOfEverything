@@ -1,5 +1,6 @@
 import os
-import chromadb 
+import yaml
+import chromadb
 import boto3
 from dotenv import load_dotenv
 from pathlib import Path
@@ -13,86 +14,119 @@ PROJECT_DIR = SCRIPT_DIR.parent
 ATOMS_DIR = PROJECT_DIR / "atoms"
 CHROMA_DB_PATH = PROJECT_DIR / "src/game_of_everything" / "chroma_db"
 
-# print(f"Script directory: {SCRIPT_DIR}")
-# print(f"Project directory: {PROJECT_DIR}")
-# print(f"Atoms directory: {ATOMS_DIR}")
-# print(f"ChromaDB path: {CHROMA_DB_PATH}")
 
-
-aws_session = boto3.Session( # aws session for auth w/ bedrock
+aws_session = boto3.Session(
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
     region_name=os.getenv("AWS_REGION", "us-east-1"),
 )
 
-bedrock_ef = AmazonBedrockEmbeddingFunction( # embedding function for chromadb that uses bedrock under the hood
+bedrock_ef = AmazonBedrockEmbeddingFunction(
     session=aws_session,
     model_name="amazon.titan-embed-text-v2:0",
 )
 
 chroma_client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
-collection = chroma_client.get_or_create_collection(
-    name="goe_collection", 
-    embedding_function=bedrock_ef # type: ignore
+
+# Two collections — never cross-queried.
+# goe_collection: misconfiguration atoms (atoms/*.md)
+# web_vuln_atoms: web vulnerability atoms (atoms/web_vulnerabilities/*.md)
+misconfig_collection = chroma_client.get_or_create_collection(
+    name="goe_collection",
+    embedding_function=bedrock_ef,  # type: ignore
+)
+web_vuln_collection = chroma_client.get_or_create_collection(
+    name="web_vuln_atoms",
+    embedding_function=bedrock_ef,  # type: ignore
 )
 
-def ingest_atoms(atoms_directory=str(ATOMS_DIR)):
+COLLECTION_MAP = {
+    "misconfig": misconfig_collection,
+    "web_vulnerability": web_vuln_collection,
+}
+
+
+def _parse_atom_type(content: str) -> str:
+    """Extract `type` from YAML frontmatter. Defaults to 'misconfig'."""
+    if not content.startswith("---"):
+        return "misconfig"
+    try:
+        end = content.index("---", 3)
+        fm = yaml.safe_load(content[3:end]) or {}
+        return fm.get("type", "misconfig")
+    except (ValueError, yaml.YAMLError):
+        return "misconfig"
+
+
+def ingest_atoms(atoms_root: str = str(ATOMS_DIR)) -> None:
+    """Ingest all atoms found under atoms_root (recursively) into ChromaDB.
+
+    Routes each atom to goe_collection or web_vuln_atoms based on the
+    `type` field in its YAML frontmatter:
+      - type: web_vulnerability  → web_vuln_atoms
+      - (anything else / absent) → goe_collection
     """
-    Ingest atoms from the specified directory into ChromaDB.
-    
-    1. First retrieve all existing atom IDs from the collection to avoid duplicates.
-    2. Only upsert files that are new or have been modified.
-    """
-    existing_data = collection.get(include=["metadatas"]) 
+    atoms_root_path = Path(atoms_root)
 
-    # map existing atom IDs to their last modified timestamps
-    existing_files = {}
-    if existing_data and existing_data["metadatas"]:
-        for i, atom_id in enumerate(existing_data["ids"]):
-            metadata = existing_data["metadatas"][i]
-            existing_files[atom_id] = metadata.get("mtime", 0)
+    # Snapshot existing state of both collections for diff/prune
+    existing_per_type: dict[str, dict[str, float]] = {}
+    for type_key, collection in COLLECTION_MAP.items():
+        existing_data = collection.get(include=["metadatas"])
+        existing_files: dict[str, float] = {}
+        if existing_data and existing_data["metadatas"]:
+            for i, atom_id in enumerate(existing_data["ids"]):
+                metadata = existing_data["metadatas"][i]
+                existing_files[atom_id] = metadata.get("mtime", 0)
+        existing_per_type[type_key] = existing_files
 
-    documents_to_insert = []
-    metadatas_to_upsert = []
-    ids_to_upsert = []
-    current_disk_ids = []
+    # Accumulate upsert batches and track current IDs per collection
+    to_upsert: dict[str, dict] = {
+        k: {"docs": [], "metas": [], "ids": []} for k in COLLECTION_MAP
+    }
+    current_ids_per_type: dict[str, set] = {k: set() for k in COLLECTION_MAP}
 
-    for filename in os.listdir(atoms_directory):
-        if filename.endswith(".md"):
-            filepath = os.path.join(atoms_directory, filename)
-            atom_name = filename.replace(".md", "")
-            current_disk_ids.append(atom_name)
+    for filepath in sorted(atoms_root_path.rglob("*.md")):
+        atom_name = filepath.stem
+        current_mtime = filepath.stat().st_mtime
+        content = filepath.read_text()
+        atom_type = _parse_atom_type(content)
 
-            current_mtime = os.path.getmtime(filepath)
+        if atom_type not in COLLECTION_MAP:
+            print(f"  Warning: unknown type '{atom_type}' in {filepath.name}, skipping.")
+            continue
 
-            if atom_name not in existing_files or current_mtime > existing_files[atom_name]:
-                content = None
-                with open(filepath, "r") as f:
-                    content = f.read()
+        current_ids_per_type[atom_type].add(atom_name)
+        existing_files = existing_per_type[atom_type]
 
-                if content:
-                    documents_to_insert.append(content)
-                    metadatas_to_upsert.append({
-                        "filename": atom_name, 
-                        "mtime": current_mtime
-                    })
-                    ids_to_upsert.append(atom_name)
-                
-    # --- MOVED OUTSIDE THE FOR LOOP ---
-    if ids_to_upsert:
-        collection.upsert(
-            ids=ids_to_upsert,
-            documents=documents_to_insert,
-            metadatas=metadatas_to_upsert
-        )
-        print(f"Upserted {len(ids_to_upsert)} atoms into ChromaDB.")
-    else:
-        print("No new or updated atoms to upsert.")
-    
-    ids_to_delete = [atom_id for atom_id in existing_files if atom_id not in current_disk_ids]
-    if ids_to_delete:
-        collection.delete(ids=ids_to_delete)
-        print(f"Deleted {len(ids_to_delete)} atoms from ChromaDB that no longer exist on disk.")
+        if atom_name not in existing_files or current_mtime > existing_files[atom_name]:
+            to_upsert[atom_type]["docs"].append(content)
+            to_upsert[atom_type]["metas"].append({
+                "filename": atom_name,
+                "mtime": current_mtime,
+            })
+            to_upsert[atom_type]["ids"].append(atom_name)
+
+    # Upsert new/updated atoms and prune deleted ones, per collection
+    for type_key, collection in COLLECTION_MAP.items():
+        batch = to_upsert[type_key]
+        if batch["ids"]:
+            collection.upsert(
+                ids=batch["ids"],
+                documents=batch["docs"],
+                metadatas=batch["metas"],
+            )
+            print(f"[{type_key}] Upserted {len(batch['ids'])} atoms into ChromaDB.")
+        else:
+            print(f"[{type_key}] No new or updated atoms.")
+
+        ids_to_delete = [
+            aid for aid in existing_per_type[type_key]
+            if aid not in current_ids_per_type[type_key]
+        ]
+        if ids_to_delete:
+            collection.delete(ids=ids_to_delete)
+            print(f"[{type_key}] Deleted {len(ids_to_delete)} atoms no longer on disk.")
+
 
 if __name__ == "__main__":
     ingest_atoms()

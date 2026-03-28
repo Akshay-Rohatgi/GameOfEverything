@@ -1,0 +1,19 @@
+id: rce_via_cmd_injection
+description: >
+  Achieve remote code execution on the target by injecting OS commands into a
+  parameter that is passed unsanitized to a shell execution function.
+compatible_vuln_patterns:
+  - cmd_injection
+success_criteria:
+  description: >
+    The attacker's request with a command separator payload returns a response
+    containing OS command output — uid/gid information, file contents, or
+    process listings.
+  output_pattern: 'uid=\d+|gid=\d+|root:|www-data|Linux'
+test_template: |
+  curl -s "http://target:{{port}}/{{endpoint}}?{{input_parameter}}=127.0.0.1%3Bid" \
+    | grep -E 'uid=[0-9]+'
+notes: >
+  The command output must be reflected in the HTTP response body. The injection
+  point is typically a network diagnostic feature (ping, nslookup, traceroute)
+  where the user supplies a hostname or IP address.

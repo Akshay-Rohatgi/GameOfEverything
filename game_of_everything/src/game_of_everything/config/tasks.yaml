@@ -1,3 +1,85 @@
+synthesize_scenario_task:
+  description: >
+    A user has requested the following vulnerable environment:
+
+    "{initial_prompt}"
+
+    The downstream pipeline can build with these atoms:
+
+    {available_atoms}
+
+    Produce a SynthesizedScenario that fully elaborates this request into a
+    concrete, internally-consistent environment specification. Resolve every
+    implicit decision: what OS users exist, what their passwords are, which
+    services run, how credentials bridge between layers, and what the complete
+    attacker path looks like from initial discovery to privilege escalation.
+
+    Only include what the user asked for and what is structurally necessary to
+    connect the scenario. Do not add game artifacts, extra users for flavour,
+    or services beyond what's needed.
+
+    If the request implies a custom web application, describe it in
+    custom_app_scope (single-file, single-endpoint, Tier 1 only). If the
+    request is misconfig-only, set custom_app_scope to null and custom_vectors
+    to an empty list [].
+
+    CUSTOM APP VECTORS (custom_vectors field):
+    When custom_app_scope is non-null, also populate custom_vectors with one
+    CustomVector per distinct web app in the scenario. Each CustomVector must
+    contain:
+      - vuln_atom_id: exact web vuln atom id from the available list above
+        (e.g. "sqli_union", "ssti_jinja2", "cmd_injection", "file_upload_bypass",
+        "path_traversal_lfi", "xss_stored", "xss_reflected", "sqli_tautology",
+        "sqli_blind")
+      - attack_chain_goal: the attack outcome this app enables; use one of:
+        "credential_theft", "auth_bypass", "rce_via_cmd_injection",
+        "rce_via_webshell", "rce_via_sqli", "lfi_to_rce"
+      - runtime_id: the web technology; use one of: "apache_php", "flask",
+        "express"
+      - port: 80 for apache_php, 5000 for flask, 3000 for express
+      - db_name: MySQL database name (null if no DB)
+      - db_user: MySQL user for the app (null if no DB)
+      - db_password: DB user password — must be realistic, not security-themed
+      - seed_username: OS username whose credentials are seeded into the app DB
+        (must exactly match the username in misconfig_scope if bridged)
+      - seed_password: their password (must exactly match misconfig_scope value)
+      - synthesis_context: 2-4 sentence prose describing this specific app's
+        vulnerability, the credentials it exposes, and its role in the attack chain
+
+    The narrative describes the ENVIRONMENT. The attack_narrative describes the
+    OPERATOR'S JOURNEY through it. The scopes tell downstream pipelines exactly
+    what to build. Be specific about credential values, service types, and
+    user accounts — but keep passwords realistic (like something an actual
+    person would choose, e.g. "TigerLily99#" not "P@ssw0rd!").
+
+    CRITICAL — misconfig_scope format:
+    Write misconfig_scope as an attacker-facing scenario description, NOT as
+    deployment instructions. The downstream parser extracts initial_access_vectors
+    and post_exploitation_goals from this text — it needs to read like a
+    vulnerability description, not a recipe.
+
+    WRONG (deployment instructions — parser finds nothing):
+      "Deploy user 'wikiuser' with password 'Redwood#2021'. Apply a sudoers
+       rule granting passwordless sudo. Install python3-flask."
+
+    RIGHT (attacker-facing description — parser extracts vectors):
+      "The server exposes SSH. A user account 'wikiuser' (password 'Redwood#2021')
+       exists and is accessible via SSH login. Once logged in, wikiuser has an
+       unconditional passwordless sudoers rule allowing full privilege escalation
+       to root."
+
+    If the custom app handles initial access entirely (e.g. SSTI gives a shell),
+    misconfig_scope should still describe the post-exploitation surface — the OS
+    user whose credentials the app leaks, and any privilege escalation path.
+  expected_output: >
+    A SynthesizedScenario JSON object with: narrative (str), attack_narrative (str),
+    shared_resources (list of str), explicit_decisions (list of str),
+    misconfig_scope (str), custom_app_scope (str or null), and
+    custom_vectors (list of CustomVector objects, or [] if no custom app).
+    Each CustomVector has: vuln_atom_id, attack_chain_goal, runtime_id, port,
+    db_name, db_user, db_password, seed_username, seed_password, synthesis_context.
+  agent: scenario_synthesis_agent
+
 parse_request_task:
   description: >
     Analyze the user's request: "{initial_prompt}" and break it down into context, initial access vectors, and post-exploitation goals.
@@ -211,6 +293,62 @@ sequence_atoms_task:
     `name`, `context`, and `parameters`.
   agent: sequencing_agent
 
+generate_app_task:
+  description: >
+    Generate a complete, deployable vulnerable web application.
+
+    VULN ATOM:
+    {vuln_atom}
+
+    ATTACK GOAL:
+    {attack_goal}
+
+    WEB RUNTIME:
+    {web_runtime}
+
+    SYNTHESIS CONTEXT:
+    {synthesis_context}
+
+    {failure_context}
+
+    YOUR TASK:
+    1. Read the VULN ATOM's Synthesis Guidance — this is your blueprint for writing the
+       vulnerability. Use the language example that matches the WEB RUNTIME.
+    2. Read the SYNTHESIS CONTEXT to understand the exact credentials, usernames, and
+       scenario details. Seed data MUST match synthesis_context exactly.
+    3. Read the ATTACK GOAL's test_template and success_criteria — your attack_snippet
+       must produce output matching the success_criteria output_pattern.
+    4. Write app_source as a single file. The vulnerability must be exactly as described
+       in the atom's Synthesis Guidance — do not sanitise it or add protections.
+    5. Write schema_sql to create the necessary tables.
+    6. Write seed_sql to insert the seed credentials from synthesis_context.
+    7. Write setup_db_sh to start the DB service, create the DB and user, and run
+       schema + seed. Must be idempotent (IF NOT EXISTS throughout). Use
+       `service mysql start` not `systemctl start` (no systemd init in Docker).
+    8. Write deploy_snippet to:
+       a. Install ALL required_packages listed in WEB RUNTIME using apt-get:
+          `DEBIAN_FRONTEND=noninteractive apt-get install -y <packages>`
+          Run `apt-get update -qq` first. If the app needs a MySQL-compatible database,
+          install `mariadb-server` (NOT mysql-server — it fails to configure in Docker).
+          Start it with `service mariadb start && sleep 2`.
+       b. Copy files from /tmp/goe_app/ to the runtime app_dir.
+       c. Run setup_db_sh to initialise the database.
+       d. Configure and start the web server.
+       The target container is a bare ubuntu:22.04 with nothing pre-installed —
+       your deploy_snippet MUST install every package the app needs to run.
+       All in bash, no shebang.
+    9. Write testing_snippet to verify: (a) the web server is responding, (b) the
+       vulnerability is present in the app. Run inside the target container.
+    10. Write attack_snippet to exploit the vulnerability from an attacker container.
+        The target is addressed as hostname "target" on the runtime's default port.
+
+    Port for this deployment: {port}
+  expected_output: >
+    A GeneratedApp JSON object with: app_filename (str), app_source (str),
+    schema_sql (str), seed_sql (str), setup_db_sh (str), deploy_snippet (str),
+    testing_snippet (str), attack_snippet (str).
+  agent: app_generation_agent
+
 generate_snippets_task:
   description: >
     Generate a Bash code snippet and a testing snippet for every Atom in the
@@ -365,8 +503,9 @@ validate_snippets_task:
     - `passed`: true if the evidence confirms success, false if it indicates failure.
     - `reasoning`: 1-3 sentences citing specific evidence from the output.
   expected_output: >
-    A TestVerdict JSON object with `passed` (boolean) and `reasoning` (string
-    citing specific evidence from stdout/stderr/exit_code).
+    A single raw JSON object — no markdown, no surrounding text, no reasoning
+    before or after. Start the response with { and end with }.
+    Fields: `passed` (boolean) and `reasoning` (1-3 sentence string).
   agent: testing_agent
 
 diagnose_snippet_task:
@@ -415,6 +554,8 @@ diagnose_snippet_task:
     - `diagnosis`: 2-4 sentence explanation of root cause and fix.
     - `confidence`: "high", "medium", or "low".
   expected_output: >
-    A DiagnosticResult JSON object with `fixed_code_snippet` (str),
-    `fixed_testing_snippet` (str), `diagnosis` (str), and `confidence` (str).
+    A single raw JSON object — no markdown, no surrounding text, no reasoning
+    before or after. Start the response with { and end with }.
+    Fields: `fixed_code_snippet` (str), `fixed_testing_snippet` (str),
+    `diagnosis` (str), `confidence` (str).
   agent: diagnostic_agent

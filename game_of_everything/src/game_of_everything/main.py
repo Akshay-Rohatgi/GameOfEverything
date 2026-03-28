@@ -19,6 +19,8 @@ from dotenv import load_dotenv
 
 from game_of_everything.state import GoEState
 from game_of_everything.steps import (
+    run_synthesize_scenario,
+    run_resolve_custom_apps,
     run_engineer_requirements,
     run_generate_implementation,
     run_test_snippets,
@@ -48,6 +50,14 @@ class GoEFlow(Flow[GoEState]):
             self.tasks_config = yaml.safe_load(f)
 
     @start()
+    def synthesize_scenario(self):
+        run_synthesize_scenario(self.state, self.agents_config, self.tasks_config)
+
+    @listen(synthesize_scenario)
+    def resolve_custom_apps(self):
+        run_resolve_custom_apps(self.state)
+
+    @listen(resolve_custom_apps)
     def engineer_requirements(self):
         run_engineer_requirements(self.state, self.agents_config, self.tasks_config)
 

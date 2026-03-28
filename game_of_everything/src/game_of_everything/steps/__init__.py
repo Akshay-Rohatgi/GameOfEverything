@@ -1,3 +1,5 @@
+from game_of_everything.steps.synthesize_scenario import run_synthesize_scenario
+from game_of_everything.steps.resolve_custom_apps import run_resolve_custom_apps
 from game_of_everything.steps.engineer_requirements import run_engineer_requirements
 from game_of_everything.steps.generate_implementation import run_generate_implementation
 from game_of_everything.steps.test_snippets import run_test_snippets

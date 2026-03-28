@@ -1,0 +1,56 @@
+id: express
+description: Node.js + Express on Ubuntu 22.04. App runs as a systemd service on real machines, nohup fallback in Docker.
+required_packages:
+  - nodejs
+  - npm
+app_dir: /opt/webapp
+file_extension: .js
+port: 3000
+service_name: webapp
+setup_notes: >
+  Node.js and npm are installed via apt. The app.js must call
+  app.listen(3000, '0.0.0.0') to be reachable from other containers.
+  Run `npm install express` and any DB drivers (better-sqlite3, mysql2) in
+  app_dir before starting.
+  The deploy_snippet must create a systemd unit file AND use the detection
+  pattern below so it works both on real machines (systemd) and in Docker (nohup).
+deploy_reference: |
+  # Copy app file
+  mkdir -p /opt/webapp
+  cp /tmp/goe_app/app.js /opt/webapp/app.js
+
+  # Install dependencies
+  cd /opt/webapp
+  npm init -y
+  npm install express
+
+  # Run database setup
+  bash /tmp/goe_app/setup_db.sh
+
+  # Create systemd service unit (used on real machines; ignored in Docker)
+  cat > /etc/systemd/system/webapp.service << 'EOF'
+  [Unit]
+  Description=Vulnerable Web App
+  After=network.target
+
+  [Service]
+  ExecStart=/usr/bin/node /opt/webapp/app.js
+  Restart=always
+  WorkingDirectory=/opt/webapp
+
+  [Install]
+  WantedBy=multi-user.target
+  EOF
+
+  # Start: systemd on real machines, nohup fallback in Docker
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable webapp
+    systemctl start webapp
+  else
+    cd /opt/webapp && nohup node app.js > /var/log/webapp.log 2>&1 &
+    sleep 2
+  fi
+service_start_cmd: |
+  if [ -d /run/systemd/system ]; then systemctl start webapp; else cd /opt/webapp && nohup node app.js > /var/log/webapp.log 2>&1 & sleep 2; fi
+healthcheck: "curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/"

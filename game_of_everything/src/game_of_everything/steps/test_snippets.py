@@ -12,6 +12,16 @@ Incremental cumulative testing:
 import json
 from typing import List, Optional
 
+
+def _si(s: str) -> str:
+    """Sanitize a string for use as a crewAI crew.kickoff() input value.
+
+    Replaces Jinja2/template-syntax double-braces ({{ and }}) with spaced
+    equivalents so the LLM is less likely to echo them literally in its JSON
+    output, which would cause crewAI's Pydantic extractor to fail parsing.
+    """
+    return s.replace("{{", "{ {").replace("}}", "} }")
+
 import rich
 from crewai import Agent, Task, Crew, Process
 
@@ -67,12 +77,12 @@ def _run_verdict_crew(
     verdict_crew.kickoff(
         inputs={
             "atom_name": atom_name,
-            "atom_context": atom_context,
+            "atom_context": _si(atom_context),
             "layer": layer,
-            "snippet_executed": snippet_executed,
+            "snippet_executed": _si(snippet_executed),
             "exit_code": str(exit_code),
-            "stdout": stdout or "(empty)",
-            "stderr": stderr or "(empty)",
+            "stdout": _si(stdout or "(empty)"),
+            "stderr": _si(stderr or "(empty)"),
         }
     )
 
@@ -128,15 +138,15 @@ def _run_diagnostic_crew(
     diag_crew.kickoff(
         inputs={
             "atom_name": atom_name,
-            "atom_context": atom_context,
-            "atom_parameters": atom_parameters or "(none)",
-            "original_code_snippet": original_code_snippet,
-            "original_testing_snippet": original_testing_snippet,
-            "apply_stderr": apply_stderr or "(empty)",
+            "atom_context": _si(atom_context),
+            "atom_parameters": _si(atom_parameters or "(none)"),
+            "original_code_snippet": _si(original_code_snippet),
+            "original_testing_snippet": _si(original_testing_snippet),
+            "apply_stderr": _si(apply_stderr or "(empty)"),
             "l1_exit_code": str(l1_exit_code),
-            "l1_stdout": l1_stdout or "(empty)",
-            "l1_stderr": l1_stderr or "(empty)",
-            "verdict_reasoning": verdict_reasoning,
+            "l1_stdout": _si(l1_stdout or "(empty)"),
+            "l1_stderr": _si(l1_stderr or "(empty)"),
+            "verdict_reasoning": _si(verdict_reasoning),
             "attempt_number": str(attempt_number),
         }
     )
