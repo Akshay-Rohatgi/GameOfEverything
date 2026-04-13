@@ -16,6 +16,8 @@ def run_generate_implementation(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    box_id: str = "",
+    target_hostname: str = "target",
 ) -> None:
     """Generate implementation snippets for each sequenced atom.
 
@@ -23,6 +25,10 @@ def run_generate_implementation(
         state: Flow state to mutate in-place.
         agents_config: Loaded agents.yaml dict.
         tasks_config: Loaded tasks.yaml dict.
+        box_id: Optional box identifier for scoped logging.
+        target_hostname: Hostname of the target container on the Docker bridge
+            network.  Used by attack_snippets so they address the correct host.
+            Defaults to "target" (the single-box default).
     """
     if not state.sequenced_request:
         print("No sequenced atoms to generate snippets for. Skipping.")
@@ -33,12 +39,13 @@ def run_generate_implementation(
         indent=2,
     )
 
+    _tag = f"[{box_id}][SNIPPET-GEN]" if box_id else "[SNIPPET-GEN]"
     snippet_generator = Agent(
         config=agents_config["snippet_generation_agent"],
         llm=make_llm("snippet_generation_agent"),
         tools=[ReadAtomTool(), SearchAtomsTool()],
         verbose=True,
-        step_callback=lambda step: print(f"[SNIPPET-GEN] {step}"),
+        step_callback=lambda step: print(f"{_tag} {step}"),
     )  # type: ignore
 
     generate_task = Task(
@@ -48,6 +55,7 @@ def run_generate_implementation(
     )
 
     generation_crew = Crew(
+        name=f"{box_id}/generate_implementation" if box_id else "generate_implementation",
         agents=[snippet_generator],
         tasks=[generate_task],
         process=Process.sequential,
@@ -55,7 +63,10 @@ def run_generate_implementation(
         function_calling_llm=make_llm("snippet_generation_agent"),
     )
 
-    generation_crew.kickoff(inputs={"sequenced_atoms_json": sequenced_atoms_json})
+    generation_crew.kickoff(inputs={
+        "sequenced_atoms_json": sequenced_atoms_json,
+        "target_hostname": target_hostname,
+    })
 
     if generate_task.output.pydantic:  # type: ignore
         state.generated_snippets = generate_task.output.pydantic.snippets  # type: ignore

@@ -5,7 +5,6 @@ Takes the user's natural-language request, reasons about the whole box
 a SynthesizedScenario that downstream steps parse rather than interpret.
 """
 
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +13,7 @@ from rich.panel import Panel
 from crewai import Agent, Task, Crew, Process
 
 from game_of_everything.state import GoEState
-from game_of_everything.models import SynthesizedScenario
+from game_of_everything.models import SynthesizedScenario, scenario_to_topology
 from game_of_everything.llm_factory import make_llm
 
 # atoms/ lives at project root, two levels above src/game_of_everything/
@@ -78,6 +77,22 @@ def _print_scenario_comparison(raw_prompt: str, scenario: SynthesizedScenario) -
         rich.print(f"  {scenario.custom_app_scope.strip()}")
 
     rich.print()
+    rich.print(f"[bold]NUMBER OF BOXES:[/bold] {scenario.num_boxes}")
+
+    if scenario.boxes:
+        rich.print()
+        rich.print("[bold magenta]BOX DESCRIPTIONS:[/bold magenta]")
+        for spec in scenario.boxes:
+            rich.print(f"  [bold cyan]{spec.box_id}[/bold cyan] ({spec.hostname}): {spec.role}")
+            scope_preview = spec.misconfig_scope[:100].replace("\n", " ")
+            rich.print(f"    scope: {scope_preview}{'...' if len(spec.misconfig_scope) > 100 else ''}")
+        if scenario.shared_secrets:
+            rich.print()
+            rich.print("[bold magenta]SHARED SECRETS:[/bold magenta]")
+            for s in scenario.shared_secrets:
+                rich.print(f"  [{s.key}] {s.source_box} → {s.target_box}: {s.target_user}:{s.value} via {s.access_method}")
+
+    rich.print()
 
 
 def _confirm_scenario() -> bool:
@@ -109,48 +124,57 @@ def run_synthesize_scenario(
         user_input = input("Enter your vulnerable environment request: ")
     state.raw_request = user_input
 
-    rich.print(f"\n[bold]Synthesizing scenario for:[/bold] {user_input}\n")
+    while True:
+        rich.print(f"\n[bold]Synthesizing scenario for:[/bold] {user_input}\n")
 
-    # Build dynamic atom list for the synthesis prompt
-    available_atoms = _discover_available_atoms()
+        # Build dynamic atom list for the synthesis prompt
+        available_atoms = _discover_available_atoms()
 
-    # --- Agent ---
-    synthesizer = Agent(
-        config=agents_config["scenario_synthesis_agent"],
-        llm=make_llm("scenario_synthesis_agent"),
-        verbose=True,
-        step_callback=lambda step: print(f"[SYNTHESIS] {step}"),
-    )  # type: ignore
+        # --- Agent ---
+        synthesizer = Agent(
+            config=agents_config["scenario_synthesis_agent"],
+            llm=make_llm("scenario_synthesis_agent"),
+            verbose=True,
+            step_callback=lambda step: print(f"[SYNTHESIS] {step}"),
+        )  # type: ignore
 
-    # --- Task ---
-    synthesis_task = Task(
-        config=tasks_config["synthesize_scenario_task"],  # type: ignore
-        agent=synthesizer,
-        output_pydantic=SynthesizedScenario,
-    )
+        # --- Task ---
+        synthesis_task = Task(
+            config=tasks_config["synthesize_scenario_task"],  # type: ignore
+            agent=synthesizer,
+            output_pydantic=SynthesizedScenario,
+        )
 
-    # --- Crew ---
-    synthesis_crew = Crew(
-        agents=[synthesizer],
-        tasks=[synthesis_task],
-        process=Process.sequential,
-        verbose=True,
-        function_calling_llm=make_llm(),
-    )
+        # --- Crew ---
+        synthesis_crew = Crew(
+            agents=[synthesizer],
+            tasks=[synthesis_task],
+            process=Process.sequential,
+            verbose=True,
+            function_calling_llm=make_llm(),
+        )
 
-    synthesis_crew.kickoff(inputs={
-        "initial_prompt": user_input,
-        "available_atoms": available_atoms,
-    })
+        synthesis_crew.kickoff(inputs={
+            "initial_prompt": user_input,
+            "available_atoms": available_atoms,
+        })
 
-    scenario: SynthesizedScenario = synthesis_task.output.pydantic  # type: ignore
+        scenario: SynthesizedScenario = synthesis_task.output.pydantic  # type: ignore
 
-    # --- Show comparison and confirm ---
-    _print_scenario_comparison(user_input, scenario)
+        # --- Show comparison and confirm ---
+        _print_scenario_comparison(user_input, scenario)
 
-    if not _confirm_scenario():
-        rich.print("[bold red]Scenario rejected. Exiting.[/bold red]")
-        sys.exit(0)
+        if _confirm_scenario():
+            break
 
-    rich.print("[bold green]Scenario confirmed. Proceeding to engineering.[/bold green]\n")
+        rich.print("[bold yellow]Scenario rejected.[/bold yellow]")
+        modified = input("Enter a modified request (or press Enter to retry same prompt): ").strip()
+        if modified:
+            user_input = modified
+            state.raw_request = user_input
+
+    rich.print("[bold green]Scenario confirmed. Proceeding to pipeline.[/bold green]\n")
     state.synthesized_scenario = scenario
+
+    # Convert to NetworkTopology: single-box wraps naturally; multi-box uses scenario.boxes list
+    state.topology = scenario_to_topology(scenario)
