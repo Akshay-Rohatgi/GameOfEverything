@@ -49,15 +49,17 @@ def _run_verdict_crew(
     exit_code: int,
     stdout: str,
     stderr: str,
+    box_id: str = "",
 ) -> TestVerdict:
     """Kick off a one-task Testing Agent crew to judge command output."""
     llm = make_llm("testing_agent")
+    _tag = f"[{box_id}][TESTER]" if box_id else "[TESTER]"
 
     tester = Agent(
         config=agents_config["testing_agent"],
         llm=llm,
         verbose=True,
-        step_callback=lambda step: print(f"[TESTER] {step}"),
+        step_callback=lambda step: print(f"{_tag} {step}"),
     )  # type: ignore
 
     verdict_task = Task(
@@ -67,6 +69,7 @@ def _run_verdict_crew(
     )
 
     verdict_crew = Crew(
+        name=f"{box_id}/verdict/{atom_name}" if box_id else f"verdict/{atom_name}",
         agents=[tester],
         tasks=[verdict_task],
         process=Process.sequential,
@@ -109,16 +112,20 @@ def _run_diagnostic_crew(
     l1_stderr: str,
     verdict_reasoning: str,
     attempt_number: int,
+    box_id: str = "",
+    target_container_name: str = "goe_target",
+    attacker_container_name: str = "goe_attacker",
 ) -> DiagnosticResult:
     """Kick off a one-task Diagnostic Agent crew to diagnose and fix a failing snippet."""
     llm = make_llm("diagnostic_agent")
+    _tag = f"[{box_id}][DIAGNOSTICIAN]" if box_id else "[DIAGNOSTICIAN]"
 
     diagnostician = Agent(
         config=agents_config["diagnostic_agent"],
         llm=llm,
         tools=[ReadAtomTool(), ExecInContainerTool()],
         verbose=True,
-        step_callback=lambda step: print(f"[DIAGNOSTICIAN] {step}"),
+        step_callback=lambda step: print(f"{_tag} {step}"),
     )  # type: ignore
 
     diag_task = Task(
@@ -128,6 +135,7 @@ def _run_diagnostic_crew(
     )
 
     diag_crew = Crew(
+        name=f"{box_id}/diagnostic/{atom_name}" if box_id else f"diagnostic/{atom_name}",
         agents=[diagnostician],
         tasks=[diag_task],
         process=Process.sequential,
@@ -148,6 +156,8 @@ def _run_diagnostic_crew(
             "l1_stderr": _si(l1_stderr or "(empty)"),
             "verdict_reasoning": _si(verdict_reasoning),
             "attempt_number": str(attempt_number),
+            "target_container_name": target_container_name,
+            "attacker_container_name": attacker_container_name,
         }
     )
 
@@ -170,6 +180,8 @@ def run_test_snippets(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    env: Optional[TestEnvironmentTool] = None,
+    box_id: str = "",
 ) -> None:
     """Test generated snippets in Docker containers with two-layer validation.
 
@@ -177,19 +189,27 @@ def run_test_snippets(
         state: Flow state to mutate in-place.
         agents_config: Loaded agents.yaml dict.
         tasks_config: Loaded tasks.yaml dict.
+        env: Optional pre-constructed TestEnvironmentTool. When supplied the
+             caller owns the lifecycle (setup/teardown are NOT called here).
+             When None (default), this function creates, sets up, and tears
+             down its own TestEnvironmentTool() — original behaviour.
     """
+
     if not state.generated_snippets:
         print("No generated snippets to test. Skipping.")
         return
 
     snippets = state.generated_snippets
-    env = TestEnvironmentTool()
+    _owns_env = env is None
+    if _owns_env:
+        env = TestEnvironmentTool()
     results: List[TestResult] = []
 
     try:
-        rich.print("\n[bold yellow]=== SETTING UP TEST ENVIRONMENT ===[/bold yellow]")
-        env.setup()
-        rich.print("[green]Test environment ready (target + attacker containers on goe_test_net)[/green]")
+        if _owns_env:
+            rich.print("\n[bold yellow]=== SETTING UP TEST ENVIRONMENT ===[/bold yellow]")
+            env.setup()
+            rich.print(f"[green]Test environment ready ({env.target_name} + {env.attacker_name} on {env.network_name})[/green]")
 
         # Ensure attacker container has all referenced tools
         all_attack_snippets = [s.attack_snippet for s in snippets if s.attack_snippet]
@@ -197,6 +217,13 @@ def run_test_snippets(
             rich.print("[yellow]Checking attacker container for required tools...[/yellow]")
             env.ensure_attacker_tools(all_attack_snippets)
             rich.print("[green]Attacker tools verified.[/green]")
+
+        # Ensure target container has all tools referenced in code/testing snippets
+        all_code_snippets = [s.code_snippet for s in snippets]
+        all_testing_snippets = [s.testing_snippet for s in snippets]
+        rich.print("[yellow]Checking target container for required tools...[/yellow]")
+        env.ensure_target_tools(all_code_snippets, all_testing_snippets)
+        rich.print("[green]Target tools verified.[/green]")
 
         MAX_DIAGNOSTIC_RETRIES = 2
 
@@ -238,6 +265,7 @@ def run_test_snippets(
                     exit_code=l1_exit,
                     stdout=l1_stdout,
                     stderr=l1_stderr,
+                    box_id=box_id,
                 )
 
                 rich.print(f"  Layer 1 verdict: {'[green]PASS[/green]' if l1_verdict.passed else '[red]FAIL[/red]'}")
@@ -265,6 +293,9 @@ def run_test_snippets(
                         l1_stderr=l1_stderr,
                         verdict_reasoning=l1_verdict.reasoning,
                         attempt_number=attempt + 1,
+                        box_id=box_id,
+                        target_container_name=env.target_name,
+                        attacker_container_name=env.attacker_name,
                     )
 
                     diagnostic_attempts.append(diag_result)
@@ -281,25 +312,25 @@ def run_test_snippets(
                     rich.print(f"  [bold red]Layer 1 FAILED after {MAX_DIAGNOSTIC_RETRIES} diagnostic retries. Giving up.[/bold red]")
 
             if not l1_passed:
-                # All retries exhausted — stop the chain
+                # Retries exhausted — skip this snippet but continue testing the rest
                 snippet.set_validated(False)
                 results.append(TestResult(
                     atom_name=snippet.atom_name,
                     layer1_verdict=l1_verdict,  # type: ignore
                     layer2_verdicts=None,
                     diagnostic_results=diagnostic_attempts if diagnostic_attempts else None,
-                    error=f"Layer 1 failed after {len(diagnostic_attempts)} diagnostic retries — chain stopped at snippet {i}.",
+                    error=f"Layer 1 failed after {len(diagnostic_attempts)} diagnostic retries — snippet skipped.",
                 ))
-                # Mark all remaining snippets as not validated
-                for remaining in snippets[i + 1:]:
-                    remaining.set_validated(False)
-                break
+                rich.print(f"  [bold yellow]Snippet {i} ({snippet.atom_name}) skipped — continuing with remaining snippets.[/bold yellow]")
+                continue
 
             # --- Layer 2: re-run ALL accumulated attack probes 0..i ---
             l2_verdicts: List[TestVerdict] = []
             l2_diagnostics: List[DiagnosticResult] = []
 
             for j in range(i + 1):
+                if j < i and not snippets[j].validated:
+                    continue  # skip L2 probes for snippets that failed L1
                 attack = snippets[j].attack_snippet
                 if attack:
                     rich.print(f"  [red]Running Layer 2 probe for snippet {j} ({snippets[j].atom_name})...[/red]")
@@ -315,6 +346,7 @@ def run_test_snippets(
                         exit_code=a_exit,
                         stdout=a_stdout,
                         stderr=a_stderr,
+                        box_id=box_id,
                     )
                     l2_verdicts.append(verdict)
 
@@ -342,6 +374,9 @@ def run_test_snippets(
                             l1_stderr=a_stderr,
                             verdict_reasoning=verdict.reasoning,
                             attempt_number=1,
+                            box_id=box_id,
+                            target_container_name=env.target_name,
+                            attacker_container_name=env.attacker_name,
                         )
                         l2_diagnostics.append(l2_diag)
                         rich.print(f"    [cyan]L2 Diagnosis:[/cyan] {l2_diag.diagnosis}")
@@ -381,6 +416,7 @@ def run_test_snippets(
                     rich.print(f"    [cyan]Diagnostic #{idx}[/cyan] (confidence: {dr.confidence}): {dr.diagnosis}")
 
     finally:
-        rich.print("\n[bold yellow]=== TEARING DOWN TEST ENVIRONMENT ===[/bold yellow]")
-        env.teardown()
-        rich.print("[green]Test environment cleaned up.[/green]")
+        if _owns_env:
+            rich.print("\n[bold yellow]=== TEARING DOWN TEST ENVIRONMENT ===[/bold yellow]")
+            env.teardown()
+            rich.print("[green]Test environment cleaned up.[/green]")
