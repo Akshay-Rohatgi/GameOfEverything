@@ -1,8 +1,8 @@
 """Step 2: Generate code_snippet, testing_snippet, and attack_snippet for each sequenced atom."""
 
 import json
+from typing import Optional, TYPE_CHECKING
 
-import rich
 from crewai import Agent, Task, Crew, Process
 
 from game_of_everything.state import GoEState
@@ -11,21 +11,20 @@ from game_of_everything.tools.read_atom_tool import ReadAtomTool
 from game_of_everything.tools.search_atoms_tool import SearchAtomsTool
 from game_of_everything.llm_factory import make_llm
 
+if TYPE_CHECKING:
+    from game_of_everything.ui import GoEConsole
+
 
 def run_generate_implementation(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    ui: Optional["GoEConsole"] = None,
 ) -> None:
-    """Generate implementation snippets for each sequenced atom.
-
-    Args:
-        state: Flow state to mutate in-place.
-        agents_config: Loaded agents.yaml dict.
-        tasks_config: Loaded tasks.yaml dict.
-    """
+    """Generate implementation snippets for each sequenced atom."""
     if not state.sequenced_request:
-        print("No sequenced atoms to generate snippets for. Skipping.")
+        if ui:
+            ui.log("No sequenced atoms to generate snippets for. Skipping.")
         return
 
     sequenced_atoms_json = json.dumps(
@@ -37,8 +36,7 @@ def run_generate_implementation(
         config=agents_config["snippet_generation_agent"],
         llm=make_llm("snippet_generation_agent"),
         tools=[ReadAtomTool(), SearchAtomsTool()],
-        verbose=True,
-        step_callback=lambda step: print(f"[SNIPPET-GEN] {step}"),
+        verbose=False,
     )  # type: ignore
 
     generate_task = Task(
@@ -51,25 +49,30 @@ def run_generate_implementation(
         agents=[snippet_generator],
         tasks=[generate_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
         function_calling_llm=make_llm("snippet_generation_agent"),
     )
 
-    generation_crew.kickoff(inputs={"sequenced_atoms_json": sequenced_atoms_json})
+    if ui:
+        with ui.capture():
+            generation_crew.kickoff(inputs={"sequenced_atoms_json": sequenced_atoms_json})
+    else:
+        generation_crew.kickoff(inputs={"sequenced_atoms_json": sequenced_atoms_json})
 
     if generate_task.output.pydantic:  # type: ignore
         state.generated_snippets = generate_task.output.pydantic.snippets  # type: ignore
 
-    # --- Console output ---
-    rich.print("\n[bold green]=== GENERATED SNIPPETS ===[/bold green]")
-    if state.generated_snippets:
-        for snippet in state.generated_snippets:
-            rich.print(f"\n  [bold cyan]--- {snippet.atom_name} ---[/bold cyan]")
-            rich.print(f"  [yellow]code_snippet:[/yellow]\n{snippet.code_snippet}")
-            rich.print(f"  [blue]testing_snippet:[/blue]\n{snippet.testing_snippet}")
-            if snippet.attack_snippet:
-                rich.print(f"  [red]attack_snippet:[/red]\n{snippet.attack_snippet}")
-            else:
-                rich.print(f"  [dim]attack_snippet: null (no external attack surface)[/dim]")
-    else:
-        rich.print("  (no snippets generated)")
+    # Log details
+    if ui:
+        ui.log("\n=== GENERATED SNIPPETS ===")
+        if state.generated_snippets:
+            for snippet in state.generated_snippets:
+                ui.log(f"\n--- {snippet.atom_name} ---")
+                ui.log(f"code_snippet:\n{snippet.code_snippet}")
+                ui.log(f"testing_snippet:\n{snippet.testing_snippet}")
+                if snippet.attack_snippet:
+                    ui.log(f"attack_snippet:\n{snippet.attack_snippet}")
+                else:
+                    ui.log("attack_snippet: null (no external attack surface)")
+        else:
+            ui.log("  (no snippets generated)")

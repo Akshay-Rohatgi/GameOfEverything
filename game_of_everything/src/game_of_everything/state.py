@@ -16,3 +16,4 @@ class GoEState(BaseModel):
     generated_snippets: Optional[List[GeneratedSnippet]] = None
     test_results: Optional[List[TestResult]] = None
     final_script: Optional[str] = None
+    output_path: Optional[str] = None

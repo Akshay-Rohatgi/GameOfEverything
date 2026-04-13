@@ -1,1 +1,0 @@
-Interpreter path: `/Users/akshay/Documents/GitHub/GameOfEverything/game_of_everything/.venv/bin/python3`

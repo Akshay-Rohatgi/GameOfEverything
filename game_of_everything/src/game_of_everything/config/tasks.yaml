@@ -71,8 +71,15 @@ synthesize_scenario_task:
     If the custom app handles initial access entirely (e.g. SSTI gives a shell),
     misconfig_scope should still describe the post-exploitation surface — the OS
     user whose credentials the app leaks, and any privilege escalation path.
+
+    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
+    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
+    no backticks, no explanations, no trailing comments. Do all reasoning internally.
+    Do NOT write any text after the closing `}` of the JSON object.
   expected_output: >
-    A SynthesizedScenario JSON object with: narrative (str), attack_narrative (str),
+    A single valid JSON object — no markdown, no surrounding text.
+    Start the response with { and end with }. All keys must be quoted strings.
+    The JSON object must be a SynthesizedScenario with: narrative (str), attack_narrative (str),
     shared_resources (list of str), explicit_decisions (list of str),
     misconfig_scope (str), custom_app_scope (str or null), and
     custom_vectors (list of CustomVector objects, or [] if no custom app).
@@ -83,8 +90,15 @@ synthesize_scenario_task:
 parse_request_task:
   description: >
     Analyze the user's request: "{initial_prompt}" and break it down into context, initial access vectors, and post-exploitation goals.
+
+    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
+    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
+    no backticks, no explanations, no trailing comments. Do all reasoning internally.
+    Do NOT write any text after the closing `}` of the JSON object.
   expected_output: >
-    A structured object containing the parsed components of the request.
+    A single valid JSON object — no markdown, no surrounding text.
+    Start the response with { and end with }. All keys must be quoted strings.
+    The JSON object must be a ParsedRequest containing the parsed components of the request.
   agent: request_parser_agent
 
 map_atoms_task:
@@ -121,13 +135,17 @@ map_atoms_task:
     - `context`: a brief explanation of why this Atom was chosen
     - `parameters`: a dict of key-value pairs matching the Atom's required_vars (e.g., {"share_name": "public", "path": "/srv/share"})
       For atoms whose `required_vars` is empty, use an empty JSON object: `"parameters": {}`
-      CRITICAL: Do NOT write any text, comments, or backticks after the closing `}` of a parameters value.
-              The entire MappedAtom object must be valid JSON. Annotations like
-              `{}` followed by a backtick or newline will break parsing.
+
+    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
+    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
+    no backticks, no explanations, no trailing comments. Do all reasoning internally.
+    Do NOT write any text after the closing `}` of the JSON object.
 
     IMPORTANT: You MUST call the search tool at least once. Do NOT skip the tool or guess Atom names.
   expected_output: >
-    A structured MappedRequest JSON object with `section`, `mapped_initial_access_atoms`, and `mapped_post_exploitation_goal_atoms`.
+    A single valid JSON object — no markdown, no surrounding text, no reasoning before or after.
+    Start the response with { and end with }. All keys must be quoted strings.
+    The JSON object must be a MappedRequest with `section`, `mapped_initial_access_atoms`, and `mapped_post_exploitation_goal_atoms`.
     Each mapped atom must have `name` (the Atom id), `context` (why it was chosen), and `parameters` (a dict of config values).
   agent: mapping_agent
 
@@ -184,10 +202,11 @@ validate_mapping_task:
     added. Keep the original `section` value. If no atoms were missing, return
     the MappedRequest unchanged.
 
-    CRITICAL JSON RULE: The entire output must be a single valid JSON object.
+    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
+    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
+    no backticks, no explanations, no trailing comments. Do all reasoning internally.
+    Do NOT write any text after the closing `}` of the JSON object.
     For any atom whose `required_vars` is empty, set `"parameters": {}`.
-    Do NOT append any text, backticks, or comments after the closing `}` of a
-    parameters value. Any trailing characters will break JSON parsing.
 
     You MUST call `search_vulnerability_atoms` for every atomized description.
     Never skip a search or invent Atom names.
@@ -247,10 +266,17 @@ enumerate_dependencies_task:
     Output a MappedRequest identical to the input except for the newly appended
     install_package atoms. Keep `section` and all existing atoms unchanged.
 
+    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
+    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
+    no backticks, no explanations, no trailing comments. Do all reasoning internally.
+    Do NOT write any text after the closing `}` of the JSON object.
+
     You MUST call `search_vulnerability_atoms` for each missing package.
     Never skip the tool or invent atom names.
   expected_output: >
-    A MappedRequest JSON object identical to the input except that
+    A single valid JSON object — no markdown, no surrounding text.
+    Start the response with { and end with }. All keys must be quoted strings.
+    The JSON object must be a MappedRequest identical to the input except that
     `mapped_initial_access_atoms` now includes one `install_package` MappedAtom
     per implicitly required package that was not already present.
     Each new atom has `name`: "install_package", a clear `context`, and
@@ -342,9 +368,16 @@ generate_app_task:
     10. Write attack_snippet to exploit the vulnerability from an attacker container.
         The target is addressed as hostname "target" on the runtime's default port.
 
+    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
+    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
+    no backticks, no explanations, no trailing comments. Do all reasoning internally.
+    Do NOT write any text after the closing `}` of the JSON object.
+
     Port for this deployment: {port}
   expected_output: >
-    A GeneratedApp JSON object with: app_filename (str), app_source (str),
+    A single valid JSON object — no markdown, no surrounding text.
+    Start the response with { and end with }. All keys must be quoted strings.
+    The JSON object must be a GeneratedApp with: app_filename (str), app_source (str),
     schema_sql (str), seed_sql (str), setup_db_sh (str), deploy_snippet (str),
     testing_snippet (str), attack_snippet (str).
   agent: app_generation_agent
@@ -447,6 +480,11 @@ generate_snippets_task:
     Repeat STEPS 1-6 for every atom in the list.
     Collect all GeneratedSnippet objects into a GeneratedSnippets wrapper.
 
+    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
+    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
+    no backticks, no explanations, no trailing comments. Do all reasoning internally.
+    Do NOT write any text after the closing `}` of the JSON object.
+
     IMPORTANT:
     - You MUST call `read_atom` for every single atom. No exceptions.
     - The atom markdown is a scaffold. The `context` field is your brief for
@@ -457,7 +495,9 @@ generate_snippets_task:
       Local-only atoms (install_package, set_suid, sensitive_file not exposed
       via a service) must have attack_snippet set to null.
   expected_output: >
-    A GeneratedSnippets JSON object with a `snippets` field containing one
+    A single valid JSON object — no markdown, no surrounding text.
+    Start the response with { and end with }. All keys must be quoted strings.
+    The JSON object must be a GeneratedSnippets with a `snippets` field containing one
     GeneratedSnippet per atom, in the same order as the input list.
     Each GeneratedSnippet has: `atom_name` (str), `code_snippet` (str),
     `testing_snippet` (str), `attack_snippet` (str or null),

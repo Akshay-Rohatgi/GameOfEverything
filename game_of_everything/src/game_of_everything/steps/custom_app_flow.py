@@ -10,7 +10,6 @@ Steps:
     4. emit_result     — package into ResolvedCustomApp
 """
 
-import os
 import yaml
 import boto3
 
@@ -19,20 +18,24 @@ def _si(s: str) -> str:
     """Sanitize a string for crewAI crew.kickoff() inputs — see test_snippets._si."""
     return s.replace("{{", "{ {").replace("}}", "} }")
 import chromadb
-import rich
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from crewai import Agent, Task, Crew, Process
 from crewai.flow import Flow, listen, start
 from dotenv import load_dotenv
 from chromadb.utils.embedding_functions import AmazonBedrockEmbeddingFunction
 
+from game_of_everything.config import GoEConfig
+
 from game_of_everything.models import (
     CustomVector, CustomAppState, GeneratedApp, ResolvedCustomApp, TestVerdict,
 )
 from game_of_everything.tools.test_environment import TestEnvironmentTool
 from game_of_everything.llm_factory import make_llm
+
+if TYPE_CHECKING:
+    from game_of_everything.ui import GoEConsole
 
 load_dotenv()
 
@@ -81,10 +84,11 @@ def _load_web_runtime(runtime_id: str) -> dict:
 
 def _fetch_vuln_atom(vuln_atom_id: str) -> str:
     """Query web_vuln_atoms ChromaDB collection and return the atom's markdown."""
+    cfg = GoEConfig.get()
     aws_session = boto3.Session(
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
-        region_name=os.getenv("AWS_REGION", "us-east-1"),
+        aws_access_key_id=cfg.aws_access_key_id,
+        aws_secret_access_key=cfg.aws_secret_access_key,
+        region_name=cfg.aws_region,
     )
     bedrock_ef = AmazonBedrockEmbeddingFunction(
         session=aws_session,
@@ -107,6 +111,7 @@ def _run_app_generation_crew(
     agents_config: dict,
     tasks_config: dict,
     failure_context: str = "",
+    ui: Optional["GoEConsole"] = None,
 ) -> GeneratedApp:
     """Run the app_generation_agent crew and return a GeneratedApp."""
     assert state.vuln_atom_content and state.attack_goal and state.web_runtime and state.vector
@@ -115,8 +120,7 @@ def _run_app_generation_crew(
     generator = Agent(
         config=agents_config["app_generation_agent"],
         llm=llm,
-        verbose=True,
-        step_callback=lambda step: print(f"[APP-GEN] {step}"),
+        verbose=False,
     )  # type: ignore
 
     gen_task = Task(
@@ -129,7 +133,7 @@ def _run_app_generation_crew(
         agents=[generator],
         tasks=[gen_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
         function_calling_llm=llm,
     )
 
@@ -139,14 +143,20 @@ def _run_app_generation_crew(
         else ""
     )
 
-    crew.kickoff(inputs={
+    inputs = {
         "vuln_atom": state.vuln_atom_content,
         "attack_goal": yaml.dump(state.attack_goal),
         "web_runtime": yaml.dump(state.web_runtime),
         "synthesis_context": state.vector.synthesis_context,
         "failure_context": failure_section,
         "port": str(state.vector.port),
-    })
+    }
+
+    if ui:
+        with ui.capture():
+            crew.kickoff(inputs=inputs)
+    else:
+        crew.kickoff(inputs=inputs)
 
     generated: GeneratedApp = gen_task.output.pydantic  # type: ignore
     return generated
@@ -166,13 +176,13 @@ def _run_verdict_crew(
     exit_code: int,
     stdout: str,
     stderr: str,
+    ui: Optional["GoEConsole"] = None,
 ) -> TestVerdict:
     llm = make_llm("testing_agent")
     tester = Agent(
         config=agents_config["testing_agent"],
         llm=llm,
-        verbose=True,
-        step_callback=lambda step: print(f"[APP-TESTER] {step}"),
+        verbose=False,
     )  # type: ignore
 
     verdict_task = Task(
@@ -181,13 +191,15 @@ def _run_verdict_crew(
         output_pydantic=TestVerdict,
     )
 
-    Crew(
+    verdict_crew = Crew(
         agents=[tester],
         tasks=[verdict_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
         function_calling_llm=llm,
-    ).kickoff(inputs={
+    )
+
+    inputs = {
         "atom_name": atom_name,
         "atom_context": _si(atom_context),
         "layer": layer,
@@ -195,7 +207,13 @@ def _run_verdict_crew(
         "exit_code": str(exit_code),
         "stdout": _si(stdout or "(empty)"),
         "stderr": _si(stderr or "(empty)"),
-    })
+    }
+
+    if ui:
+        with ui.capture():
+            verdict_crew.kickoff(inputs=inputs)
+    else:
+        verdict_crew.kickoff(inputs=inputs)
 
     if verdict_task.output.pydantic:  # type: ignore
         return verdict_task.output.pydantic  # type: ignore
@@ -262,11 +280,19 @@ def _package_deploy_snippet(generated_app: GeneratedApp) -> str:
 
 class CustomAppFlow(Flow[CustomAppState]):
 
-    def __init__(self, vector: CustomVector):
+    def __init__(self, vector: CustomVector, ui: Optional["GoEConsole"] = None):
         super().__init__()
         self.state.vector = vector
         self.agents_config = _load_yaml(_CONFIG_DIR / "agents.yaml")
         self.tasks_config = _load_yaml(_CONFIG_DIR / "tasks.yaml")
+        self.ui = ui
+
+    def _log(self, msg: str) -> None:
+        """Write to log file if ui is available, else print."""
+        if self.ui:
+            self.ui.log(msg)
+        else:
+            print(msg)
 
     @start()
     def load_context(self) -> None:
@@ -274,40 +300,40 @@ class CustomAppFlow(Flow[CustomAppState]):
         v = self.state.vector
         assert v is not None
 
-        rich.print(f"\n[bold cyan]=== CustomAppFlow: load_context ===[/bold cyan]")
-        rich.print(f"  vuln_atom_id    : {v.vuln_atom_id}")
-        rich.print(f"  attack_goal     : {v.attack_chain_goal}")
-        rich.print(f"  runtime         : {v.runtime_id}")
+        self._log(f"\n=== CustomAppFlow: load_context ===")
+        self._log(f"  vuln_atom_id    : {v.vuln_atom_id}")
+        self._log(f"  attack_goal     : {v.attack_chain_goal}")
+        self._log(f"  runtime         : {v.runtime_id}")
 
         self.state.vuln_atom_content = _fetch_vuln_atom(v.vuln_atom_id)
         self.state.attack_goal = _load_attack_goal(v.attack_chain_goal)
         self.state.web_runtime = _load_web_runtime(v.runtime_id)
 
-        rich.print(f"  [green]Context loaded.[/green]")
+        self._log("  Context loaded.")
 
     @listen(load_context)
     def generate_app(self) -> None:
         """Run the Opus-class generation crew to produce app code and snippets."""
-        rich.print(f"\n[bold cyan]=== CustomAppFlow: generate_app (attempt 1) ===[/bold cyan]")
+        self._log("\n=== CustomAppFlow: generate_app (attempt 1) ===")
         self.state.generated_app = _run_app_generation_crew(
-            self.state, self.agents_config, self.tasks_config
+            self.state, self.agents_config, self.tasks_config, ui=self.ui,
         )
         self.state.generate_attempts = 1
-        rich.print(f"  [green]App generated: {self.state.generated_app.app_filename}[/green]")
+        self._log(f"  App generated: {self.state.generated_app.app_filename}")
 
     @listen(generate_app)
     def validate_end_to_end(self) -> None:
         """Deploy the app in Docker containers and run L1 + L2 tests with retry loop."""
         assert self.state.generated_app and self.state.vector
 
-        rich.print(f"\n[bold cyan]=== CustomAppFlow: validate_end_to_end ===[/bold cyan]")
+        self._log("\n=== CustomAppFlow: validate_end_to_end ===")
 
         env = TestEnvironmentTool()
         failure_context = ""
 
         try:
             env.setup()
-            rich.print("[green]Test environment ready.[/green]")
+            self._log("Test environment ready.")
 
             for attempt in range(1 + MAX_GENERATE_RETRIES):
                 is_retry = attempt > 0
@@ -315,33 +341,33 @@ class CustomAppFlow(Flow[CustomAppState]):
                 assert generated_app
 
                 if is_retry:
-                    rich.print(f"\n[bold yellow]--- Regenerating app (attempt {attempt + 1}/{1 + MAX_GENERATE_RETRIES}) ---[/bold yellow]")
+                    self._log(f"\n--- Regenerating app (attempt {attempt + 1}/{1 + MAX_GENERATE_RETRIES}) ---")
                     self.state.generated_app = _run_app_generation_crew(
                         self.state, self.agents_config, self.tasks_config,
                         failure_context=failure_context,
+                        ui=self.ui,
                     )
                     generated_app = self.state.generated_app
                     self.state.generate_attempts += 1
-                    # Tear down and reset target container for a clean retry
                     env.teardown()
                     env.setup()
 
                 # Stage files and run deploy_snippet
-                rich.print(f"  [yellow]Staging app files...[/yellow]")
+                self._log("  Staging app files...")
                 _stage_app_files(env, generated_app)
 
-                rich.print(f"  [yellow]Running deploy_snippet...[/yellow]")
+                self._log("  Running deploy_snippet...")
                 deploy_exit, deploy_stdout, deploy_stderr = env.exec_in_target(
                     generated_app.deploy_snippet
                 )
-                rich.print(f"  Deploy exit code: {deploy_exit}")
+                self._log(f"  Deploy exit code: {deploy_exit}")
                 if deploy_stderr:
-                    rich.print(f"  [dim]Deploy stderr: {deploy_stderr[:500]}[/dim]")
+                    self._log(f"  Deploy stderr: {deploy_stderr[:500]}")
 
                 # --- Layer 1 ---
-                rich.print(f"  [blue]Running Layer 1 (internal state check)...[/blue]")
+                self._log("  Running Layer 1 (internal state check)...")
                 l1_exit, l1_stdout, l1_stderr = env.exec_in_target(generated_app.testing_snippet)
-                rich.print(f"  L1 exit code: {l1_exit}")
+                self._log(f"  L1 exit code: {l1_exit}")
 
                 l1_verdict = _run_verdict_crew(
                     agents_config=self.agents_config,
@@ -353,9 +379,9 @@ class CustomAppFlow(Flow[CustomAppState]):
                     exit_code=l1_exit,
                     stdout=l1_stdout,
                     stderr=l1_stderr,
+                    ui=self.ui,
                 )
-                status = "[green]PASS[/green]" if l1_verdict.passed else "[red]FAIL[/red]"
-                rich.print(f"  Layer 1: {status} — {l1_verdict.reasoning}")
+                self._log(f"  Layer 1: {'PASS' if l1_verdict.passed else 'FAIL'} — {l1_verdict.reasoning}")
 
                 if not l1_verdict.passed:
                     failure_context = (
@@ -371,17 +397,17 @@ class CustomAppFlow(Flow[CustomAppState]):
                         continue
                     else:
                         self.state.layer1_verdict = l1_verdict
-                        rich.print(f"[bold red]Layer 1 failed after {1 + MAX_GENERATE_RETRIES} attempts.[/bold red]")
+                        self._log(f"Layer 1 failed after {1 + MAX_GENERATE_RETRIES} attempts.")
                         raise AppGenerationError(
                             f"CustomAppFlow: Layer 1 failed after {1 + MAX_GENERATE_RETRIES} attempts. "
                             f"Last reason: {l1_verdict.reasoning}"
                         )
 
                 # --- Layer 2 ---
-                rich.print(f"  [red]Running Layer 2 (external attack probe)...[/red]")
+                self._log("  Running Layer 2 (external attack probe)...")
                 env.ensure_attacker_tools([generated_app.attack_snippet])
                 l2_exit, l2_stdout, l2_stderr = env.exec_in_attacker(generated_app.attack_snippet)
-                rich.print(f"  L2 exit code: {l2_exit}")
+                self._log(f"  L2 exit code: {l2_exit}")
 
                 l2_verdict = _run_verdict_crew(
                     agents_config=self.agents_config,
@@ -393,9 +419,9 @@ class CustomAppFlow(Flow[CustomAppState]):
                     exit_code=l2_exit,
                     stdout=l2_stdout,
                     stderr=l2_stderr,
+                    ui=self.ui,
                 )
-                status = "[green]PASS[/green]" if l2_verdict.passed else "[red]FAIL[/red]"
-                rich.print(f"  Layer 2: {status} — {l2_verdict.reasoning}")
+                self._log(f"  Layer 2: {'PASS' if l2_verdict.passed else 'FAIL'} — {l2_verdict.reasoning}")
 
                 if not l2_verdict.passed:
                     failure_context = (
@@ -411,7 +437,7 @@ class CustomAppFlow(Flow[CustomAppState]):
                     else:
                         self.state.layer1_verdict = l1_verdict
                         self.state.layer2_verdict = l2_verdict
-                        rich.print(f"[bold red]Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts.[/bold red]")
+                        self._log(f"Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts.")
                         raise AppGenerationError(
                             f"CustomAppFlow: Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts. "
                             f"Last reason: {l2_verdict.reasoning}"
@@ -420,12 +446,12 @@ class CustomAppFlow(Flow[CustomAppState]):
                 # Both layers passed
                 self.state.layer1_verdict = l1_verdict
                 self.state.layer2_verdict = l2_verdict
-                rich.print(f"[bold green]Both layers passed on attempt {attempt + 1}.[/bold green]")
+                self._log(f"Both layers passed on attempt {attempt + 1}.")
                 return
 
         finally:
             env.teardown()
-            rich.print("[green]Test environment cleaned up.[/green]")
+            self._log("Test environment cleaned up.")
 
     @listen(validate_end_to_end)
     def emit_result(self) -> None:
@@ -445,7 +471,7 @@ class CustomAppFlow(Flow[CustomAppState]):
             validation_passed=l1_passed and l2_passed,
         )
 
-        rich.print(f"\n[bold green]=== CustomAppFlow complete ===[/bold green]")
-        rich.print(f"  App        : {self.state.generated_app.app_filename}")
-        rich.print(f"  Attempts   : {self.state.generate_attempts}")
-        rich.print(f"  Validated  : {self.state.resolved.validation_passed}")
+        self._log(f"\n=== CustomAppFlow complete ===")
+        self._log(f"  App        : {self.state.generated_app.app_filename}")
+        self._log(f"  Attempts   : {self.state.generate_attempts}")
+        self._log(f"  Validated  : {self.state.resolved.validation_passed}")

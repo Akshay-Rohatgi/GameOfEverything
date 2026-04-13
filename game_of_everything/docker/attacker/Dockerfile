@@ -28,6 +28,8 @@ RUN apt-get update && \
         enum4linux \
         gnupg \
         wget \
+        unzip \
+        tar \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

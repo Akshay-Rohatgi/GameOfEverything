@@ -10,19 +10,14 @@ Incremental cumulative testing:
 """
 
 import json
-from typing import List, Optional
+import time
+from typing import List, Optional, TYPE_CHECKING
 
 
 def _si(s: str) -> str:
-    """Sanitize a string for use as a crewAI crew.kickoff() input value.
-
-    Replaces Jinja2/template-syntax double-braces ({{ and }}) with spaced
-    equivalents so the LLM is less likely to echo them literally in its JSON
-    output, which would cause crewAI's Pydantic extractor to fail parsing.
-    """
+    """Sanitize a string for use as a crewAI crew.kickoff() input value."""
     return s.replace("{{", "{ {").replace("}}", "} }")
 
-import rich
 from crewai import Agent, Task, Crew, Process
 
 from game_of_everything.state import GoEState
@@ -33,6 +28,9 @@ from game_of_everything.tools.read_atom_tool import ReadAtomTool
 from game_of_everything.tools.exec_in_container_tool import ExecInContainerTool
 from game_of_everything.tools.test_environment import TestEnvironmentTool
 from game_of_everything.llm_factory import make_llm
+
+if TYPE_CHECKING:
+    from game_of_everything.ui import GoEConsole
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +47,7 @@ def _run_verdict_crew(
     exit_code: int,
     stdout: str,
     stderr: str,
+    ui: Optional["GoEConsole"] = None,
 ) -> TestVerdict:
     """Kick off a one-task Testing Agent crew to judge command output."""
     llm = make_llm("testing_agent")
@@ -56,8 +55,7 @@ def _run_verdict_crew(
     tester = Agent(
         config=agents_config["testing_agent"],
         llm=llm,
-        verbose=True,
-        step_callback=lambda step: print(f"[TESTER] {step}"),
+        verbose=False,
     )  # type: ignore
 
     verdict_task = Task(
@@ -70,21 +68,25 @@ def _run_verdict_crew(
         agents=[tester],
         tasks=[verdict_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
         function_calling_llm=llm,
     )
 
-    verdict_crew.kickoff(
-        inputs={
-            "atom_name": atom_name,
-            "atom_context": _si(atom_context),
-            "layer": layer,
-            "snippet_executed": _si(snippet_executed),
-            "exit_code": str(exit_code),
-            "stdout": _si(stdout or "(empty)"),
-            "stderr": _si(stderr or "(empty)"),
-        }
-    )
+    inputs = {
+        "atom_name": atom_name,
+        "atom_context": _si(atom_context),
+        "layer": layer,
+        "snippet_executed": _si(snippet_executed),
+        "exit_code": str(exit_code),
+        "stdout": _si(stdout or "(empty)"),
+        "stderr": _si(stderr or "(empty)"),
+    }
+
+    if ui:
+        with ui.capture():
+            verdict_crew.kickoff(inputs=inputs)
+    else:
+        verdict_crew.kickoff(inputs=inputs)
 
     if verdict_task.output.pydantic:  # type: ignore
         return verdict_task.output.pydantic  # type: ignore
@@ -109,6 +111,7 @@ def _run_diagnostic_crew(
     l1_stderr: str,
     verdict_reasoning: str,
     attempt_number: int,
+    ui: Optional["GoEConsole"] = None,
 ) -> DiagnosticResult:
     """Kick off a one-task Diagnostic Agent crew to diagnose and fix a failing snippet."""
     llm = make_llm("diagnostic_agent")
@@ -117,8 +120,7 @@ def _run_diagnostic_crew(
         config=agents_config["diagnostic_agent"],
         llm=llm,
         tools=[ReadAtomTool(), ExecInContainerTool()],
-        verbose=True,
-        step_callback=lambda step: print(f"[DIAGNOSTICIAN] {step}"),
+        verbose=False,
     )  # type: ignore
 
     diag_task = Task(
@@ -131,25 +133,29 @@ def _run_diagnostic_crew(
         agents=[diagnostician],
         tasks=[diag_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
         function_calling_llm=llm,
     )
 
-    diag_crew.kickoff(
-        inputs={
-            "atom_name": atom_name,
-            "atom_context": _si(atom_context),
-            "atom_parameters": _si(atom_parameters or "(none)"),
-            "original_code_snippet": _si(original_code_snippet),
-            "original_testing_snippet": _si(original_testing_snippet),
-            "apply_stderr": _si(apply_stderr or "(empty)"),
-            "l1_exit_code": str(l1_exit_code),
-            "l1_stdout": _si(l1_stdout or "(empty)"),
-            "l1_stderr": _si(l1_stderr or "(empty)"),
-            "verdict_reasoning": _si(verdict_reasoning),
-            "attempt_number": str(attempt_number),
-        }
-    )
+    inputs = {
+        "atom_name": atom_name,
+        "atom_context": _si(atom_context),
+        "atom_parameters": _si(atom_parameters or "(none)"),
+        "original_code_snippet": _si(original_code_snippet),
+        "original_testing_snippet": _si(original_testing_snippet),
+        "apply_stderr": _si(apply_stderr or "(empty)"),
+        "l1_exit_code": str(l1_exit_code),
+        "l1_stdout": _si(l1_stdout or "(empty)"),
+        "l1_stderr": _si(l1_stderr or "(empty)"),
+        "verdict_reasoning": _si(verdict_reasoning),
+        "attempt_number": str(attempt_number),
+    }
+
+    if ui:
+        with ui.capture():
+            diag_crew.kickoff(inputs=inputs)
+    else:
+        diag_crew.kickoff(inputs=inputs)
 
     if diag_task.output.pydantic:  # type: ignore
         return diag_task.output.pydantic  # type: ignore
@@ -170,38 +176,41 @@ def run_test_snippets(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    ui: Optional["GoEConsole"] = None,
 ) -> None:
-    """Test generated snippets in Docker containers with two-layer validation.
-
-    Args:
-        state: Flow state to mutate in-place.
-        agents_config: Loaded agents.yaml dict.
-        tasks_config: Loaded tasks.yaml dict.
-    """
+    """Test generated snippets in Docker containers with two-layer validation."""
     if not state.generated_snippets:
-        print("No generated snippets to test. Skipping.")
+        if ui:
+            ui.log("No generated snippets to test. Skipping.")
         return
 
     snippets = state.generated_snippets
     env = TestEnvironmentTool()
     results: List[TestResult] = []
 
+    if ui:
+        ui.test_header()
+    t0 = time.monotonic()
+
     try:
-        rich.print("\n[bold yellow]=== SETTING UP TEST ENVIRONMENT ===[/bold yellow]")
+        if ui:
+            ui.log("\n=== SETTING UP TEST ENVIRONMENT ===")
         env.setup()
-        rich.print("[green]Test environment ready (target + attacker containers on goe_test_net)[/green]")
+        if ui:
+            ui.log("Test environment ready (target + attacker on goe_test_net)")
 
         # Ensure attacker container has all referenced tools
         all_attack_snippets = [s.attack_snippet for s in snippets if s.attack_snippet]
         if all_attack_snippets:
-            rich.print("[yellow]Checking attacker container for required tools...[/yellow]")
+            if ui:
+                ui.log("Checking attacker container for required tools...")
             env.ensure_attacker_tools(all_attack_snippets)
-            rich.print("[green]Attacker tools verified.[/green]")
 
         MAX_DIAGNOSTIC_RETRIES = 2
 
         for i, snippet in enumerate(snippets):
-            rich.print(f"\n[bold cyan]=== TESTING SNIPPET {i}: {snippet.atom_name} ===[/bold cyan]")
+            if ui:
+                ui.log(f"\n=== TESTING SNIPPET {i}: {snippet.atom_name} ===")
 
             diagnostic_attempts: List[DiagnosticResult] = []
             l1_passed = False
@@ -212,21 +221,25 @@ def run_test_snippets(
             for attempt in range(1 + MAX_DIAGNOSTIC_RETRIES):
                 is_retry = attempt > 0
 
-                if is_retry:
-                    rich.print(f"\n  [bold yellow]--- DIAGNOSTIC RETRY {attempt}/{MAX_DIAGNOSTIC_RETRIES} for {snippet.atom_name} ---[/bold yellow]")
+                if is_retry and ui:
+                    ui.log(f"  DIAGNOSTIC RETRY {attempt}/{MAX_DIAGNOSTIC_RETRIES} for {snippet.atom_name}")
 
                 # Apply the code_snippet on the target
-                rich.print(f"  [yellow]{'Re-applying' if is_retry else 'Applying'} code_snippet...[/yellow]")
+                if ui:
+                    ui.log(f"  {'Re-applying' if is_retry else 'Applying'} code_snippet...")
                 apply_exit, apply_stdout, apply_stderr = env.exec_in_target(snippet.code_snippet)
                 apply_stderr_last = apply_stderr
-                rich.print(f"  Apply exit code: {apply_exit}")
-                if apply_stderr:
-                    rich.print(f"  [dim]Apply stderr: {apply_stderr[:500]}[/dim]")
+                if ui:
+                    ui.log(f"  Apply exit code: {apply_exit}")
+                    if apply_stderr:
+                        ui.log(f"  Apply stderr: {apply_stderr[:500]}")
 
                 # Layer 1: run testing_snippet, ask LLM to judge
-                rich.print(f"  [blue]Running Layer 1 (internal state check)...[/blue]")
+                if ui:
+                    ui.log("  Running Layer 1 (internal state check)...")
                 l1_exit, l1_stdout, l1_stderr = env.exec_in_target(snippet.testing_snippet)
-                rich.print(f"  Layer 1 exit code: {l1_exit}")
+                if ui:
+                    ui.log(f"  Layer 1 exit code: {l1_exit}")
 
                 l1_verdict = _run_verdict_crew(
                     agents_config=agents_config,
@@ -238,10 +251,12 @@ def run_test_snippets(
                     exit_code=l1_exit,
                     stdout=l1_stdout,
                     stderr=l1_stderr,
+                    ui=ui,
                 )
 
-                rich.print(f"  Layer 1 verdict: {'[green]PASS[/green]' if l1_verdict.passed else '[red]FAIL[/red]'}")
-                rich.print(f"  Reasoning: {l1_verdict.reasoning}")
+                if ui:
+                    ui.log(f"  Layer 1 verdict: {'PASS' if l1_verdict.passed else 'FAIL'}")
+                    ui.log(f"  Reasoning: {l1_verdict.reasoning}")
 
                 if l1_verdict.passed:
                     l1_passed = True
@@ -249,7 +264,8 @@ def run_test_snippets(
 
                 # Layer 1 failed — attempt diagnosis if retries remain
                 if attempt < MAX_DIAGNOSTIC_RETRIES:
-                    rich.print(f"  [yellow]Layer 1 FAILED. Running Diagnostic Agent (attempt {attempt + 1}/{MAX_DIAGNOSTIC_RETRIES})...[/yellow]")
+                    if ui:
+                        ui.log(f"  Layer 1 FAILED. Running Diagnostic Agent (attempt {attempt + 1}/{MAX_DIAGNOSTIC_RETRIES})...")
 
                     diag_result = _run_diagnostic_crew(
                         agents_config=agents_config,
@@ -265,23 +281,21 @@ def run_test_snippets(
                         l1_stderr=l1_stderr,
                         verdict_reasoning=l1_verdict.reasoning,
                         attempt_number=attempt + 1,
+                        ui=ui,
                     )
 
                     diagnostic_attempts.append(diag_result)
+                    if ui:
+                        ui.log(f"  Diagnosis: {diag_result.diagnosis}")
+                        ui.log(f"  Confidence: {diag_result.confidence}")
 
-                    rich.print(f"  [cyan]Diagnosis:[/cyan] {diag_result.diagnosis}")
-                    rich.print(f"  [cyan]Confidence:[/cyan] {diag_result.confidence}")
-
-                    # Apply the fix
                     snippet.code_snippet = diag_result.fixed_code_snippet
                     snippet.testing_snippet = diag_result.fixed_testing_snippet
-
-                    rich.print(f"  [green]Snippet updated with diagnostic fix. Retrying...[/green]")
                 else:
-                    rich.print(f"  [bold red]Layer 1 FAILED after {MAX_DIAGNOSTIC_RETRIES} diagnostic retries. Giving up.[/bold red]")
+                    if ui:
+                        ui.log(f"  Layer 1 FAILED after {MAX_DIAGNOSTIC_RETRIES} diagnostic retries. Giving up.")
 
             if not l1_passed:
-                # All retries exhausted — stop the chain
                 snippet.set_validated(False)
                 results.append(TestResult(
                     atom_name=snippet.atom_name,
@@ -290,9 +304,18 @@ def run_test_snippets(
                     diagnostic_results=diagnostic_attempts if diagnostic_attempts else None,
                     error=f"Layer 1 failed after {len(diagnostic_attempts)} diagnostic retries — chain stopped at snippet {i}.",
                 ))
+                if ui:
+                    ui.test_result(
+                        snippet.atom_name,
+                        l1_pass=False,
+                        retries=len(diagnostic_attempts),
+                        testing_snippet=snippet.testing_snippet,
+                    )
                 # Mark all remaining snippets as not validated
                 for remaining in snippets[i + 1:]:
                     remaining.set_validated(False)
+                    if ui:
+                        ui.test_skipped(remaining.atom_name)
                 break
 
             # --- Layer 2: re-run ALL accumulated attack probes 0..i ---
@@ -302,7 +325,8 @@ def run_test_snippets(
             for j in range(i + 1):
                 attack = snippets[j].attack_snippet
                 if attack:
-                    rich.print(f"  [red]Running Layer 2 probe for snippet {j} ({snippets[j].atom_name})...[/red]")
+                    if ui:
+                        ui.log(f"  Running Layer 2 probe for snippet {j} ({snippets[j].atom_name})...")
                     a_exit, a_stdout, a_stderr = env.exec_in_attacker(attack)
 
                     verdict = _run_verdict_crew(
@@ -315,19 +339,20 @@ def run_test_snippets(
                         exit_code=a_exit,
                         stdout=a_stdout,
                         stderr=a_stderr,
+                        ui=ui,
                     )
                     l2_verdicts.append(verdict)
 
-                    status = '[green]PASS[/green]' if verdict.passed else '[red]FAIL[/red]'
-                    rich.print(f"    Snippet {j} ({snippets[j].atom_name}) Layer 2: {status}")
-                    rich.print(f"    Reasoning: {verdict.reasoning}")
+                    if ui:
+                        ui.log(f"    Snippet {j} ({snippets[j].atom_name}) Layer 2: {'PASS' if verdict.passed else 'FAIL'}")
+                        ui.log(f"    Reasoning: {verdict.reasoning}")
 
                     if not verdict.passed:
-                        if j < i:
-                            rich.print(f"    [bold red]⚠ REGRESSION: snippet {j} Layer 2 was passing, now fails after snippet {i}[/bold red]")
+                        if j < i and ui:
+                            ui.log(f"    REGRESSION: snippet {j} Layer 2 was passing, now fails after snippet {i}")
 
-                        # Run diagnostic for L2 failure (log only, no retry)
-                        rich.print(f"    [yellow]Running Diagnostic Agent for L2 failure (log only)...[/yellow]")
+                        if ui:
+                            ui.log("    Running Diagnostic Agent for L2 failure (log only)...")
                         l2_diag = _run_diagnostic_crew(
                             agents_config=agents_config,
                             tasks_config=tasks_config,
@@ -342,15 +367,32 @@ def run_test_snippets(
                             l1_stderr=a_stderr,
                             verdict_reasoning=verdict.reasoning,
                             attempt_number=1,
+                            ui=ui,
                         )
                         l2_diagnostics.append(l2_diag)
-                        rich.print(f"    [cyan]L2 Diagnosis:[/cyan] {l2_diag.diagnosis}")
+                        if ui:
+                            ui.log(f"    L2 Diagnosis: {l2_diag.diagnosis}")
 
             # Set validated: both layers must pass (or Layer 2 is N/A)
             all_l2_passed = all(v.passed for v in l2_verdicts) if l2_verdicts else True
             snippet.set_validated(l1_passed and all_l2_passed)
 
-            # Combine all diagnostics (L1 retries + L2 logs) for this snippet
+            # Determine L2 status for UI
+            l2_status: Optional[bool] = None
+            if l2_verdicts:
+                l2_status = all_l2_passed
+
+            if ui:
+                ui.test_result(
+                    snippet.atom_name,
+                    l1_pass=l1_passed,
+                    l2_pass=l2_status,
+                    retries=len(diagnostic_attempts),
+                    testing_snippet=snippet.testing_snippet,
+                    attack_snippet=snippet.attack_snippet,
+                )
+
+            # Combine all diagnostics
             all_diagnostics = diagnostic_attempts + l2_diagnostics
 
             results.append(TestResult(
@@ -362,25 +404,27 @@ def run_test_snippets(
 
         state.test_results = results
 
-        # --- Summary ---
-        rich.print("\n[bold magenta]=== TEST SUMMARY ===[/bold magenta]")
-        for result in results:
-            l1_status = '[green]PASS[/green]' if result.layer1_verdict.passed else '[red]FAIL[/red]'
-            if result.layer2_verdicts:
-                l2_all = all(v.passed for v in result.layer2_verdicts)
-                l2_status = f"[green]PASS[/green] ({len(result.layer2_verdicts)} probes)" if l2_all else f"[red]FAIL[/red]"
-            else:
-                l2_status = "[dim]N/A[/dim]"
-            diag_count = len(result.diagnostic_results) if result.diagnostic_results else 0
-            diag_label = f" [yellow]({diag_count} diagnostic runs)[/yellow]" if diag_count else ""
-            rich.print(f"  {result.atom_name}: L1={l1_status} L2={l2_status}{diag_label}")
-            if result.error:
-                rich.print(f"    [red]{result.error}[/red]")
-            if result.diagnostic_results:
-                for idx, dr in enumerate(result.diagnostic_results, 1):
-                    rich.print(f"    [cyan]Diagnostic #{idx}[/cyan] (confidence: {dr.confidence}): {dr.diagnosis}")
+        if ui:
+            ui.test_done(time.monotonic() - t0)
+
+        # Log summary
+        if ui:
+            ui.log("\n=== TEST SUMMARY ===")
+            for result in results:
+                l1_status = "PASS" if result.layer1_verdict.passed else "FAIL"
+                if result.layer2_verdicts:
+                    l2_all = all(v.passed for v in result.layer2_verdicts)
+                    l2_status_str = f"PASS ({len(result.layer2_verdicts)} probes)" if l2_all else "FAIL"
+                else:
+                    l2_status_str = "N/A"
+                diag_count = len(result.diagnostic_results) if result.diagnostic_results else 0
+                ui.log(f"  {result.atom_name}: L1={l1_status} L2={l2_status_str} ({diag_count} diagnostic runs)")
+                if result.error:
+                    ui.log(f"    {result.error}")
 
     finally:
-        rich.print("\n[bold yellow]=== TEARING DOWN TEST ENVIRONMENT ===[/bold yellow]")
+        if ui:
+            ui.log("\n=== TEARING DOWN TEST ENVIRONMENT ===")
         env.teardown()
-        rich.print("[green]Test environment cleaned up.[/green]")
+        if ui:
+            ui.log("Test environment cleaned up.")

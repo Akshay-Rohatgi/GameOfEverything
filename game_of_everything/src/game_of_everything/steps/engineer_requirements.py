@@ -1,6 +1,7 @@
 """Step 1: Parse synthesized scenario → map to atoms → validate → enumerate deps → sequence."""
 
-import rich
+from typing import Optional, TYPE_CHECKING
+
 from crewai import Agent, Task, Crew, Process
 
 from game_of_everything.state import GoEState
@@ -10,39 +11,24 @@ from game_of_everything.models import (
 from game_of_everything.tools.search_atoms_tool import SearchAtomsTool
 from game_of_everything.llm_factory import make_llm
 
-
-def _make_step_logger(label: str):
-    def _log(step):
-        print(f"[{label}] {step}")
-    return _log
+if TYPE_CHECKING:
+    from game_of_everything.ui import GoEConsole
 
 
 def run_engineer_requirements(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    ui: Optional["GoEConsole"] = None,
 ) -> None:
-    """Run the full engineering crew: parse → map → validate → dep-enumerate → sequence.
-
-    Reads from state.raw_request and state.synthesized_scenario (set by
-    synthesize_scenario step). The parser extracts structured fields from
-    the scenario rather than reasoning about the raw prompt.
-
-    Args:
-        state: Flow state to mutate in-place.
-        agents_config: Loaded agents.yaml dict.
-        tasks_config: Loaded tasks.yaml dict.
-    """
-    # Build the prompt the parser will work from.  When a synthesized scenario
-    # exists, the parser focuses on misconfig_scope (the part of the scenario
-    # relevant to the existing atom pipeline).  The raw prompt is still passed
-    # as initial_prompt for record-keeping.
+    """Run the full engineering crew: parse → map → validate → dep-enumerate → sequence."""
     if state.synthesized_scenario:
         parser_prompt = state.synthesized_scenario.misconfig_scope
     else:
         parser_prompt = state.raw_request or ""
 
-    print(f"Engineering requirements for: {parser_prompt}")
+    if ui:
+        ui.log(f"Engineering requirements for: {parser_prompt}")
 
     # --- Agents ---
     search_atoms_tool = SearchAtomsTool()
@@ -50,38 +36,34 @@ def run_engineer_requirements(
     parser = Agent(
         config=agents_config["request_parser_agent"],
         llm=make_llm("request_parser_agent"),
-        step_callback=lambda step: print(f"Parser Step: {step}"),
+        verbose=False,
     )  # type: ignore
 
     mapper = Agent(
         config=agents_config["mapping_agent"],
         llm=make_llm("mapping_agent"),
         tools=[search_atoms_tool],
-        verbose=True,
-        step_callback=_make_step_logger("MAPPER"),
+        verbose=False,
     )  # type: ignore
 
     validator = Agent(
         config=agents_config["mapping_validator_agent"],
         llm=make_llm("mapping_validator_agent"),
         tools=[search_atoms_tool],
-        verbose=True,
-        step_callback=_make_step_logger("VALIDATOR"),
+        verbose=False,
     )  # type: ignore
 
     dep_enumerator = Agent(
         config=agents_config["dependency_enumeration_agent"],
         llm=make_llm("dependency_enumeration_agent"),
         tools=[search_atoms_tool],
-        verbose=True,
-        step_callback=_make_step_logger("DEP-ENUM"),
+        verbose=False,
     )  # type: ignore
 
     sequencer = Agent(
         config=agents_config["sequencing_agent"],
         llm=make_llm("sequencing_agent"),
-        verbose=True,
-        step_callback=_make_step_logger("SEQUENCER"),
+        verbose=False,
     )  # type: ignore
 
     # --- Tasks ---
@@ -120,11 +102,15 @@ def run_engineer_requirements(
         agents=[parser, mapper, validator, dep_enumerator, sequencer],
         tasks=[parse_task, map_task, validate_task, dep_task, sequence_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
         function_calling_llm=make_llm(),
     )
 
-    engineering_crew.kickoff(inputs={"initial_prompt": parser_prompt})
+    if ui:
+        with ui.capture():
+            engineering_crew.kickoff(inputs={"initial_prompt": parser_prompt})
+    else:
+        engineering_crew.kickoff(inputs={"initial_prompt": parser_prompt})
 
     # --- Populate state ---
     state.parsed_request = parse_task.output.pydantic  # type: ignore
@@ -135,22 +121,21 @@ def run_engineer_requirements(
         else None
     )
 
-    # --- Console output ---
-    rich.print("\n[bold cyan]=== PARSED REQUEST ===[/bold cyan]")
-    rich.print(state.parsed_request)
-
-    rich.print("\n[bold yellow]=== MAPPER OUTPUT (pre-validation) ===[/bold yellow]")
-    rich.print(map_task.output.pydantic)
-
-    rich.print("\n[bold green]=== VALIDATED MAPPING ===[/bold green]")
-    rich.print(validate_task.output.pydantic)
-
-    rich.print("\n[bold blue]=== MAPPING + DEPENDENCIES ===[/bold blue]")
-    rich.print(state.mapped_request)
-
-    rich.print("\n[bold magenta]=== SEQUENCED ATOMS ===[/bold magenta]")
-    if state.sequenced_request:
-        for i, atom in enumerate(state.sequenced_request, 1):
-            rich.print(f"  {i}. [bold]{atom.name}[/bold] — {atom.context}")
-    else:
-        rich.print("  (no sequenced atoms)")
+    # --- Log details ---
+    if ui:
+        ui.log("\n=== PARSED REQUEST ===")
+        ui.log(str(state.parsed_request))
+        ui.log("\n=== VALIDATED MAPPING ===")
+        ui.log(str(validate_task.output.pydantic))
+        ui.log("\n=== MAPPING + DEPENDENCIES ===")
+        ui.log(str(state.mapped_request))
+        ui.log("\n=== SEQUENCED ATOMS ===")
+        if state.sequenced_request:
+            ui.status("Sequenced Atoms:")
+            for i, atom in enumerate(state.sequenced_request, 1):
+                ui.display_atom(atom, verbose=True)
+                ui.log(f"  {i}. {atom.name}({atom.parameters}) — {atom.context}")
+            # for i, atom in enumerate(state.sequenced_request, 1):
+            #     ui.log(f"  {i}. {atom.name} — {atom.context}")
+        else:
+            ui.log("  (no sequenced atoms)")

@@ -8,6 +8,7 @@ dependencies = [
     "crewai[bedrock,tools]==1.9.3",
     "langchain-aws>=1.1.0",
     "docker>=7.0.0",
+    "tomli>=2.0.0; python_version < '3.11'",
 ]
 
 [project.scripts]
