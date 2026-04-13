@@ -21,7 +21,6 @@ def run_finalize_script(
     agents_config: dict,
     tasks_config: dict,
     skip_disk_write: bool = False,
-    ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Concatenate validated snippets through the post-processor pipeline and write the final script.
 
@@ -32,7 +31,6 @@ def run_finalize_script(
         skip_disk_write: When True, populate state.final_script but do not write to disk.
             Used by run_box_pipelines so per-box scripts are collected into deploy_scripts
             and written once by finalize_topology rather than as stray timestamped files.
-        ui: Optional GoEConsole for structured output.
     """
     if not state.generated_snippets and not state.resolved_custom_apps:
         if ui:
@@ -75,10 +73,7 @@ def run_finalize_script(
                 ui.log(f"  Skipping custom app '{app.vector.vuln_atom_id}' (validation failed)")
 
     if not (state.generated_snippets or []) and not custom_sections:
-        if ui:
-            ui.log("No snippets passed validation. No deployment script generated.")
-        else:
-            rich.print("[bold red]No snippets passed validation. No deployment script generated.[/bold red]")
+        rich.print("[bold red]No snippets passed validation. No deployment script generated.[/bold red]")
         return
 
     # Build a lookup of failure reasons from test_results for commented-out stubs
@@ -116,10 +111,7 @@ def run_finalize_script(
     state.final_script = final_script
 
     if skip_disk_write:
-        if ui:
-            ui.log("finalize_script: skip_disk_write=True — script stored in state, not written to disk.")
-        else:
-            rich.print("[dim]finalize_script: skip_disk_write=True — script stored in state, not written to disk.[/dim]")
+        rich.print("[dim]finalize_script: skip_disk_write=True — script stored in state, not written to disk.[/dim]")
         return
 
     # Write to output/<timestamp>_deploy.sh

@@ -7,9 +7,7 @@ which must live on methods of a Flow[State] subclass.
 """
 
 import argparse
-import logging
 import os
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -22,8 +20,6 @@ from crewai.events.event_context import (
     MismatchBehavior,
 )
 from dotenv import load_dotenv
-
-import game_of_everything.patches  # noqa: F401 — monkey-patches crewAI JSON converter
 
 from game_of_everything.checkpoint import (
     checkpoint_dir,
@@ -39,7 +35,6 @@ from game_of_everything.steps import (
     run_box_pipelines,
     run_chain_test,
     run_finalize_topology,
-    run_deploy,
 )
 
 # Suppress CrewAI internal event-bus pairing warnings (known bug in 1.9.x).
@@ -98,14 +93,35 @@ class GoEFlow(Flow[GoEState]):
             return True
         return False
 
+        if resume_dir is not None:
+            latest = find_latest_checkpoint(resume_dir)
+            if latest is None:
+                raise ValueError(f"No checkpoint files found in {resume_dir}")
+            loaded = load_checkpoint(latest)
+            for field_name in GoEState.model_fields:
+                setattr(self.state, field_name, getattr(loaded, field_name))
+            self.state.box_states = loaded.box_states
+            self._resume_dir: Path | None = resume_dir
+            print(f"[checkpoint] Resuming run {self.state.run_id} from {latest.name}")
+        else:
+            self.state.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._resume_dir = None
+
+    def _should_skip(self, step_name: str) -> bool:
+        """Return True when resuming and this step already has a checkpoint."""
+        if self._resume_dir is None:
+            return False
+        done = completed_steps(self._resume_dir)
+        if step_name in done:
+            print(f"[checkpoint] Skipping {step_name} (already completed)")
+            return True
+        return False
+
     @start()
     def synthesize_scenario(self):
         if self._should_skip("synthesize_scenario"):
             return
-        self.ui.status("Synthesizing scenario")
-        t0 = time.monotonic()
-        run_synthesize_topology(self.state, self.agents_config, self.tasks_config, ui=self.ui)
-        self.ui.step_done("Synthesizing scenario", time.monotonic() - t0)
+        run_synthesize_topology(self.state, self.agents_config, self.tasks_config)
         save_checkpoint(self.state, "synthesize_scenario")
 
     @listen(synthesize_scenario)
@@ -113,10 +129,7 @@ class GoEFlow(Flow[GoEState]):
         """Run the full per-box pipeline for every box in the topology (parallel)."""
         if self._should_skip("box_pipelines"):
             return
-        self.ui.status("Running box pipelines")
-        t0 = time.monotonic()
-        run_box_pipelines(self.state, self.agents_config, self.tasks_config, ui=self.ui)
-        self.ui.step_done("Running box pipelines", time.monotonic() - t0)
+        run_box_pipelines(self.state, self.agents_config, self.tasks_config)
         save_checkpoint(self.state, "box_pipelines")
 
     @listen(box_pipelines)
@@ -124,10 +137,7 @@ class GoEFlow(Flow[GoEState]):
         """Multi-box: validate end-to-end attack chain. Single-box: no-op."""
         if self._should_skip("chain_test"):
             return
-        self.ui.status("Chain testing")
-        t0 = time.monotonic()
-        run_chain_test(self.state, self.agents_config, self.tasks_config, ui=self.ui)
-        self.ui.step_done("Chain testing", time.monotonic() - t0)
+        run_chain_test(self.state, self.agents_config, self.tasks_config)
         save_checkpoint(self.state, "chain_test")
 
     @listen(chain_test)
@@ -135,26 +145,8 @@ class GoEFlow(Flow[GoEState]):
         """Multi-box: write output package. Single-box: no-op."""
         if self._should_skip("finalize_topology"):
             return
-        self.ui.status("Finalizing output")
-        t0 = time.monotonic()
-        run_finalize_topology(self.state, self.agents_config, self.tasks_config, ui=self.ui)
-        self.ui.step_done("Finalizing output", time.monotonic() - t0)
+        run_finalize_topology(self.state, self.agents_config, self.tasks_config)
         save_checkpoint(self.state, "finalize_topology")
-
-        # Print summary
-        all_snippets = self.state.generated_snippets or []
-        validated = sum(1 for s in all_snippets if s.validated)
-        skipped = len(all_snippets) - validated
-        if self.state.output_path:
-            self.ui.summary(validated, len(all_snippets), skipped, Path(self.state.output_path))
-
-    @listen(finalize_topology)
-    def deploy(self):
-        run_deploy(self.state, ui=self.ui)
-
-    def _cleanup(self):
-        if hasattr(self, "ui"):
-            self.ui.close()
 
 
 def kickoff():
@@ -168,10 +160,7 @@ def kickoff():
     args, _ = parser.parse_known_args()
     resume_dir = Path(args.resume) if args.resume else None
     goe_flow = GoEFlow(resume_dir=resume_dir)
-    try:
-        goe_flow.kickoff()
-    finally:
-        goe_flow._cleanup()
+    goe_flow.kickoff()
 
 
 def plot():

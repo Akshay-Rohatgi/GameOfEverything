@@ -21,7 +21,6 @@ def run_generate_implementation(
     tasks_config: dict,
     box_id: str = "",
     target_hostname: str = "target",
-    ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Generate implementation snippets for each sequenced atom.
 
@@ -33,7 +32,6 @@ def run_generate_implementation(
         target_hostname: Hostname of the target container on the Docker bridge
             network.  Used by attack_snippets so they address the correct host.
             Defaults to "target" (the single-box default).
-        ui: Optional GoEConsole for structured output.
     """
     if not state.sequenced_request:
         if ui:
@@ -46,14 +44,12 @@ def run_generate_implementation(
     )
 
     _tag = f"[{box_id}][SNIPPET-GEN]" if box_id else "[SNIPPET-GEN]"
-    use_verbose = not bool(ui)
-
     snippet_generator = Agent(
         config=agents_config["snippet_generation_agent"],
         llm=make_llm("snippet_generation_agent"),
         tools=[ReadAtomTool(), SearchAtomsTool()],
-        verbose=use_verbose,
-        **({"step_callback": lambda step: print(f"{_tag} {step}")} if not ui and box_id else {}),
+        verbose=True,
+        step_callback=lambda step: print(f"{_tag} {step}"),
     )  # type: ignore
 
     generate_task = Task(
@@ -71,16 +67,10 @@ def run_generate_implementation(
         function_calling_llm=make_llm("snippet_generation_agent"),
     )
 
-    kickoff_inputs = {
+    generation_crew.kickoff(inputs={
         "sequenced_atoms_json": sequenced_atoms_json,
         "target_hostname": target_hostname,
-    }
-
-    if ui:
-        with ui.capture():
-            generation_crew.kickoff(inputs=kickoff_inputs)
-    else:
-        generation_crew.kickoff(inputs=kickoff_inputs)
+    })
 
     if generate_task.output.pydantic:  # type: ignore
         state.generated_snippets = generate_task.output.pydantic.snippets  # type: ignore

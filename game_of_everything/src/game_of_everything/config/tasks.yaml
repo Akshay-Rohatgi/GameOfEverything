@@ -118,46 +118,25 @@ synthesize_scenario_task:
     the source box's misconfig_scope AND the target box's misconfig_scope
     so downstream pipelines generate consistent deploy scripts with matching
     credentials.
-
-    TACTICAL DISPLAY FIELDS:
-    For each BoxSpec (multi-box) OR at the top level (single-box), also populate:
-      - attack_vector: concise arrow-chain summarising the attack surface on this
-        box (e.g. "Unauthenticated Web RCE -> SUID Data Exfiltration")
-      - goal: the attacker's objective for this box
-        (e.g. "Harvest internal credentials for [backup01]" or
-        "Full Administrative Compromise")
-
-    Also populate kill_chain (list of KillChainStep) covering the full attack path
-    across ALL boxes in order. Each step has:
-      - tag: one of ENUM, WEB, CRED, RCE, LPE, LAT, PERSIST, EXFIL
-      - action: what the attacker does and what they achieve, in one line
-        (e.g. "Upload PHP Webshell -> Achieve www-data shell")
-
-    The kill chain should read like a numbered operation plan. Use -> to separate
-    action from outcome within each step.
   expected_output: >
     A SynthesizedScenario JSON object with: narrative (str), attack_narrative (str),
-    shared_resources (list of str), explicit_decisions (list of str), num_boxes (int),
-    kill_chain (list of KillChainStep), attack_vector (str), goal (str).
+    shared_resources (list of str), explicit_decisions (list of str), num_boxes (int).
 
     Single-box (num_boxes == 1):
       misconfig_scope (str), custom_app_scope (str or null),
-      custom_vectors (list of CustomVector or []), boxes=[], shared_secrets=[],
-      attack_vector (str), goal (str), kill_chain (list of KillChainStep).
+      custom_vectors (list of CustomVector or []), boxes=[], shared_secrets=[].
 
     Multi-box (num_boxes > 1):
       boxes (list of BoxSpec — one per machine), shared_secrets (list of
       SharedSecret — one per cross-box credential), misconfig_scope="",
-      custom_vectors=[], custom_app_scope=null,
-      kill_chain (list of KillChainStep).
+      custom_vectors=[], custom_app_scope=null.
 
     Each CustomVector has: vuln_atom_id, attack_chain_goal, runtime_id, port,
     db_name, db_user, db_password, seed_username, seed_password, synthesis_context.
     Each BoxSpec has: box_id, hostname, role, misconfig_scope, custom_app_scope,
-    custom_vectors, services, attack_vector, goal.
+    custom_vectors, services.
     Each SharedSecret has: key, value, description, source_box, target_box,
     target_user, access_method.
-    Each KillChainStep has: tag, action.
   agent: scenario_synthesis_agent
 
 parse_request_task:

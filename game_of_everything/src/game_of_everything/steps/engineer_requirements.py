@@ -3,8 +3,7 @@
 import json
 import re
 import rich
-from typing import Optional, TYPE_CHECKING
-
+from typing import Optional
 from crewai import Agent, Task, Crew, Process
 
 from game_of_everything.state import GoEState
@@ -16,7 +15,6 @@ from game_of_everything.llm_factory import make_llm
 
 if TYPE_CHECKING:
     from game_of_everything.ui import GoEConsole
-
 
 def _tolerant_mapped_request(raw: str) -> Optional[MappedRequest]:
     """Parse LLM output into MappedRequest with tolerant JSON handling.
@@ -77,7 +75,6 @@ def run_engineer_requirements(
     agents_config: dict,
     tasks_config: dict,
     box_id: str = "",
-    ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Run the full engineering crew: parse → map → validate → dep-enumerate → sequence."""
     if state.synthesized_scenario:
@@ -96,39 +93,38 @@ def run_engineer_requirements(
     parser = Agent(
         config=agents_config["request_parser_agent"],
         llm=make_llm("request_parser_agent"),
-        verbose=False,
-        **({"step_callback": _make_step_logger("PARSER", box_id)} if not ui and box_id else {}),
+        step_callback=_make_step_logger("PARSER", box_id),
     )  # type: ignore
 
     mapper = Agent(
         config=agents_config["mapping_agent"],
         llm=make_llm("mapping_agent"),
         tools=[search_atoms_tool],
-        verbose=use_verbose,
-        **({"step_callback": _make_step_logger("MAPPER", box_id)} if not ui and box_id else {}),
+        verbose=True,
+        step_callback=_make_step_logger("MAPPER", box_id),
     )  # type: ignore
 
     validator = Agent(
         config=agents_config["mapping_validator_agent"],
         llm=make_llm("mapping_validator_agent"),
         tools=[search_atoms_tool],
-        verbose=use_verbose,
-        **({"step_callback": _make_step_logger("VALIDATOR", box_id)} if not ui and box_id else {}),
+        verbose=True,
+        step_callback=_make_step_logger("VALIDATOR", box_id),
     )  # type: ignore
 
     dep_enumerator = Agent(
         config=agents_config["dependency_enumeration_agent"],
         llm=make_llm("dependency_enumeration_agent"),
         tools=[search_atoms_tool],
-        verbose=use_verbose,
-        **({"step_callback": _make_step_logger("DEP-ENUM", box_id)} if not ui and box_id else {}),
+        verbose=True,
+        step_callback=_make_step_logger("DEP-ENUM", box_id),
     )  # type: ignore
 
     sequencer = Agent(
         config=agents_config["sequencing_agent"],
         llm=make_llm("sequencing_agent"),
-        verbose=use_verbose,
-        **({"step_callback": _make_step_logger("SEQUENCER", box_id)} if not ui and box_id else {}),
+        verbose=True,
+        step_callback=_make_step_logger("SEQUENCER", box_id),
     )  # type: ignore
 
     # --- Tasks ---
@@ -171,16 +167,10 @@ def run_engineer_requirements(
         function_calling_llm=make_llm(),
     )
 
-    kickoff_inputs = {
+    engineering_crew.kickoff(inputs={
         "initial_prompt": parser_prompt,
         "num_boxes": state.synthesized_scenario.num_boxes if state.synthesized_scenario else 1,
-    }
-
-    if ui:
-        with ui.capture():
-            engineering_crew.kickoff(inputs=kickoff_inputs)
-    else:
-        engineering_crew.kickoff(inputs=kickoff_inputs)
+    })
 
     # --- Populate state ---
     state.parsed_request = parse_task.output.pydantic  # type: ignore

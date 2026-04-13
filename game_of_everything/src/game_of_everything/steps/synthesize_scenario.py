@@ -75,41 +75,43 @@ def _display_scenario(
 
         ui.info("")
 
-        # --- Log file: full verbose details ---
-        ui.log("\n=== SYNTHESIZED SCENARIO ===")
-        ui.log(f"Narrative: {scenario.narrative}")
-        ui.log(f"Attack narrative: {scenario.attack_narrative}")
-        ui.log(f"Misconfig scope: {scenario.misconfig_scope}")
-        if scenario.custom_app_scope:
-            ui.log(f"Custom app scope: {scenario.custom_app_scope}")
-        if scenario.custom_vectors:
-            ui.log(f"Custom vectors: {len(scenario.custom_vectors)}")
-            for v in scenario.custom_vectors:
-                ui.log(f"  - {v.vuln_atom_id} / {v.attack_chain_goal} / {v.runtime_id}")
-        if scenario.shared_resources:
-            ui.log(f"Shared resources: {scenario.shared_resources}")
-        if scenario.explicit_decisions:
-            ui.log(f"Explicit decisions: {scenario.explicit_decisions}")
-        if scenario.boxes:
-            for b in scenario.boxes:
-                ui.log(f"Box {b.box_id} ({b.hostname}): {b.role}")
-                ui.log(f"  misconfig_scope: {b.misconfig_scope}")
-                if b.custom_app_scope:
-                    ui.log(f"  custom_app_scope: {b.custom_app_scope}")
+    rich.print()
+    rich.print("[bold]MISCONFIG SCOPE:[/bold]")
+    rich.print(f"  {scenario.misconfig_scope.strip()}")
+
+    if scenario.custom_app_scope:
+        rich.print()
+        rich.print("[bold]CUSTOM APP SCOPE:[/bold]")
+        rich.print(f"  {scenario.custom_app_scope.strip()}")
+
+    rich.print()
+    rich.print(f"[bold]NUMBER OF BOXES:[/bold] {scenario.num_boxes}")
+
+    if scenario.boxes:
+        rich.print()
+        rich.print("[bold magenta]BOX DESCRIPTIONS:[/bold magenta]")
+        for spec in scenario.boxes:
+            rich.print(f"  [bold cyan]{spec.box_id}[/bold cyan] ({spec.hostname}): {spec.role}")
+            scope_preview = spec.misconfig_scope[:100].replace("\n", " ")
+            rich.print(f"    scope: {scope_preview}{'...' if len(spec.misconfig_scope) > 100 else ''}")
         if scenario.shared_secrets:
+            rich.print()
+            rich.print("[bold magenta]SHARED SECRETS:[/bold magenta]")
             for s in scenario.shared_secrets:
-                ui.log(f"Secret [{s.key}] {s.source_box} -> {s.target_box}: {s.target_user}:{s.value} via {s.access_method}")
-        if scenario.kill_chain:
-            for i, step in enumerate(scenario.kill_chain):
-                ui.log(f"Kill chain {i+1}. [{step.tag}] {step.action}")
-    else:
-        # Headless fallback
-        print(f"\nNarrative: {scenario.narrative}")
-        print(f"Attack: {scenario.attack_narrative}")
-        if scenario.boxes:
-            for b in scenario.boxes:
-                print(f"  {b.box_id} ({b.hostname}): {b.role}")
-        print()
+                rich.print(f"  [{s.key}] {s.source_box} → {s.target_box}: {s.target_user}:{s.value} via {s.access_method}")
+
+    rich.print()
+
+
+def _confirm_scenario() -> bool:
+    """Ask the user to confirm the synthesized scenario before proceeding."""
+    while True:
+        response = input("Continue with this scenario? [y/n]: ").strip().lower()
+        if response in ("y", "yes"):
+            return True
+        if response in ("n", "no"):
+            return False
+        print("Please enter 'y' or 'n'.")
 
 
 def run_synthesize_scenario(
@@ -128,13 +130,8 @@ def run_synthesize_scenario(
             user_input = input("Enter your vulnerable environment request: ")
     state.raw_request = user_input
 
-    if ui:
-        ui.header(user_input)
-        ui.log(f"Raw request: {user_input}")
-
     while True:
-        if not ui:
-            rich.print(f"\n[bold]Synthesizing scenario for:[/bold] {user_input}\n")
+        rich.print(f"\n[bold]Synthesizing scenario for:[/bold] {user_input}\n")
 
         # Build dynamic atom list for the synthesis prompt
         available_atoms = _discover_available_atoms()
@@ -143,7 +140,8 @@ def run_synthesize_scenario(
         synthesizer = Agent(
             config=agents_config["scenario_synthesis_agent"],
             llm=make_llm("scenario_synthesis_agent"),
-            verbose=False,
+            verbose=True,
+            step_callback=lambda step: print(f"[SYNTHESIS] {step}"),
         )  # type: ignore
 
         # --- Task ---
@@ -158,52 +156,30 @@ def run_synthesize_scenario(
             agents=[synthesizer],
             tasks=[synthesis_task],
             process=Process.sequential,
-            verbose=False,
+            verbose=True,
             function_calling_llm=make_llm(),
         )
 
-        if ui:
-            with ui.capture():
-                synthesis_crew.kickoff(inputs={
-                    "initial_prompt": user_input,
-                    "available_atoms": available_atoms,
-                })
-        else:
-            synthesis_crew.kickoff(inputs={
-                "initial_prompt": user_input,
-                "available_atoms": available_atoms,
-            })
+        synthesis_crew.kickoff(inputs={
+            "initial_prompt": user_input,
+            "available_atoms": available_atoms,
+        })
 
         scenario: SynthesizedScenario = synthesis_task.output.pydantic  # type: ignore
 
-        # --- Display tactical summary + log full details ---
-        _display_scenario(scenario, ui)
+        # --- Show comparison and confirm ---
+        _print_scenario_comparison(user_input, scenario)
 
-        if ui:
-            response = ui.prompt("  Continue with this scenario? [y/n]: ")
-        else:
-            response = input("Continue with this scenario? [y/n]: ")
-
-        if response.strip().lower() in ("y", "yes"):
+        if _confirm_scenario():
             break
 
-        # Scenario rejected — allow modification and retry
-        if ui:
-            ui.info("[bold yellow]Scenario rejected.[/bold yellow]")
-            modified = ui.prompt("  Enter a modified request (or press Enter to retry same prompt): ")
-        else:
-            rich.print("[bold yellow]Scenario rejected.[/bold yellow]")
-            modified = input("Enter a modified request (or press Enter to retry same prompt): ").strip()
-
-        if modified.strip():
-            user_input = modified.strip()
+        rich.print("[bold yellow]Scenario rejected.[/bold yellow]")
+        modified = input("Enter a modified request (or press Enter to retry same prompt): ").strip()
+        if modified:
+            user_input = modified
             state.raw_request = user_input
 
-    if ui:
-        ui.info("[bold green]Scenario confirmed. Proceeding to pipeline.[/bold green]")
-    else:
-        rich.print("[bold green]Scenario confirmed. Proceeding to pipeline.[/bold green]\n")
-
+    rich.print("[bold green]Scenario confirmed. Proceeding to pipeline.[/bold green]\n")
     state.synthesized_scenario = scenario
 
     # Convert to NetworkTopology: single-box wraps naturally; multi-box uses scenario.boxes list

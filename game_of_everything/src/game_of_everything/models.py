@@ -32,12 +32,6 @@ class SharedSecret(BaseModel):
     access_method: str              # "ssh", "web_login", "smb", "ftp", "mysql"
 
 
-class KillChainStep(BaseModel):
-    """One step in the tactical kill chain display."""
-    tag: str        # "WEB", "LPE", "LAT", "RCE", "CRED", "ENUM", "PERSIST", "EXFIL"
-    action: str     # "Upload PHP Webshell -> Achieve www-data shell"
-
-
 class BoxSpec(BaseModel):
     """Per-box description produced by synthesize_scenario for multi-box scenarios.
 
@@ -51,8 +45,6 @@ class BoxSpec(BaseModel):
     custom_app_scope: Optional[str] = None
     custom_vectors: List[CustomVector] = []
     services: List[str] = []        # ["ssh:22", "http:80", "mysql:3306"]
-    attack_vector: str = ""         # "Unauthenticated Web RCE -> SUID Data Exfiltration"
-    goal: str = ""                  # "Harvest internal credentials for [backup01]"
 
 
 class SynthesizedScenario(BaseModel):
@@ -71,10 +63,6 @@ class SynthesizedScenario(BaseModel):
     # Multi-box: per-box pipeline descriptions (populated when num_boxes > 1)
     boxes: List[BoxSpec] = []
     shared_secrets: List[SharedSecret] = []     # Cross-box credentials (the dependency map)
-    # Tactical display fields
-    kill_chain: List[KillChainStep] = []        # Ordered attack steps across all boxes
-    attack_vector: str = ""                     # Single-box: concise attack surface summary
-    goal: str = ""                              # Single-box: attacker's objective
 
 
 class ParsedRequest(BaseModel):

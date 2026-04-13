@@ -13,16 +13,13 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List
 
 import rich
 
 from game_of_everything.models import NetworkTopology
 from game_of_everything.state import GoEState
 from game_of_everything.topology_utils import topological_order
-
-if TYPE_CHECKING:
-    from game_of_everything.ui import GoEConsole
 
 # Project root: steps/ → game_of_everything/ → src/ → game_of_everything/ → (project root)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -258,19 +255,10 @@ def _build_readme(topology: NetworkTopology, deploy_scripts: Dict[str, str], cre
 # Main step
 # ---------------------------------------------------------------------------
 
-def _out(ui: Optional["GoEConsole"], msg: str) -> None:
-    """Print via ui.info() if available, else rich.print()."""
-    if ui:
-        ui.info(msg)
-    else:
-        rich.print(msg)
-
-
 def run_finalize_topology(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
-    ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Write the multi-box output package.
 
@@ -282,11 +270,10 @@ def run_finalize_topology(
         state: Flow state (read-only for this step).
         agents_config: Loaded agents.yaml dict (unused).
         tasks_config: Loaded tasks.yaml dict (unused).
-        ui: Optional GoEConsole for structured output.
     """
     topology = state.topology
     if topology is None or len(topology.boxes) <= 1:
-        _out(ui,
+        rich.print(
             "[dim]run_finalize_topology: single-box or no topology — "
             "output already written by finalize_script.[/dim]"
         )
@@ -294,7 +281,7 @@ def run_finalize_topology(
 
     deploy_scripts = state.deploy_scripts
     if not deploy_scripts:
-        _out(ui, "[bold yellow]run_finalize_topology: no deploy scripts collected — skipping.[/bold yellow]")
+        rich.print("[bold yellow]run_finalize_topology: no deploy scripts collected — skipping.[/bold yellow]")
         return
 
     # Build output directory
@@ -303,11 +290,8 @@ def run_finalize_topology(
     out_dir = _PROJECT_ROOT / "output" / f"{timestamp}_{slug}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Store output path on state for summary
-    state.output_path = str(out_dir)
-
-    _out(ui, "")
-    _out(ui, "  Output:")
+    rich.print(f"\n[bold magenta]=== FINALIZING TOPOLOGY OUTPUT ===[/bold magenta]")
+    rich.print(f"Output directory: {out_dir}")
 
     # Per-box deploy scripts
     for box in topology.boxes:
@@ -316,24 +300,29 @@ def run_finalize_topology(
             script_path = out_dir / f"{box.box_id}_deploy.sh"
             script_path.write_text(script, encoding="utf-8")
             script_path.chmod(0o755)
-            _out(ui, f"  [green]✓[/green] {script_path.name}")
+            rich.print(f"  [green]✓[/green] {script_path.name} ({len(script)} chars)")
         else:
-            _out(ui, f"  [yellow]✗[/yellow] {box.box_id}_deploy.sh — no script")
+            rich.print(f"  [yellow]✗[/yellow] {box.box_id}_deploy.sh — no script (box failed or was skipped)")
 
     # docker-compose.yml
     compose_content = _build_docker_compose(topology)
     compose_path = out_dir / "docker-compose.yml"
     compose_path.write_text(compose_content, encoding="utf-8")
-    _out(ui, f"  [green]✓[/green] docker-compose.yml")
+    rich.print(f"  [green]✓[/green] docker-compose.yml")
 
     # playbook.json
     playbook = _build_playbook(topology, deploy_scripts)
     playbook_path = out_dir / "playbook.json"
     playbook_path.write_text(json.dumps(playbook, indent=2), encoding="utf-8")
-    _out(ui, f"  [green]✓[/green] playbook.json")
+    rich.print(f"  [green]✓[/green] playbook.json")
 
     # README.md
     readme_content = _build_readme(topology, deploy_scripts, state.credential_warnings)
     readme_path = out_dir / "README.md"
     readme_path.write_text(readme_content, encoding="utf-8")
-    _out(ui, f"  [green]✓[/green] README.md")
+    rich.print(f"  [green]✓[/green] README.md")
+
+    rich.print(f"\n[bold green]Topology output package written to:[/bold green] {out_dir}")
+    rich.print(f"\n[bold]To deploy:[/bold]")
+    rich.print(f"  cd {out_dir}")
+    rich.print(f"  docker-compose up -d")
