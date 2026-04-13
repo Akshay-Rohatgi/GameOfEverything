@@ -15,6 +15,7 @@ from typing import Optional
 from game_of_everything.models import MappedAtom
 
 from rich.console import Console
+from rich.panel import Panel
 from rich.text import Text
 
 
@@ -96,6 +97,51 @@ class GoEConsole:
         self._console.print(f' Request: "{display_request}"')
         self._console.print()
 
+    def scenario_intel(self, targets: list[dict]) -> None:
+        """Render the ENVIRONMENTAL INTELLIGENCE panel.
+
+        Each target dict has keys: hostname, attack_vector, goal.
+        """
+        lines = []
+        for i, t in enumerate(targets):
+            if i > 0:
+                lines.append("")
+            hostname = t.get("hostname", "target")
+            vector = t.get("attack_vector", "") or t.get("role", "")
+            goal = t.get("goal", "") or "—"
+            lines.append(f"TARGET: \\[{hostname}]")
+            lines.append(f"  Vect: {vector}")
+            lines.append(f"  Goal: {goal}")
+
+        panel = Panel(
+            "\n".join(lines),
+            title="[bold]ENVIRONMENTAL INTELLIGENCE[/bold]",
+            border_style="bold white",
+            padding=(0, 2),
+        )
+        self._console.print()
+        self._console.print(panel)
+
+    def scenario_kill_chain(self, steps: list[dict]) -> None:
+        """Render the PROPOSED KILL CHAIN panel.
+
+        Each step dict has keys: tag, action. Step number is index + 1.
+        """
+        lines = []
+        for i, s in enumerate(steps):
+            tag = s.get("tag", "???")
+            action = s.get("action", "")
+            lines.append(f"{i + 1}. [{tag}] {action}")
+
+        panel = Panel(
+            "\n".join(lines),
+            title="[bold]PROPOSED KILL CHAIN[/bold]",
+            border_style="bold white",
+            padding=(0, 2),
+        )
+        self._console.print()
+        self._console.print(panel)
+
     def status(self, msg: str) -> None:
         """Show a step starting (with spinner)."""
         self._active_status = msg
@@ -165,6 +211,20 @@ class GoEConsole:
                     cmd = cmd[:70] + "..."
                 self._console.print(f"        [dim]> {cmd}[/dim]")
 
+    def test_layer_status(self, atom: str, layer: str, command: str) -> None:
+        """Show which test layer is running for an atom with the truncated command.
+
+        Args:
+            atom: Atom name being tested.
+            layer: "L1" or "L2".
+            command: The bash command being executed (will be truncated).
+        """
+        cmd = command.replace('\n', ' ').strip()
+        if len(cmd) > 70:
+            cmd = cmd[:70] + "..."
+        name_padded = atom.ljust(26)
+        self._console.print(f"    [dim]● {name_padded} {layer}: {cmd}[/dim]", end="\r")
+
     def test_skipped(self, atom: str, reason: str = "upstream failed") -> None:
         """Show a skipped atom."""
         name_padded = atom.ljust(26)
@@ -207,6 +267,104 @@ class GoEConsole:
         self._console.print(f"  Output:  {output_path}")
         self._console.print(f"  Log:     {self._log_path}")
         self._console.print()
+
+    # ------------------------------------------------------------------
+    # Multi-box output (called by PipelineRenderer only)
+    # ------------------------------------------------------------------
+
+    def box_phase_started(self, box_id: str, phase: str, color: str = "white") -> None:
+        """Show a box phase starting."""
+        bid = f"[{color}]{box_id}[/{color}]"
+        self._console.print(f"  [dim]●[/dim] {bid.ljust(20 + len(color) * 2 + 5)}  {phase}")
+
+    def box_phase_done(self, box_id: str, phase: str, elapsed: float, color: str = "white") -> None:
+        """Show a box phase completed with timing."""
+        bid = f"[{color}]{box_id}[/{color}]"
+        elapsed_str = f"{elapsed:.1f}s"
+        phase_padded = phase.ljust(28)
+        self._console.print(f"  [green]✓[/green] {bid.ljust(20 + len(color) * 2 + 5)}  {phase_padded} [dim]{elapsed_str}[/dim]")
+
+    def box_phase_fail(self, box_id: str, phase: str, error: str, color: str = "white") -> None:
+        """Show a box phase failure."""
+        bid = f"[{color}]{box_id}[/{color}]"
+        self._console.print(f"  [red]✗[/red] {bid.ljust(20 + len(color) * 2 + 5)}  {phase}  [red]FAIL[/red]")
+        if error:
+            self._console.print(f"      [dim]{error[:120]}[/dim]")
+
+    def box_atom(self, box_id: str, atom_name: str, parameters: dict, context: str, color: str = "white") -> None:
+        """Display a sequenced atom for a box."""
+        params_str = ", ".join(f"{v}" for v in parameters.values()) if parameters else ""
+        ctx = context.replace('\n', ' ').strip()
+        if len(ctx) > 60:
+            ctx = ctx[:60] + "..."
+        self._console.print(f"      [blue]⚛[/blue] {atom_name}({params_str}) — [dim]{ctx}[/dim]")
+
+    def box_test_result(
+        self,
+        box_id: str,
+        atom_name: str,
+        l1_pass: bool,
+        l2_pass: Optional[bool] = None,
+        retries: int = 0,
+        testing_snippet: Optional[str] = None,
+        attack_snippet: Optional[str] = None,
+        color: str = "white",
+    ) -> None:
+        """Show a single atom's test result for a box, with truncated command snippets."""
+        icon = "[green]✓[/green]" if (l1_pass and (l2_pass is not False)) else "[red]✗[/red]"
+        l1 = "[green]✓[/green]" if l1_pass else "[red]✗[/red]"
+
+        if l2_pass is None:
+            l2 = "[dim]n/a[/dim]"
+        elif l2_pass:
+            l2 = "[green]✓[/green]"
+        else:
+            l2 = "[red]✗[/red]"
+
+        retry_note = f"  [yellow]({retries} retries)[/yellow]" if retries else ""
+        name_padded = atom_name.ljust(26)
+        self._console.print(f"      {icon} {name_padded} L1 {l1}  L2 {l2}{retry_note}")
+
+        # Show executed commands as dim truncated lines
+        for snippet in (testing_snippet, attack_snippet):
+            if snippet:
+                cmd = snippet.replace('\n', ' ').strip()
+                if len(cmd) > 70:
+                    cmd = cmd[:70] + "..."
+                self._console.print(f"          [dim]> {cmd}[/dim]")
+
+    def box_test_skipped(self, box_id: str, atom_name: str, color: str = "white") -> None:
+        """Show a skipped atom for a box."""
+        name_padded = atom_name.ljust(26)
+        self._console.print(f"      [dim]- {name_padded} skipped[/dim]")
+
+    def box_done(self, box_id: str, hostname: str, success: bool, script_chars: int = 0, color: str = "white") -> None:
+        """Show box completion summary."""
+        bid = f"[{color}]{box_id}[/{color}]"
+        if success:
+            self._console.print(f"    [green]✓[/green] {bid} ({hostname}) — script ready")
+        else:
+            self._console.print(f"    [red]✗[/red] {bid} ({hostname}) — failed")
+
+    def chain_test_header(self, scenario_name: str, num_probes: int) -> None:
+        """Print the chain test section header."""
+        self._console.print()
+        self._console.print(f"  Chain Test: {scenario_name}")
+
+    def chain_test_result(self, step: int, command: str, passed: bool) -> None:
+        """Show a single chain test probe result."""
+        icon = "[green]✓[/green]" if passed else "[red]✗[/red]"
+        cmd = command.replace('\n', ' ').strip()
+        if len(cmd) > 60:
+            cmd = cmd[:60] + "..."
+        self._console.print(f"    {icon} Step {step}: [dim]{cmd}[/dim]")
+
+    def chain_test_done(self, passed: int, total: int) -> None:
+        """Show chain test summary."""
+        if passed == total:
+            self._console.print(f"    Chain: {passed}/{total} probes passed [green]✓[/green]")
+        else:
+            self._console.print(f"    Chain: {passed}/{total} probes passed [red]✗[/red]")
 
     def prompt(self, msg: str) -> str:
         """Interactive prompt — restores real stdout for input()."""

@@ -1,5 +1,8 @@
 """Step 1: Parse synthesized scenario → map to atoms → validate → enumerate deps → sequence."""
 
+import json
+import re
+import rich
 from typing import Optional, TYPE_CHECKING
 
 from crewai import Agent, Task, Crew, Process
@@ -15,10 +18,65 @@ if TYPE_CHECKING:
     from game_of_everything.ui import GoEConsole
 
 
+def _tolerant_mapped_request(raw: str) -> Optional[MappedRequest]:
+    """Parse LLM output into MappedRequest with tolerant JSON handling.
+
+    Handles:
+    - JSON wrapped in markdown code fences
+    - Unquoted object keys  ({key: val} → {"key": val})
+    - Trailing non-JSON text after the closing brace
+    """
+    if not raw:
+        return None
+    s = raw.strip()
+    # Strip markdown code fences
+    m = re.search(r'```(?:json)?\s*(\{.*\})\s*```', s, re.DOTALL)
+    if m:
+        s = m.group(1).strip()
+    else:
+        start = s.find('{')
+        if start != -1:
+            s = s[start:]
+
+    # Pass 1: direct parse
+    try:
+        return MappedRequest.model_validate_json(s)
+    except Exception:
+        pass
+
+    # Pass 2: quote unquoted keys then retry
+    fixed = re.sub(
+        r'([\[{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)',
+        lambda m: f'{m.group(1)}"{m.group(2)}"{m.group(3)}',
+        s,
+    )
+    try:
+        return MappedRequest.model_validate_json(fixed)
+    except Exception:
+        pass
+
+    # Pass 3: raw_decode to handle trailing non-JSON text
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(s)
+        return MappedRequest.model_validate(obj)
+    except Exception:
+        pass
+
+    return None
+
+
+def _make_step_logger(label: str, box_id: str = ""):
+    tag = f"[{box_id}][{label}]" if box_id else f"[{label}]"
+    def _log(step):
+        print(f"{tag} {step}")
+    return _log
+
+
 def run_engineer_requirements(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    box_id: str = "",
     ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Run the full engineering crew: parse → map → validate → dep-enumerate → sequence."""
@@ -33,37 +91,44 @@ def run_engineer_requirements(
     # --- Agents ---
     search_atoms_tool = SearchAtomsTool()
 
+    use_verbose = not bool(ui)
+
     parser = Agent(
         config=agents_config["request_parser_agent"],
         llm=make_llm("request_parser_agent"),
         verbose=False,
+        **({"step_callback": _make_step_logger("PARSER", box_id)} if not ui and box_id else {}),
     )  # type: ignore
 
     mapper = Agent(
         config=agents_config["mapping_agent"],
         llm=make_llm("mapping_agent"),
         tools=[search_atoms_tool],
-        verbose=False,
+        verbose=use_verbose,
+        **({"step_callback": _make_step_logger("MAPPER", box_id)} if not ui and box_id else {}),
     )  # type: ignore
 
     validator = Agent(
         config=agents_config["mapping_validator_agent"],
         llm=make_llm("mapping_validator_agent"),
         tools=[search_atoms_tool],
-        verbose=False,
+        verbose=use_verbose,
+        **({"step_callback": _make_step_logger("VALIDATOR", box_id)} if not ui and box_id else {}),
     )  # type: ignore
 
     dep_enumerator = Agent(
         config=agents_config["dependency_enumeration_agent"],
         llm=make_llm("dependency_enumeration_agent"),
         tools=[search_atoms_tool],
-        verbose=False,
+        verbose=use_verbose,
+        **({"step_callback": _make_step_logger("DEP-ENUM", box_id)} if not ui and box_id else {}),
     )  # type: ignore
 
     sequencer = Agent(
         config=agents_config["sequencing_agent"],
         llm=make_llm("sequencing_agent"),
-        verbose=False,
+        verbose=use_verbose,
+        **({"step_callback": _make_step_logger("SEQUENCER", box_id)} if not ui and box_id else {}),
     )  # type: ignore
 
     # --- Tasks ---
@@ -76,19 +141,18 @@ def run_engineer_requirements(
         config=tasks_config["map_atoms_task"],  # type: ignore
         agent=mapper,
         context=[parse_task],  # type: ignore
-        output_pydantic=MappedRequest,
+        # No output_pydantic — LLMs occasionally produce unquoted JSON keys;
+        # we parse tolerantly below via _tolerant_mapped_request.
     )
     validate_task = Task(
         config=tasks_config["validate_mapping_task"],  # type: ignore
         agent=validator,
         context=[parse_task, map_task],  # type: ignore
-        output_pydantic=MappedRequest,
     )
     dep_task = Task(
         config=tasks_config["enumerate_dependencies_task"],  # type: ignore
         agent=dep_enumerator,
         context=[validate_task],  # type: ignore
-        output_pydantic=MappedRequest,
     )
     sequence_task = Task(
         config=tasks_config["sequence_atoms_task"],  # type: ignore
@@ -99,6 +163,7 @@ def run_engineer_requirements(
 
     # --- Crew ---
     engineering_crew = Crew(
+        name=f"{box_id}/engineer_requirements" if box_id else "engineer_requirements",
         agents=[parser, mapper, validator, dep_enumerator, sequencer],
         tasks=[parse_task, map_task, validate_task, dep_task, sequence_task],
         process=Process.sequential,
@@ -106,15 +171,26 @@ def run_engineer_requirements(
         function_calling_llm=make_llm(),
     )
 
+    kickoff_inputs = {
+        "initial_prompt": parser_prompt,
+        "num_boxes": state.synthesized_scenario.num_boxes if state.synthesized_scenario else 1,
+    }
+
     if ui:
         with ui.capture():
-            engineering_crew.kickoff(inputs={"initial_prompt": parser_prompt})
+            engineering_crew.kickoff(inputs=kickoff_inputs)
     else:
-        engineering_crew.kickoff(inputs={"initial_prompt": parser_prompt})
+        engineering_crew.kickoff(inputs=kickoff_inputs)
 
     # --- Populate state ---
     state.parsed_request = parse_task.output.pydantic  # type: ignore
-    state.mapped_request = dep_task.output.pydantic  # type: ignore
+    # Tolerate malformed JSON (unquoted keys, trailing text) from MappedRequest tasks
+    state.mapped_request = (
+        dep_task.output.pydantic  # type: ignore
+        or _tolerant_mapped_request(dep_task.output.raw)
+        or _tolerant_mapped_request(validate_task.output.raw)
+        or _tolerant_mapped_request(map_task.output.raw)
+    )
     state.sequenced_request = (  # type: ignore
         sequence_task.output.pydantic.atoms
         if sequence_task.output.pydantic
@@ -135,7 +211,5 @@ def run_engineer_requirements(
             for i, atom in enumerate(state.sequenced_request, 1):
                 ui.display_atom(atom, verbose=True)
                 ui.log(f"  {i}. {atom.name}({atom.parameters}) — {atom.context}")
-            # for i, atom in enumerate(state.sequenced_request, 1):
-            #     ui.log(f"  {i}. {atom.name} — {atom.context}")
         else:
             ui.log("  (no sequenced atoms)")

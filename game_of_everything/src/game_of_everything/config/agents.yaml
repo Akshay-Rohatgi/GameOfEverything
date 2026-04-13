@@ -358,6 +358,18 @@ snippet_generation_agent:
         if [ -d /run/systemd/system ]; then systemctl daemon-reload && systemctl enable <svc> && systemctl start <svc>; else service <svc> start; fi
     - /run/systemd/system only exists when systemd is PID 1 (not in Docker)
 
+    TARGET CONTAINER tools pre-installed (ubuntu:22.04 base + bootstrap):
+      curl, wget, ca-certificates, gnupg, lsb-release,
+      iproute2 (ss, ip), net-tools (netstat, ifconfig), procps (ps, free, top),
+      iputils-ping (ping), sudo,
+      bash, coreutils (id, chmod, chown, stat, find, ls, cat, grep, awk, sed),
+      util-linux (mount, blkid, getopt), passwd/shadow-utils (useradd, passwd, getent),
+      sysvinit-utils (service command), python3, perl.
+    Any additional tool needed by a code_snippet should be installed with apt-get
+    inside the snippet itself (e.g. `apt-get install -y <pkg>`). For testing_snippet
+    verification commands, ONLY use tools from the pre-installed list above or tools
+    that will have been installed by the code_snippet immediately before.
+
     GOAL: >
     Generate a self-contained, correctly parameterised Bash snippet for each
     Atom in the provided sequenced atom list.
@@ -533,3 +545,4 @@ diagnostic_agent:
     apt failures, permission gotchas, config file formatting). You always inspect
     the actual system state before proposing a fix, and you write idempotent
     scripts that handle partial-application gracefully.
+

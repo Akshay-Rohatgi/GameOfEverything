@@ -72,29 +72,106 @@ synthesize_scenario_task:
     misconfig_scope should still describe the post-exploitation surface — the OS
     user whose credentials the app leaks, and any privilege escalation path.
 
-    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
-    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
-    no backticks, no explanations, no trailing comments. Do all reasoning internally.
-    Do NOT write any text after the closing `}` of the JSON object.
+    NUM_BOXES — how many separate machines this scenario requires:
+    Set num_boxes to the minimum number of distinct machines needed to realise
+    the scenario as described. Use these guidelines:
+      - 1 box: self-contained scenario — all services, credentials, and privesc
+        paths exist on a single host.
+      - 2 boxes: pivot / lateral movement scenarios — e.g. initial access on one
+        machine whose credentials or tokens allow access to a second machine.
+      - 3+ boxes: multi-hop chains — each additional box adds a distinct hop
+        with its own access method and post-exploitation surface.
+    Do NOT inflate the count. Only count a box if the scenario structurally
+    requires a separate machine (separate IP / hostname / trust boundary).
+
+    BOX DESCRIPTIONS (required when num_boxes > 1):
+    When the scenario requires multiple machines, populate the `boxes` list with
+    one BoxSpec per machine. Leave the top-level misconfig_scope as "" and
+    custom_vectors as [] — the per-box detail lives entirely in `boxes`.
+
+    Each BoxSpec must have:
+      - box_id: short unique identifier, lowercase, hyphens allowed
+        (e.g. "webserver", "db-server", "jumpbox")
+      - hostname: network hostname for this machine (e.g. "web01", "db01")
+      - role: 1–2 sentence narrative describing what this machine is
+      - misconfig_scope: attacker-facing vulnerability description for THIS box
+        only — same format rules as single-box misconfig_scope above.
+        Must include ALL credential values that appear in shared_secrets where
+        this box is either the source or target.
+      - custom_app_scope: custom web app description for this box, or null
+      - custom_vectors: list of CustomVector objects for this box, or []
+      - services: exposed services in "protocol:port" format
+        (e.g. ["ssh:22", "http:80", "mysql:3306"])
+
+    SHARED SECRETS (required when num_boxes > 1 and boxes share credentials):
+    For every credential that bridges two machines, add a SharedSecret to
+    `shared_secrets`:
+      - key: short identifier (e.g. "web_to_db_ssh", "pivot_mysql_cred")
+      - value: the EXACT credential string (password, not a placeholder)
+      - description: what this credential is and how it bridges the machines
+      - source_box: box_id where the attacker discovers/extracts this credential
+      - target_box: box_id where this credential grants access
+      - target_user: username on the target box this credential authenticates as
+      - access_method: one of "ssh", "mysql", "web_login", "smb", "ftp"
+
+    CRITICAL: Every shared_secret value MUST appear verbatim in BOTH
+    the source box's misconfig_scope AND the target box's misconfig_scope
+    so downstream pipelines generate consistent deploy scripts with matching
+    credentials.
+
+    TACTICAL DISPLAY FIELDS:
+    For each BoxSpec (multi-box) OR at the top level (single-box), also populate:
+      - attack_vector: concise arrow-chain summarising the attack surface on this
+        box (e.g. "Unauthenticated Web RCE -> SUID Data Exfiltration")
+      - goal: the attacker's objective for this box
+        (e.g. "Harvest internal credentials for [backup01]" or
+        "Full Administrative Compromise")
+
+    Also populate kill_chain (list of KillChainStep) covering the full attack path
+    across ALL boxes in order. Each step has:
+      - tag: one of ENUM, WEB, CRED, RCE, LPE, LAT, PERSIST, EXFIL
+      - action: what the attacker does and what they achieve, in one line
+        (e.g. "Upload PHP Webshell -> Achieve www-data shell")
+
+    The kill chain should read like a numbered operation plan. Use -> to separate
+    action from outcome within each step.
   expected_output: >
-    A single valid JSON object — no markdown, no surrounding text.
-    Start the response with { and end with }. All keys must be quoted strings.
-    The JSON object must be a SynthesizedScenario with: narrative (str), attack_narrative (str),
-    shared_resources (list of str), explicit_decisions (list of str),
-    misconfig_scope (str), custom_app_scope (str or null), and
-    custom_vectors (list of CustomVector objects, or [] if no custom app).
+    A SynthesizedScenario JSON object with: narrative (str), attack_narrative (str),
+    shared_resources (list of str), explicit_decisions (list of str), num_boxes (int),
+    kill_chain (list of KillChainStep), attack_vector (str), goal (str).
+
+    Single-box (num_boxes == 1):
+      misconfig_scope (str), custom_app_scope (str or null),
+      custom_vectors (list of CustomVector or []), boxes=[], shared_secrets=[],
+      attack_vector (str), goal (str), kill_chain (list of KillChainStep).
+
+    Multi-box (num_boxes > 1):
+      boxes (list of BoxSpec — one per machine), shared_secrets (list of
+      SharedSecret — one per cross-box credential), misconfig_scope="",
+      custom_vectors=[], custom_app_scope=null,
+      kill_chain (list of KillChainStep).
+
     Each CustomVector has: vuln_atom_id, attack_chain_goal, runtime_id, port,
     db_name, db_user, db_password, seed_username, seed_password, synthesis_context.
+    Each BoxSpec has: box_id, hostname, role, misconfig_scope, custom_app_scope,
+    custom_vectors, services, attack_vector, goal.
+    Each SharedSecret has: key, value, description, source_box, target_box,
+    target_user, access_method.
+    Each KillChainStep has: tag, action.
   agent: scenario_synthesis_agent
 
 parse_request_task:
   description: >
     Analyze the user's request: "{initial_prompt}" and break it down into context, initial access vectors, and post-exploitation goals.
+    This scenario requires {num_boxes} box(es). Keep this in mind when identifying access vectors and exploitation goals.
 
-    CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
-    and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
-    no backticks, no explanations, no trailing comments. Do all reasoning internally.
-    Do NOT write any text after the closing `}` of the JSON object.
+    CROSS-BOX CONSTRAINT BLOCK:
+    The prompt may contain a section starting with
+    "--- CROSS-BOX CONSTRAINTS (do not change these values) ---".
+    This section describes services and credentials on OTHER boxes in the topology.
+    Services listed under "Neighbouring box" headings run on different machines and
+    MUST NOT be included in initial_access_vectors or post_exploitation_goals for
+    this box. Extract only what this box itself exposes and exploits.
   expected_output: >
     A single valid JSON object — no markdown, no surrounding text.
     Start the response with { and end with }. All keys must be quoted strings.
@@ -142,6 +219,12 @@ map_atoms_task:
     Do NOT write any text after the closing `}` of the JSON object.
 
     IMPORTANT: You MUST call the search tool at least once. Do NOT skip the tool or guess Atom names.
+
+    CROSS-BOX EXCLUSION RULE:
+    If the original prompt contained a "--- CROSS-BOX CONSTRAINTS ---" section describing
+    services on neighbouring boxes (e.g. "Neighbouring box \"db-server\" ... exposes: mongodb:27017"),
+    those services are installed and configured on OTHER machines. Do NOT map atoms for them on this box.
+    Only map atoms for services that this box itself must run.
   expected_output: >
     A single valid JSON object — no markdown, no surrounding text, no reasoning before or after.
     Start the response with { and end with }. All keys must be quoted strings.
@@ -273,6 +356,12 @@ enumerate_dependencies_task:
 
     You MUST call `search_vulnerability_atoms` for each missing package.
     Never skip the tool or invent atom names.
+
+    CROSS-BOX EXCLUSION RULE:
+    If the original scenario prompt contained a \"--- CROSS-BOX CONSTRAINTS ---\" section
+    listing services on neighbouring boxes (e.g. \"Neighbouring box 'db-server' ... exposes:
+    mongodb:27017\"), those packages are installed on OTHER machines. Do NOT add
+    install_package atoms for them here.
   expected_output: >
     A single valid JSON object — no markdown, no surrounding text.
     Start the response with { and end with }. All keys must be quoted strings.
@@ -435,6 +524,10 @@ generate_snippets_task:
         state was achieved (e.g. confirms the SUID bit is set, the share is
         browseable, the file is readable by the intended user).
       - Do NOT include a shebang line.
+      - This snippet runs INSIDE the target container. Always use `127.0.0.1`
+        (not a hostname) when connecting to local services (e.g.
+        `mongosh --host 127.0.0.1`, `redis-cli -h 127.0.0.1`, `psql -h 127.0.0.1`).
+        Never use `target`, `localhost`, or a box hostname here.
 
     STEP 5 — Generate the attack_snippet (or null).
     Determine whether this atom has an EXTERNAL ATTACK SURFACE — meaning an
@@ -442,7 +535,9 @@ generate_snippets_task:
       - If YES (e.g. samba_insecure_share, create_user with SSH context):
         Write a Bash command that probes the vulnerability from an attacker's
         perspective. The attacker container is Kali-based and addresses the
-        target by hostname `target` on a Docker bridge network.
+        target by hostname `{target_hostname}` on a Docker bridge network.
+        Always use exactly this hostname — do not substitute `target` or any
+        other value.
 
         AVAILABLE TOOLS on the attacker container (pre-installed):
           bash, curl, wget, nmap, hydra, smbclient, sshpass, openssh-client,
@@ -455,14 +550,14 @@ generate_snippets_task:
         this list will be dynamically installed at test time, but using a
         listed tool avoids delays. For HTTP-based probes, prefer curl.
 
-        Examples:
-          - samba_insecure_share:       `smbclient -L //target/<share_name> -N`
-          - create_user with SSH:       `sshpass -p '<password>' ssh -o StrictHostKeyChecking=no <username>@target id`
-          - redis_disable_auth:         `redis-cli -h target ping && redis-cli -h target keys '*'`
-          - postgres_rce:               `PGPASSWORD='' psql -U <db_user> -h target -c '\du'`
-          - database_expose (MySQL):    `mysql -h target -u root --password= -e 'show databases;'`
-          - mongodb_disable_auth:       `mongosh --host target --eval "db.adminCommand('listDatabases')"`
-          - ftp_anon_upload:            `curl -T /etc/hostname ftp://target/<upload_dir>/test.txt --user anonymous:`
+        Examples (replace TARGET_HOST with `{target_hostname}`):
+          - samba_insecure_share:       `smbclient -L //TARGET_HOST/<share_name> -N`
+          - create_user with SSH:       `sshpass -p '<password>' ssh -o StrictHostKeyChecking=no <username>@TARGET_HOST id`
+          - redis_disable_auth:         `redis-cli -h TARGET_HOST ping && redis-cli -h TARGET_HOST keys '*'`
+          - postgres_rce:               `PGPASSWORD='' psql -U <db_user> -h TARGET_HOST -c '\du'`
+          - database_expose (MySQL):    `mysql -h TARGET_HOST -u root --password= -e 'show databases;'`
+          - mongodb_disable_auth:       `mongosh --host TARGET_HOST --eval "db.adminCommand('listDatabases')"`
+          - ftp_anon_upload:            `curl -T /etc/hostname ftp://TARGET_HOST/<upload_dir>/test.txt --user anonymous:`
         Do NOT include a shebang line.
       - If NO (e.g. install_package, set_suid, sensitive_file with no network
         exposure): set attack_snippet to null.
@@ -582,7 +677,7 @@ diagnose_snippet_task:
     1. Use `read_atom` to read the full atom definition for "{atom_name}" and
        understand the Logic Requirements, Synthesis Guidance, and Testing Guidance.
     2. Analyze all failure evidence — apply_stderr, l1 output, and verdict reasoning.
-    3. Optionally use `exec_in_container` with container_id "goe_target" to run
+    5. Optionally use `exec_in_container` with container_id "{target_container_name}" to run
        diagnostic commands and inspect the actual container state.
     4. Determine the root cause of the failure.
     5. Produce a complete, idempotent replacement for both code_snippet and

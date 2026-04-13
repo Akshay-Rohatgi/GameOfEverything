@@ -33,3 +33,8 @@ Privilege Escalation Vector(s): Once I get SSH access, I want to be able to esca
   4. Mixed — custom app + misconfig on same box
   ▎ "I want a PHP login page vulnerable to SQL injection that leaks the password for a local user called mgarcia, and that same user has a cron job running a world-writable script I can
   modify to get root"
+
+
+```
+Create two public facing Ubuntu servers. One hosts a single-file PHP based file manager that is vulnerable to arbitrary uploads. The base64 binary on this system has the suid bit, and can be used to read a sensitive file found in the root users home directory. This file contains low-privilege, human user credentials to the other server. The other server is a backup server with a cronjob that runs a world writable script as root to audit current backups on the system. The attacker should gain unauthenticated rce on the first server via arbitrary upload and read the sensitive file using the suid binary. Then, the attacker will ssh into the other machine, and abuse the vulnerable cronjob script to escalate to root.
+```

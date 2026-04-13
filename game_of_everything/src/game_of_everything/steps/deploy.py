@@ -14,6 +14,12 @@ def run_deploy(
     ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Prompt the user to deploy the script to an EC2 instance."""
+    # Multi-box topologies use docker-compose, not single-instance EC2 deploy
+    if state.topology and len(state.topology.boxes) > 1:
+        if ui:
+            ui.info("[dim]  EC2 deploy skipped (multi-box topology — use docker-compose)[/dim]")
+        return
+
     if not state.output_path or not state.final_script:
         return
 

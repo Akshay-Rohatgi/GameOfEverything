@@ -6,12 +6,14 @@ This file wires them together using crewAI's @start()/@listen() decorators,
 which must live on methods of a Flow[State] subclass.
 """
 
+import argparse
+import logging
 import os
 import time
-import yaml
-import logging
+from datetime import datetime
 from pathlib import Path
 
+import yaml
 
 from crewai.flow import Flow, listen, start
 from crewai.events.event_context import (
@@ -23,15 +25,20 @@ from dotenv import load_dotenv
 
 import game_of_everything.patches  # noqa: F401 — monkey-patches crewAI JSON converter
 
+from game_of_everything.checkpoint import (
+    checkpoint_dir,
+    completed_steps,
+    find_latest_checkpoint,
+    load_checkpoint,
+    save_checkpoint,
+)
 from game_of_everything.state import GoEState
 from game_of_everything.ui import GoEConsole
 from game_of_everything.steps import (
-    run_synthesize_scenario,
-    run_resolve_custom_apps,
-    run_engineer_requirements,
-    run_generate_implementation,
-    run_test_snippets,
-    run_finalize_script,
+    run_synthesize_topology,
+    run_box_pipelines,
+    run_chain_test,
+    run_finalize_topology,
     run_deploy,
 )
 
@@ -49,14 +56,14 @@ logging.getLogger('crewai').setLevel(logging.WARNING)
 
 os.environ["GOE_VERSION"] = "0.1.0"
 os.environ["OTEL_SDK_DISABLED"] = "true"  # Disable OpenTelemetry to avoid unrelated warnings
-os.environ["LOG_LEVEL"] = "ERROR" # Suppress lower-level logs from CrewAI and dependencies to reduce noise
+os.environ["LOG_LEVEL"] = "ERROR"  # Suppress lower-level logs from CrewAI and dependencies to reduce noise
 os.environ["CREWAI_TRACING_ENABLED"] = "false"  # Disable CrewAI's internal tracing to reduce noise
 
 load_dotenv()
 
 
 class GoEFlow(Flow[GoEState]):
-    def __init__(self):
+    def __init__(self, resume_dir: Path | None = None):
         super().__init__()
         config_dir = Path(__file__).parent / "config"
         with open(config_dir / "agents.yaml", "r") as f:
@@ -67,54 +74,72 @@ class GoEFlow(Flow[GoEState]):
         if hasattr(self, 'console'):
             self.console_quiet = True  # Suppress CrewAI's default console output since we're using our own
 
+        if resume_dir is not None:
+            latest = find_latest_checkpoint(resume_dir)
+            if latest is None:
+                raise ValueError(f"No checkpoint files found in {resume_dir}")
+            loaded = load_checkpoint(latest)
+            for field_name in GoEState.model_fields:
+                setattr(self.state, field_name, getattr(loaded, field_name))
+            self.state.box_states = loaded.box_states
+            self._resume_dir: Path | None = resume_dir
+            print(f"[checkpoint] Resuming run {self.state.run_id} from {latest.name}")
+        else:
+            self.state.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._resume_dir = None
+
+    def _should_skip(self, step_name: str) -> bool:
+        """Return True when resuming and this step already has a checkpoint."""
+        if self._resume_dir is None:
+            return False
+        done = completed_steps(self._resume_dir)
+        if step_name in done:
+            print(f"[checkpoint] Skipping {step_name} (already completed)")
+            return True
+        return False
+
     @start()
     def synthesize_scenario(self):
+        if self._should_skip("synthesize_scenario"):
+            return
         self.ui.status("Synthesizing scenario")
         t0 = time.monotonic()
-        run_synthesize_scenario(self.state, self.agents_config, self.tasks_config, ui=self.ui)
+        run_synthesize_topology(self.state, self.agents_config, self.tasks_config, ui=self.ui)
         self.ui.step_done("Synthesizing scenario", time.monotonic() - t0)
+        save_checkpoint(self.state, "synthesize_scenario")
 
     @listen(synthesize_scenario)
-    def resolve_custom_apps(self):
-        vectors = (
-            self.state.synthesized_scenario.custom_vectors
-            if self.state.synthesized_scenario
-            else []
-        )
-        label = f"Resolving custom apps ({len(vectors)})" if vectors else "Resolving custom apps"
-        if not vectors:
+    def box_pipelines(self):
+        """Run the full per-box pipeline for every box in the topology (parallel)."""
+        if self._should_skip("box_pipelines"):
             return
-        self.ui.status(label)
+        self.ui.status("Running box pipelines")
         t0 = time.monotonic()
-        run_resolve_custom_apps(self.state, ui=self.ui)
-        self.ui.step_done(label, time.monotonic() - t0)
+        run_box_pipelines(self.state, self.agents_config, self.tasks_config, ui=self.ui)
+        self.ui.step_done("Running box pipelines", time.monotonic() - t0)
+        save_checkpoint(self.state, "box_pipelines")
 
-    @listen(resolve_custom_apps)
-    def engineer_requirements(self):
-        self.ui.status("Engineering requirements")
+    @listen(box_pipelines)
+    def chain_test(self):
+        """Multi-box: validate end-to-end attack chain. Single-box: no-op."""
+        if self._should_skip("chain_test"):
+            return
+        self.ui.status("Chain testing")
         t0 = time.monotonic()
-        run_engineer_requirements(self.state, self.agents_config, self.tasks_config, ui=self.ui)
-        self.ui.step_done("Engineering requirements", time.monotonic() - t0)
+        run_chain_test(self.state, self.agents_config, self.tasks_config, ui=self.ui)
+        self.ui.step_done("Chain testing", time.monotonic() - t0)
+        save_checkpoint(self.state, "chain_test")
 
-    @listen(engineer_requirements)
-    def generate_implementation(self):
-        n = len(self.state.sequenced_request) if self.state.sequenced_request else 0
-        label = f"Generating snippets ({n} atoms)"
-        self.ui.status(label)
+    @listen(chain_test)
+    def finalize_topology(self):
+        """Multi-box: write output package. Single-box: no-op."""
+        if self._should_skip("finalize_topology"):
+            return
+        self.ui.status("Finalizing output")
         t0 = time.monotonic()
-        run_generate_implementation(self.state, self.agents_config, self.tasks_config, ui=self.ui)
-        self.ui.step_done(label, time.monotonic() - t0)
-
-    @listen(generate_implementation)
-    def test_snippets(self):
-        run_test_snippets(self.state, self.agents_config, self.tasks_config, ui=self.ui)
-
-    @listen(test_snippets)
-    def finalize_script(self):
-        self.ui.status("Finalizing script")
-        t0 = time.monotonic()
-        run_finalize_script(self.state, self.agents_config, self.tasks_config, ui=self.ui)
-        self.ui.step_done("Finalizing script", time.monotonic() - t0)
+        run_finalize_topology(self.state, self.agents_config, self.tasks_config, ui=self.ui)
+        self.ui.step_done("Finalizing output", time.monotonic() - t0)
+        save_checkpoint(self.state, "finalize_topology")
 
         # Print summary
         all_snippets = self.state.generated_snippets or []
@@ -123,7 +148,7 @@ class GoEFlow(Flow[GoEState]):
         if self.state.output_path:
             self.ui.summary(validated, len(all_snippets), skipped, Path(self.state.output_path))
 
-    @listen(finalize_script)
+    @listen(finalize_topology)
     def deploy(self):
         run_deploy(self.state, ui=self.ui)
 
@@ -133,7 +158,16 @@ class GoEFlow(Flow[GoEState]):
 
 
 def kickoff():
-    goe_flow = GoEFlow()
+    parser = argparse.ArgumentParser(description="Game of Everything")
+    parser.add_argument(
+        "--resume",
+        metavar="CHECKPOINT_DIR",
+        default=os.environ.get("GOE_RESUME_DIR"),
+        help="Resume from a checkpoint directory (e.g. output/.checkpoints/<run_id>)",
+    )
+    args, _ = parser.parse_known_args()
+    resume_dir = Path(args.resume) if args.resume else None
+    goe_flow = GoEFlow(resume_dir=resume_dir)
     try:
         goe_flow.kickoff()
     finally:

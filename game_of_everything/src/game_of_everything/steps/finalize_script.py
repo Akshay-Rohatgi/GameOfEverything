@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+import rich
+
 from game_of_everything.state import GoEState
 from game_of_everything.script_postprocessor import apply_post_processors
 
@@ -18,9 +20,20 @@ def run_finalize_script(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    skip_disk_write: bool = False,
     ui: Optional["GoEConsole"] = None,
 ) -> None:
-    """Concatenate validated snippets through the post-processor pipeline and write the final script."""
+    """Concatenate validated snippets through the post-processor pipeline and write the final script.
+
+    Args:
+        state: Flow state to mutate in-place.
+        agents_config: Loaded agents.yaml dict (unused — included for interface consistency).
+        tasks_config: Loaded tasks.yaml dict (unused — included for interface consistency).
+        skip_disk_write: When True, populate state.final_script but do not write to disk.
+            Used by run_box_pipelines so per-box scripts are collected into deploy_scripts
+            and written once by finalize_topology rather than as stray timestamped files.
+        ui: Optional GoEConsole for structured output.
+    """
     if not state.generated_snippets and not state.resolved_custom_apps:
         if ui:
             ui.log("No generated snippets to finalize. Skipping.")
@@ -28,7 +41,6 @@ def run_finalize_script(
 
     # Only include validated snippets
     all_snippets = state.generated_snippets or []
-    validated = [s for s in all_snippets if s.validated]
     skipped = [s for s in all_snippets if not s.validated]
 
     # Log skipped snippets
@@ -62,21 +74,53 @@ def run_finalize_script(
             if ui:
                 ui.log(f"  Skipping custom app '{app.vector.vuln_atom_id}' (validation failed)")
 
-    if not validated and not custom_sections:
+    if not (state.generated_snippets or []) and not custom_sections:
         if ui:
             ui.log("No snippets passed validation. No deployment script generated.")
+        else:
+            rich.print("[bold red]No snippets passed validation. No deployment script generated.[/bold red]")
         return
 
-    # Concatenate: custom apps first, then misconfig snippets in sequenced order
+    # Build a lookup of failure reasons from test_results for commented-out stubs
+    failure_reasons: dict = {}
+    if state.test_results:
+        for tr in state.test_results:
+            if not tr.layer1_verdict.passed:
+                failure_reasons[tr.atom_name] = tr.layer1_verdict.reasoning
+            elif tr.layer2_verdicts and not all(v.passed for v in tr.layer2_verdicts):
+                failed_l2 = [v.reasoning for v in tr.layer2_verdicts if not v.passed]
+                failure_reasons[tr.atom_name] = "Layer 2: " + "; ".join(failed_l2)
+
+    # Concatenate: custom apps first, then all snippets in sequenced order.
+    # Failed snippets are included as commented-out stubs so the reader knows
+    # what was attempted and why it was skipped.
     sections = custom_sections[:]
-    for snippet in validated:
-        header = f"# --- {snippet.atom_name} ---"
-        sections.append(f"{header}\n{snippet.code_snippet}")
+    for snippet in state.generated_snippets or []:
+        if snippet.validated:
+            header = f"# --- {snippet.atom_name} ---"
+            sections.append(f"{header}\n{snippet.code_snippet}")
+        else:
+            reason = failure_reasons.get(snippet.atom_name, "validation failed")
+            commented_code = "\n".join(
+                f"# {line}" for line in snippet.code_snippet.splitlines()
+            )
+            stub = (
+                f"# --- {snippet.atom_name} (SKIPPED: {reason}) ---\n"
+                f"{commented_code}"
+            )
+            sections.append(stub)
     raw_script = "\n\n".join(sections)
 
     # Run through the extensible post-processor pipeline
     final_script = apply_post_processors(raw_script)
     state.final_script = final_script
+
+    if skip_disk_write:
+        if ui:
+            ui.log("finalize_script: skip_disk_write=True — script stored in state, not written to disk.")
+        else:
+            rich.print("[dim]finalize_script: skip_disk_write=True — script stored in state, not written to disk.[/dim]")
+        return
 
     # Write to output/<timestamp>_deploy.sh
     output_dir = _PROJECT_ROOT / "output"

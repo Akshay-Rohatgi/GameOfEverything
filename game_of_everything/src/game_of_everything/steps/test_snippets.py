@@ -13,6 +13,8 @@ import json
 import time
 from typing import List, Optional, TYPE_CHECKING
 
+import rich
+
 
 def _si(s: str) -> str:
     """Sanitize a string for use as a crewAI crew.kickoff() input value."""
@@ -47,15 +49,19 @@ def _run_verdict_crew(
     exit_code: int,
     stdout: str,
     stderr: str,
+    box_id: str = "",
     ui: Optional["GoEConsole"] = None,
 ) -> TestVerdict:
     """Kick off a one-task Testing Agent crew to judge command output."""
     llm = make_llm("testing_agent")
+    _tag = f"[{box_id}][TESTER]" if box_id else "[TESTER]"
+    use_verbose = not bool(ui)
 
     tester = Agent(
         config=agents_config["testing_agent"],
         llm=llm,
         verbose=False,
+        **({"step_callback": lambda step: print(f"{_tag} {step}")} if not ui and box_id else {}),
     )  # type: ignore
 
     verdict_task = Task(
@@ -65,6 +71,7 @@ def _run_verdict_crew(
     )
 
     verdict_crew = Crew(
+        name=f"{box_id}/verdict/{atom_name}" if box_id else f"verdict/{atom_name}",
         agents=[tester],
         tasks=[verdict_task],
         process=Process.sequential,
@@ -111,16 +118,21 @@ def _run_diagnostic_crew(
     l1_stderr: str,
     verdict_reasoning: str,
     attempt_number: int,
+    box_id: str = "",
+    target_container_name: str = "goe_target",
+    attacker_container_name: str = "goe_attacker",
     ui: Optional["GoEConsole"] = None,
 ) -> DiagnosticResult:
     """Kick off a one-task Diagnostic Agent crew to diagnose and fix a failing snippet."""
     llm = make_llm("diagnostic_agent")
+    _tag = f"[{box_id}][DIAGNOSTICIAN]" if box_id else "[DIAGNOSTICIAN]"
 
     diagnostician = Agent(
         config=agents_config["diagnostic_agent"],
         llm=llm,
         tools=[ReadAtomTool(), ExecInContainerTool()],
         verbose=False,
+        **({"step_callback": lambda step: print(f"{_tag} {step}")} if not ui and box_id else {}),
     )  # type: ignore
 
     diag_task = Task(
@@ -130,6 +142,7 @@ def _run_diagnostic_crew(
     )
 
     diag_crew = Crew(
+        name=f"{box_id}/diagnostic/{atom_name}" if box_id else f"diagnostic/{atom_name}",
         agents=[diagnostician],
         tasks=[diag_task],
         process=Process.sequential,
@@ -149,6 +162,8 @@ def _run_diagnostic_crew(
         "l1_stderr": _si(l1_stderr or "(empty)"),
         "verdict_reasoning": _si(verdict_reasoning),
         "attempt_number": str(attempt_number),
+        "target_container_name": target_container_name,
+        "attacker_container_name": attacker_container_name,
     }
 
     if ui:
@@ -176,16 +191,33 @@ def run_test_snippets(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    env: Optional[TestEnvironmentTool] = None,
+    box_id: str = "",
     ui: Optional["GoEConsole"] = None,
 ) -> None:
-    """Test generated snippets in Docker containers with two-layer validation."""
+    """Test generated snippets in Docker containers with two-layer validation.
+
+    Args:
+        state: Flow state to mutate in-place.
+        agents_config: Loaded agents.yaml dict.
+        tasks_config: Loaded tasks.yaml dict.
+        env: Optional pre-constructed TestEnvironmentTool. When supplied the
+             caller owns the lifecycle (setup/teardown are NOT called here).
+             When None (default), this function creates, sets up, and tears
+             down its own TestEnvironmentTool() — original behaviour.
+        box_id: Optional box identifier for scoped logging/container names.
+        ui: Optional GoEConsole for structured output.
+    """
+
     if not state.generated_snippets:
         if ui:
             ui.log("No generated snippets to test. Skipping.")
         return
 
     snippets = state.generated_snippets
-    env = TestEnvironmentTool()
+    _owns_env = env is None
+    if _owns_env:
+        env = TestEnvironmentTool()
     results: List[TestResult] = []
 
     if ui:
@@ -193,11 +225,16 @@ def run_test_snippets(
     t0 = time.monotonic()
 
     try:
-        if ui:
-            ui.log("\n=== SETTING UP TEST ENVIRONMENT ===")
-        env.setup()
-        if ui:
-            ui.log("Test environment ready (target + attacker on goe_test_net)")
+        if _owns_env:
+            if ui:
+                ui.log("\n=== SETTING UP TEST ENVIRONMENT ===")
+            else:
+                rich.print("\n[bold yellow]=== SETTING UP TEST ENVIRONMENT ===[/bold yellow]")
+            env.setup()
+            if ui:
+                ui.log(f"Test environment ready ({env.target_name} + {env.attacker_name} on {env.network_name})")
+            else:
+                rich.print(f"[green]Test environment ready ({env.target_name} + {env.attacker_name} on {env.network_name})[/green]")
 
         # Ensure attacker container has all referenced tools
         all_attack_snippets = [s.attack_snippet for s in snippets if s.attack_snippet]
@@ -205,6 +242,17 @@ def run_test_snippets(
             if ui:
                 ui.log("Checking attacker container for required tools...")
             env.ensure_attacker_tools(all_attack_snippets)
+
+        # Ensure target container has all tools referenced in code/testing snippets
+        all_code_snippets = [s.code_snippet for s in snippets]
+        all_testing_snippets = [s.testing_snippet for s in snippets]
+        if ui:
+            ui.log("Checking target container for required tools...")
+        else:
+            rich.print("[yellow]Checking target container for required tools...[/yellow]")
+        env.ensure_target_tools(all_code_snippets, all_testing_snippets)
+        if not ui:
+            rich.print("[green]Target tools verified.[/green]")
 
         MAX_DIAGNOSTIC_RETRIES = 2
 
@@ -237,6 +285,7 @@ def run_test_snippets(
                 # Layer 1: run testing_snippet, ask LLM to judge
                 if ui:
                     ui.log("  Running Layer 1 (internal state check)...")
+                    ui.test_layer_status(snippet.atom_name, "L1", snippet.testing_snippet)
                 l1_exit, l1_stdout, l1_stderr = env.exec_in_target(snippet.testing_snippet)
                 if ui:
                     ui.log(f"  Layer 1 exit code: {l1_exit}")
@@ -251,6 +300,7 @@ def run_test_snippets(
                     exit_code=l1_exit,
                     stdout=l1_stdout,
                     stderr=l1_stderr,
+                    box_id=box_id,
                     ui=ui,
                 )
 
@@ -281,6 +331,9 @@ def run_test_snippets(
                         l1_stderr=l1_stderr,
                         verdict_reasoning=l1_verdict.reasoning,
                         attempt_number=attempt + 1,
+                        box_id=box_id,
+                        target_container_name=env.target_name,
+                        attacker_container_name=env.attacker_name,
                         ui=ui,
                     )
 
@@ -302,7 +355,7 @@ def run_test_snippets(
                     layer1_verdict=l1_verdict,  # type: ignore
                     layer2_verdicts=None,
                     diagnostic_results=diagnostic_attempts if diagnostic_attempts else None,
-                    error=f"Layer 1 failed after {len(diagnostic_attempts)} diagnostic retries — chain stopped at snippet {i}.",
+                    error=f"Layer 1 failed after {len(diagnostic_attempts)} diagnostic retries — snippet skipped.",
                 ))
                 if ui:
                     ui.test_result(
@@ -311,7 +364,7 @@ def run_test_snippets(
                         retries=len(diagnostic_attempts),
                         testing_snippet=snippet.testing_snippet,
                     )
-                # Mark all remaining snippets as not validated
+                # Stop on first L1 failure: mark remaining snippets as not validated
                 for remaining in snippets[i + 1:]:
                     remaining.set_validated(False)
                     if ui:
@@ -323,10 +376,13 @@ def run_test_snippets(
             l2_diagnostics: List[DiagnosticResult] = []
 
             for j in range(i + 1):
+                if j < i and not snippets[j].validated:
+                    continue  # skip L2 probes for snippets that failed L1
                 attack = snippets[j].attack_snippet
                 if attack:
                     if ui:
                         ui.log(f"  Running Layer 2 probe for snippet {j} ({snippets[j].atom_name})...")
+                        ui.test_layer_status(snippets[j].atom_name, "L2", attack)
                     a_exit, a_stdout, a_stderr = env.exec_in_attacker(attack)
 
                     verdict = _run_verdict_crew(
@@ -339,6 +395,7 @@ def run_test_snippets(
                         exit_code=a_exit,
                         stdout=a_stdout,
                         stderr=a_stderr,
+                        box_id=box_id,
                         ui=ui,
                     )
                     l2_verdicts.append(verdict)
@@ -367,6 +424,9 @@ def run_test_snippets(
                             l1_stderr=a_stderr,
                             verdict_reasoning=verdict.reasoning,
                             attempt_number=1,
+                            box_id=box_id,
+                            target_container_name=env.target_name,
+                            attacker_container_name=env.attacker_name,
                             ui=ui,
                         )
                         l2_diagnostics.append(l2_diag)
@@ -423,8 +483,13 @@ def run_test_snippets(
                     ui.log(f"    {result.error}")
 
     finally:
-        if ui:
-            ui.log("\n=== TEARING DOWN TEST ENVIRONMENT ===")
-        env.teardown()
-        if ui:
-            ui.log("Test environment cleaned up.")
+        if _owns_env:
+            if ui:
+                ui.log("\n=== TEARING DOWN TEST ENVIRONMENT ===")
+            else:
+                rich.print("\n[bold yellow]=== TEARING DOWN TEST ENVIRONMENT ===[/bold yellow]")
+            env.teardown()
+            if ui:
+                ui.log("Test environment cleaned up.")
+            else:
+                rich.print("[green]Test environment cleaned up.[/green]")

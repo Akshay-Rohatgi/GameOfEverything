@@ -19,9 +19,22 @@ def run_generate_implementation(
     state: GoEState,
     agents_config: dict,
     tasks_config: dict,
+    box_id: str = "",
+    target_hostname: str = "target",
     ui: Optional["GoEConsole"] = None,
 ) -> None:
-    """Generate implementation snippets for each sequenced atom."""
+    """Generate implementation snippets for each sequenced atom.
+
+    Args:
+        state: Flow state to mutate in-place.
+        agents_config: Loaded agents.yaml dict.
+        tasks_config: Loaded tasks.yaml dict.
+        box_id: Optional box identifier for scoped logging.
+        target_hostname: Hostname of the target container on the Docker bridge
+            network.  Used by attack_snippets so they address the correct host.
+            Defaults to "target" (the single-box default).
+        ui: Optional GoEConsole for structured output.
+    """
     if not state.sequenced_request:
         if ui:
             ui.log("No sequenced atoms to generate snippets for. Skipping.")
@@ -32,11 +45,15 @@ def run_generate_implementation(
         indent=2,
     )
 
+    _tag = f"[{box_id}][SNIPPET-GEN]" if box_id else "[SNIPPET-GEN]"
+    use_verbose = not bool(ui)
+
     snippet_generator = Agent(
         config=agents_config["snippet_generation_agent"],
         llm=make_llm("snippet_generation_agent"),
         tools=[ReadAtomTool(), SearchAtomsTool()],
-        verbose=False,
+        verbose=use_verbose,
+        **({"step_callback": lambda step: print(f"{_tag} {step}")} if not ui and box_id else {}),
     )  # type: ignore
 
     generate_task = Task(
@@ -46,6 +63,7 @@ def run_generate_implementation(
     )
 
     generation_crew = Crew(
+        name=f"{box_id}/generate_implementation" if box_id else "generate_implementation",
         agents=[snippet_generator],
         tasks=[generate_task],
         process=Process.sequential,
@@ -53,11 +71,16 @@ def run_generate_implementation(
         function_calling_llm=make_llm("snippet_generation_agent"),
     )
 
+    kickoff_inputs = {
+        "sequenced_atoms_json": sequenced_atoms_json,
+        "target_hostname": target_hostname,
+    }
+
     if ui:
         with ui.capture():
-            generation_crew.kickoff(inputs={"sequenced_atoms_json": sequenced_atoms_json})
+            generation_crew.kickoff(inputs=kickoff_inputs)
     else:
-        generation_crew.kickoff(inputs={"sequenced_atoms_json": sequenced_atoms_json})
+        generation_crew.kickoff(inputs=kickoff_inputs)
 
     if generate_task.output.pydantic:  # type: ignore
         state.generated_snippets = generate_task.output.pydantic.snippets  # type: ignore
