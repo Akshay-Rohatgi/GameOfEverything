@@ -20,6 +20,12 @@ from typing import Dict, List, Set, Tuple, Optional
 import docker
 from docker.errors import DockerException, NotFound, APIError
 
+from game_of_everything.tools.naming import (
+    box_container_name as _box_name,
+    attacker_container_name as _attacker_name,
+    network_name as _network_name,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,9 +64,9 @@ def wait_for_docker(action: str = "setup Docker environment") -> None:
 
 # Default names (single-box / no scope). Multi-box runs use a scope prefix
 # so that each box gets its own isolated set of containers + network.
-_DEFAULT_NETWORK = "goe_test_net"
-_DEFAULT_TARGET = "goe_target"
-_DEFAULT_ATTACKER = "goe_attacker"
+_DEFAULT_NETWORK = _network_name()
+_DEFAULT_TARGET = _box_name("target")
+_DEFAULT_ATTACKER = _attacker_name()
 
 # Legacy module-level constants kept for backwards-compat (test scripts, etc.)
 NETWORK_NAME = _DEFAULT_NETWORK
@@ -145,9 +151,9 @@ class TestEnvironmentTool:
     def __init__(self, scope: str = "", hostname: str = ""):
         """Args:
             scope: Optional prefix for container and network names.
-                   Empty string → default names (goe_target, goe_attacker, goe_test_net).
-                   Non-empty    → scoped names (goe_{scope}_target, etc.) so that
-                                  multiple boxes can run independently without collisions.
+                   Empty string → default names (goe_target, goe_attacker, goe_net).
+                   Non-empty    → scoped names (goe_{scope}, goe_{scope}_attacker, goe_{scope}_net)
+                                  so that multiple boxes can run independently without collisions.
             hostname: Hostname to assign to the target container.
                       Defaults to "target" when empty so single-box / legacy callers
                       are unaffected. Pass box.hostname for per-box multi-box runs so
@@ -183,20 +189,16 @@ class TestEnvironmentTool:
     # ------------------------------------------------------------------
 
     @property
-    def _prefix(self) -> str:
-        return f"goe_{self._scope}_" if self._scope else "goe_"
-
-    @property
     def network_name(self) -> str:
-        return f"{self._prefix}test_net"
+        return _network_name(self._scope)
 
     @property
     def target_name(self) -> str:
-        return f"{self._prefix}target"
+        return _box_name(self._scope) if self._scope else _box_name("target")
 
     @property
     def attacker_name(self) -> str:
-        return f"{self._prefix}attacker"
+        return _attacker_name(self._scope)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -214,13 +216,21 @@ class TestEnvironmentTool:
         self.network = self.client.networks.create(self.network_name, driver="bridge")
         logger.info(f"Created network: {self.network_name}")
 
-        # Start target container
+        # Start target container.
+        # The hostname is added as a network alias so Docker's embedded DNS
+        # resolves it from the attacker container (Docker DNS resolves container
+        # names and aliases, not the hostname= setting).
+        _net_cfg = self.client.api.create_networking_config({
+            self.network_name: self.client.api.create_endpoint_config(
+                aliases=[self._hostname]
+            )
+        })
         self.target_container = self.client.containers.run(
             TARGET_IMAGE,
             command="sleep infinity",
             name=self.target_name,
-            network=self.network_name,
             hostname=self._hostname,
+            networking_config=_net_cfg,
             detach=True,
             remove=False,
         )

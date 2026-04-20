@@ -20,6 +20,7 @@ import rich
 from game_of_everything.models import NetworkTopology
 from game_of_everything.state import GoEState
 from game_of_everything.topology_utils import topological_order
+from game_of_everything.tools.naming import box_container_name
 
 # Project root: steps/ → game_of_everything/ → src/ → game_of_everything/ → (project root)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -52,6 +53,7 @@ def _build_docker_compose(topology: NetworkTopology) -> str:
     ordered = topological_order(topology)
     for box in ordered:
         lines.append(f"  {box.box_id}:")
+        lines.append(f"    container_name: {box_container_name(box.box_id)}")
         lines.append(f"    image: {box.os}")
         lines.append(f"    hostname: {box.hostname}")
         lines.append("    networks:")

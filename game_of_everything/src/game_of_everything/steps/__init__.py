@@ -8,3 +8,5 @@ from game_of_everything.steps.finalize_script import run_finalize_script
 from game_of_everything.steps.run_box_pipelines import run_box_pipelines
 from game_of_everything.steps.test_chain import run_chain_test
 from game_of_everything.steps.finalize_topology import run_finalize_topology
+from game_of_everything.steps.review_and_fix import run_review_and_fix
+from game_of_everything.steps.deploy_ec2 import run_deploy_ec2

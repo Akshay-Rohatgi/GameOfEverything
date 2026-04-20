@@ -19,6 +19,7 @@ STEP_ORDER = [
     "box_pipelines",
     "chain_test",
     "finalize_topology",
+    "review_and_fix",
 ]
 
 _STEP_INDEX = {name: i for i, name in enumerate(STEP_ORDER)}

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 # Helper crews
 # ---------------------------------------------------------------------------
 
-def _run_verdict_crew(
+def run_verdict_crew(
     agents_config: dict,
     tasks_config: dict,
     atom_name: str,
@@ -102,7 +102,7 @@ def _run_verdict_crew(
     )
 
 
-def _run_diagnostic_crew(
+def run_diagnostic_crew(
     agents_config: dict,
     tasks_config: dict,
     atom_name: str,
@@ -117,8 +117,9 @@ def _run_diagnostic_crew(
     verdict_reasoning: str,
     attempt_number: int,
     box_id: str = "",
-    target_container_name: str = "goe_target",
-    attacker_container_name: str = "goe_attacker",
+    target_container_name: str = "goe_target",  # overridden by caller with env.target_name
+    attacker_container_name: str = "goe_attacker",  # overridden by caller with env.attacker_name
+    extra_context: str = "",
 ) -> DiagnosticResult:
     """Kick off a one-task Diagnostic Agent crew to diagnose and fix a failing snippet."""
     llm = make_llm("diagnostic_agent")
@@ -158,7 +159,7 @@ def _run_diagnostic_crew(
             "l1_exit_code": str(l1_exit_code),
             "l1_stdout": _si(l1_stdout or "(empty)"),
             "l1_stderr": _si(l1_stderr or "(empty)"),
-            "verdict_reasoning": _si(verdict_reasoning),
+            "verdict_reasoning": _si(verdict_reasoning + ("\n\n--- ADDITIONAL CONTEXT FROM USER ---\n" + extra_context if extra_context else "")),
             "attempt_number": str(attempt_number),
             "target_container_name": target_container_name,
             "attacker_container_name": attacker_container_name,
@@ -281,7 +282,7 @@ def run_test_snippets(
                 if ui:
                     ui.log(f"  Layer 1 exit code: {l1_exit}")
 
-                l1_verdict = _run_verdict_crew(
+                l1_verdict = run_verdict_crew(
                     agents_config=agents_config,
                     tasks_config=tasks_config,
                     atom_name=snippet.atom_name,
@@ -307,7 +308,7 @@ def run_test_snippets(
                     if ui:
                         ui.log(f"  Layer 1 FAILED. Running Diagnostic Agent (attempt {attempt + 1}/{MAX_DIAGNOSTIC_RETRIES})...")
 
-                    diag_result = _run_diagnostic_crew(
+                    diag_result = run_diagnostic_crew(
                         agents_config=agents_config,
                         tasks_config=tasks_config,
                         atom_name=snippet.atom_name,
@@ -364,7 +365,7 @@ def run_test_snippets(
                         ui.test_layer_status(snippets[j].atom_name, "L2", attack)
                     a_exit, a_stdout, a_stderr = env.exec_in_attacker(attack)
 
-                    verdict = _run_verdict_crew(
+                    verdict = run_verdict_crew(
                         agents_config=agents_config,
                         tasks_config=tasks_config,
                         atom_name=snippets[j].atom_name,
@@ -386,9 +387,9 @@ def run_test_snippets(
                         if j < i and ui:
                             ui.log(f"    REGRESSION: snippet {j} Layer 2 was passing, now fails after snippet {i}")
 
-                        if ui:
-                            ui.log("    Running Diagnostic Agent for L2 failure (log only)...")
-                        l2_diag = _run_diagnostic_crew(
+                        # Run diagnostic for L2 failure (log only, no retry)
+                        rich.print(f"    [yellow]Running Diagnostic Agent for L2 failure (log only)...[/yellow]")
+                        l2_diag = run_diagnostic_crew(
                             agents_config=agents_config,
                             tasks_config=tasks_config,
                             atom_name=snippets[j].atom_name,
