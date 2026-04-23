@@ -6,8 +6,8 @@ flat network) to validate end-to-end attack chains via ChainProbe execution.
 Design decisions:
   - Each box runs ubuntu:22.04 with the generated deploy.sh applied at runtime.
   - Attacker container uses the same goe-attacker:latest image as snippet testing.
-  - All containers share a flat Docker bridge network (goe_chain_net).
-  - Container names: goe_chain_{box_id}  /  goe_chain_attacker.
+  - All containers share a flat Docker bridge network (goe_net).
+  - Container names: goe_{box_id}  /  goe_attacker.
   - Each box hostname is set to box.hostname (matches ChainProbe target fields).
 """
 
@@ -26,15 +26,16 @@ from game_of_everything.tools.test_environment import (
     ATTACKER_DOCKERFILE_DIR,
     wait_for_docker,
 )
+from game_of_everything.tools.naming import (
+    box_container_name as _box_container_name,
+    attacker_container_name,
+    network_name,
+)
 
 logger = logging.getLogger(__name__)
 
-CHAIN_NETWORK_NAME = "goe_chain_net"
-_ATTACKER_CONTAINER_NAME = "goe_chain_attacker"
-
-
-def _box_container_name(box_id: str) -> str:
-    return f"goe_chain_{box_id}"
+CHAIN_NETWORK_NAME = network_name()
+_ATTACKER_CONTAINER_NAME = attacker_container_name()
 
 
 class ChainTestEnvironment:
@@ -74,12 +75,20 @@ class ChainTestEnvironment:
         for box in self._topology.boxes:
             cname = _box_container_name(box.box_id)
             logger.info(f"Starting box container: {cname} (hostname={box.hostname})")
+            # Add the box hostname as a network alias so Docker DNS resolves it
+            # from the attacker (Docker DNS only resolves container names and
+            # aliases, not the hostname= setting).
+            _net_cfg = self.client.api.create_networking_config({
+                CHAIN_NETWORK_NAME: self.client.api.create_endpoint_config(
+                    aliases=[box.hostname]
+                )
+            })
             container = self.client.containers.run(
                 TARGET_IMAGE,
                 command="sleep infinity",
                 name=cname,
-                network=CHAIN_NETWORK_NAME,
                 hostname=box.hostname,
+                networking_config=_net_cfg,
                 detach=True,
                 remove=False,
             )

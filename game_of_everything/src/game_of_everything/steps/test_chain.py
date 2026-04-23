@@ -16,14 +16,11 @@ model — there is no point running step N+1 if step N's credential pivot failed
 
 import logging
 import re
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional
 
 from game_of_everything.models import ChainTestResult
 from game_of_everything.state import GoEState
 from game_of_everything.tools.chain_test_environment import ChainTestEnvironment
-
-if TYPE_CHECKING:
-    from game_of_everything.ui import GoEConsole
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +29,6 @@ def run_chain_test(
     state: GoEState,
     agents_config: Optional[dict] = None,
     tasks_config: Optional[dict] = None,
-    ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Execute all ChainProbes against a live topology. Mutates ``state.chain_test_results``."""
 
@@ -67,11 +63,8 @@ def run_chain_test(
     results: List[ChainTestResult] = []
     cascade_failed = False
 
-    if ui:
-        ui.chain_test_header(topology.scenario_name, len(topology.chain_probes))
-    else:
-        print(f"\n=== CHAIN TEST: {topology.scenario_name} ===")
-        print(f"Running {len(topology.chain_probes)} chain probe(s)...\n")
+    print(f"\n=== CHAIN TEST: {topology.scenario_name} ===")
+    print(f"Running {len(topology.chain_probes)} chain probe(s)...\n")
 
     try:
         env.setup()
@@ -111,16 +104,12 @@ def run_chain_test(
                 continue
 
             passed = bool(re.search(probe.success_pattern, stdout))
-            if ui:
-                ui.chain_test_result(probe.step, probe.command, passed)
-            else:
-                status = "PASS" if passed else "FAIL"
-                print(f"  [{status}] Step {probe.step}: {probe.command[:60]}")
+            status = "PASS" if passed else "FAIL"
+            print(f"  [{status}] Step {probe.step}: {probe.command[:60]}")
             if not passed:
-                if not ui:
-                    print(f"         Pattern  : {probe.success_pattern!r}")
-                    print(f"         stdout   : {stdout[:200]!r}")
-                    print(f"         stderr   : {stderr[:200]!r}")
+                print(f"         Pattern  : {probe.success_pattern!r}")
+                print(f"         stdout   : {stdout[:200]!r}")
+                print(f"         stderr   : {stderr[:200]!r}")
                 cascade_failed = True
 
             results.append(
@@ -140,11 +129,8 @@ def run_chain_test(
 
     passed_count = sum(1 for r in results if r.passed)
     total = len(results)
-    if ui:
-        ui.chain_test_done(passed_count, total)
+    print(f"\nChain test complete: {passed_count}/{total} probes passed.")
+    if passed_count == total:
+        print("Full attack chain validated!\n")
     else:
-        print(f"\nChain test complete: {passed_count}/{total} probes passed.")
-        if passed_count == total:
-            print("Full attack chain validated!\n")
-        else:
-            print("Chain incomplete — review probe outputs above.\n")
+        print("Chain incomplete — review probe outputs above.\n")

@@ -1,7 +1,7 @@
 """
 AttackFromContainerTool — crewAI BaseTool for Layer 2 (external attack simulation).
 
-Runs an attack_snippet inside the Kali attacker container on the goe_test_net
+Runs an attack_snippet inside the Kali attacker container on the goe_net
 Docker bridge network. The snippet targets the 'target' hostname, which resolves
 to the target container on the same network.
 
