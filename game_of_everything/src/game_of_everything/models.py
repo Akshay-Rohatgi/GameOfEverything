@@ -4,9 +4,16 @@ from pydantic import BaseModel, field_validator
 
 
 class CustomVector(BaseModel):
-    """Inputs to CustomAppFlow — which vulnerability, runtime, and attack goal to use."""
-    vuln_atom_id: str                           # e.g. "sqli_union", "ssti_jinja2"
-    attack_chain_goal: str                      # e.g. "credential_theft", "rce_via_webshell"
+    """Inputs to CustomAppFlow — which vulnerabilities, runtime, and attack goals to use.
+
+    A single CustomVector can carry multiple vuln atoms and attack goals when
+    the vulnerabilities are meant to chain within one application (e.g. file
+    upload + LFI → RCE).  The legacy singular fields (vuln_atom_id,
+    attack_chain_goal) are accepted for backward compatibility and coerced
+    into the list forms automatically.
+    """
+    vuln_atom_ids: List[str]                    # e.g. ["sqli_union"] or ["file_upload_bypass", "path_traversal_lfi"]
+    attack_chain_goals: List[str]               # e.g. ["credential_theft"] or ["rce_via_webshell", "lfi_to_rce"]
     runtime_id: str                             # e.g. "apache_php", "flask", "express"
     install_path: str = "/var/www/html/app"
     port: int = 80
@@ -16,6 +23,71 @@ class CustomVector(BaseModel):
     seed_username: Optional[str] = None         # OS user whose creds are seeded into the app DB
     seed_password: Optional[str] = None
     synthesis_context: str = ""                 # From SynthesizedScenario.custom_app_scope
+
+    # --- Backward-compat: accept singular fields and coerce to lists ----------
+
+    @field_validator("vuln_atom_ids", mode="before")
+    @classmethod
+    def _coerce_vuln_atom_ids(cls, v):
+        if isinstance(v, str):
+            return [v]
+        return v
+
+    @field_validator("attack_chain_goals", mode="before")
+    @classmethod
+    def _coerce_attack_chain_goals(cls, v):
+        if isinstance(v, str):
+            return [v]
+        return v
+
+    def __init__(self, **data):
+        # Allow callers to pass the old singular field names
+        if "vuln_atom_id" in data and "vuln_atom_ids" not in data:
+            data["vuln_atom_ids"] = data.pop("vuln_atom_id")
+        if "attack_chain_goal" in data and "attack_chain_goals" not in data:
+            data["attack_chain_goals"] = data.pop("attack_chain_goal")
+        super().__init__(**data)
+
+    # --- Convenience properties -----------------------------------------------
+
+    @property
+    def vuln_atom_id(self) -> str:
+        """Primary vuln atom id (first in the list). Used for display and single-vuln compat."""
+        return self.vuln_atom_ids[0]
+
+    @property
+    def attack_chain_goal(self) -> str:
+        """Primary attack chain goal (first in the list)."""
+        return self.attack_chain_goals[0]
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable label for logging: 'file_upload_bypass+path_traversal_lfi'."""
+        return "+".join(self.vuln_atom_ids)
+
+
+class PresetVector(BaseModel):
+    """Inputs to PresetAppFlow — which pre-built app and vulnerability profile to deploy."""
+    preset_id: str                              # e.g. "wordpress", "phpbb"
+    vuln_profile_ids: List[str]                 # e.g. ["wp_default_creds"]
+    port: int = 80
+    admin_user: Optional[str] = None
+    admin_password: Optional[str] = None
+    db_name: Optional[str] = None
+    db_user: Optional[str] = None
+    db_password: Optional[str] = None
+    synthesis_context: str = ""
+    extra_vars: Dict[str, str] = {}             # App-specific overrides (plugin slug, etc.)
+
+
+class ResolvedPresetApp(BaseModel):
+    """A validated preset app ready to be sequenced into the deploy script."""
+    vector: PresetVector
+    stack_id: str
+    deploy_snippet: str
+    testing_snippet: str
+    attack_snippet: str
+    validation_passed: bool
 
 
 class SharedSecret(BaseModel):
@@ -50,6 +122,7 @@ class BoxSpec(BaseModel):
     misconfig_scope: str            # Attacker-facing vulnerability description for this box
     custom_app_scope: Optional[str] = None
     custom_vectors: List[CustomVector] = []
+    preset_vectors: List["PresetVector"] = []
     services: List[str] = []        # ["ssh:22", "http:80", "mysql:3306"]
     attack_vector: str = ""         # "Unauthenticated Web RCE -> SUID Data Exfiltration"
     goal: str = ""                  # "Harvest internal credentials for [backup01]"
@@ -67,6 +140,7 @@ class SynthesizedScenario(BaseModel):
     misconfig_scope: str = ""                   # Single-box: pipeline input. Multi-box: unused (see boxes)
     custom_app_scope: Optional[str] = None      # Single-box: custom app description. Multi-box: unused
     custom_vectors: List[CustomVector] = []     # Single-box: structured vectors. Multi-box: unused
+    preset_vectors: List[PresetVector] = []    # Single-box: preset app vectors. Multi-box: unused
     num_boxes: int = 1                          # Number of boxes required to build this scenario
     # Multi-box: per-box pipeline descriptions (populated when num_boxes > 1)
     boxes: List[BoxSpec] = []
@@ -160,6 +234,13 @@ class DiagnosticResult(BaseModel):
     confidence: str          # "high", "medium", or "low"
 
 
+class AttackDiagnosticResult(BaseModel):
+    """Output from the Attack Agent's fix of a failing L2 attack snippet."""
+    fixed_attack_snippet: str
+    diagnosis: str
+    confidence: str          # "high", "medium", or "low"
+
+
 class TestResult(BaseModel):
     """
     Captures the full test outcome for a single snippet across both layers.
@@ -194,8 +275,8 @@ class ResolvedCustomApp(BaseModel):
 class CustomAppState(BaseModel):
     """State object for CustomAppFlow."""
     vector: Optional[CustomVector] = None
-    vuln_atom_content: Optional[str] = None    # Full atom markdown from web_vuln_atoms ChromaDB
-    attack_goal: Optional[dict] = None          # Loaded attack goal YAML
+    vuln_atom_contents: List[str] = []          # Full atom markdown per vuln_atom_id
+    attack_goals: List[dict] = []               # Loaded attack goal YAMLs
     web_runtime: Optional[dict] = None          # Loaded web runtime YAML
     generated_app: Optional[GeneratedApp] = None
     layer1_verdict: Optional["TestVerdict"] = None
@@ -236,6 +317,7 @@ class BoxDefinition(BaseModel):
     misconfig_scope: str
     custom_app_scope: Optional[str] = None
     custom_vectors: List[CustomVector] = []
+    preset_vectors: List[PresetVector] = []
 
     # What services this box exposes (for docker-compose ports + README)
     services: List[str] = []        # ["ssh:22", "http:80", "mysql:3306"]
@@ -300,6 +382,7 @@ def single_box_scenario_to_topology(
         misconfig_scope=scenario.misconfig_scope,
         custom_app_scope=scenario.custom_app_scope,
         custom_vectors=scenario.custom_vectors,
+        preset_vectors=scenario.preset_vectors,
         services=[],
     )
     return NetworkTopology(
@@ -335,6 +418,7 @@ def scenario_to_topology(scenario: SynthesizedScenario) -> NetworkTopology:
             misconfig_scope=spec.misconfig_scope,
             custom_app_scope=spec.custom_app_scope,
             custom_vectors=spec.custom_vectors,
+            preset_vectors=spec.preset_vectors,
             services=spec.services,
         )
         for spec in scenario.boxes

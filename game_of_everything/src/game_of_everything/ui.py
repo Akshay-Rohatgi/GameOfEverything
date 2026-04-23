@@ -24,6 +24,21 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _VERSION = "0.1.0"
 
 
+def _snippet_oneliner(snippet: str, max_len: int = 70) -> str:
+    """Collapse a multi-line bash snippet into a single display line.
+
+    Strips comment-only lines and blank lines, then joins and truncates.
+    """
+    lines = [
+        ln.strip() for ln in snippet.splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    cmd = " ".join(lines)
+    if len(cmd) > max_len:
+        cmd = cmd[:max_len] + "..."
+    return cmd
+
+
 class GoEConsole:
     """Clean CLI output manager. Captures agent noise to log file, shows progress on terminal."""
 
@@ -206,24 +221,8 @@ class GoEConsole:
         # Show executed commands as dim truncated lines
         for snippet in (testing_snippet, attack_snippet):
             if snippet:
-                cmd = snippet.replace('\n', ' ').strip()
-                if len(cmd) > 70:
-                    cmd = cmd[:70] + "..."
+                cmd = _snippet_oneliner(snippet)
                 self._console.print(f"        [dim]> {cmd}[/dim]")
-
-    def test_layer_status(self, atom: str, layer: str, command: str) -> None:
-        """Show which test layer is running for an atom with the truncated command.
-
-        Args:
-            atom: Atom name being tested.
-            layer: "L1" or "L2".
-            command: The bash command being executed (will be truncated).
-        """
-        cmd = command.replace('\n', ' ').strip()
-        if len(cmd) > 70:
-            cmd = cmd[:70] + "..."
-        name_padded = atom.ljust(26)
-        self._console.print(f"    [dim]● {name_padded} {layer}: {cmd}[/dim]", end="\r")
 
     def test_skipped(self, atom: str, reason: str = "upstream failed") -> None:
         """Show a skipped atom."""
@@ -328,9 +327,7 @@ class GoEConsole:
         # Show executed commands as dim truncated lines
         for snippet in (testing_snippet, attack_snippet):
             if snippet:
-                cmd = snippet.replace('\n', ' ').strip()
-                if len(cmd) > 70:
-                    cmd = cmd[:70] + "..."
+                cmd = _snippet_oneliner(snippet)
                 self._console.print(f"          [dim]> {cmd}[/dim]")
 
     def box_test_skipped(self, box_id: str, atom_name: str, color: str = "white") -> None:

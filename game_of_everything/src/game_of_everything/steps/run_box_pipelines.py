@@ -31,6 +31,7 @@ from game_of_everything.models import (
 )
 from game_of_everything.state import GoEState
 from game_of_everything.steps.resolve_custom_apps import run_resolve_custom_apps
+from game_of_everything.steps.resolve_preset_apps import run_resolve_preset_apps
 from game_of_everything.steps.engineer_requirements import run_engineer_requirements
 from game_of_everything.steps.generate_implementation import run_generate_implementation
 from game_of_everything.steps.test_snippets import run_test_snippets
@@ -225,6 +226,7 @@ def _make_virtual_state(
             misconfig_scope=misconfig_scope,
             custom_app_scope=box.custom_app_scope,
             custom_vectors=box.custom_vectors,
+            preset_vectors=box.preset_vectors,
         ),
     )
 
@@ -234,14 +236,17 @@ def _make_virtual_state(
 # ---------------------------------------------------------------------------
 
 def _box_has_valid_output(box_state: GoEState) -> bool:
-    """True if the box produced at least one validated snippet or custom app."""
+    """True if the box produced at least one validated snippet, custom app, or preset app."""
     validated_snippets = [
         s for s in (box_state.generated_snippets or []) if s.validated
     ]
     validated_apps = [
         a for a in box_state.resolved_custom_apps if a.validation_passed
     ]
-    return bool(validated_snippets or validated_apps)
+    validated_presets = [
+        a for a in box_state.resolved_preset_apps if a.validation_passed
+    ]
+    return bool(validated_snippets or validated_apps or validated_presets)
 
 
 # ---------------------------------------------------------------------------
@@ -287,21 +292,24 @@ def run_box_pipeline(
     _log.header(f"{box.box_id} ({box.hostname})")
 
     _log.phase("resolve_custom_apps")
-    run_resolve_custom_apps(state)
+    # Pass ui only in single-box mode (emitter==None); multi-box uses event queue
+    run_resolve_custom_apps(state, ui=ui if emitter is None else None)
     _log.phase_done("resolve_custom_apps")
+
+    _log.phase("resolve_preset_apps")
+    run_resolve_preset_apps(state, ui=ui if emitter is None else None)
+    _log.phase_done("resolve_preset_apps")
 
     _log.phase("engineer_requirements")
     run_engineer_requirements(state, agents_config, tasks_config, box_id=box.box_id, ui=ui)
     _log.phase_done("engineer_requirements")
 
-    # Emit atom details after engineer_requirements
+    # Emit atom details after engineer_requirements (multi-box only —
+    # single-box already displayed atoms inside engineer_requirements via ui)
     if emitter and state.sequenced_request:
         emitter.emit_atoms_header()
         for atom in state.sequenced_request:
             emitter.emit_atom(atom.name, atom.parameters or {}, atom.context or "")
-    elif ui and state.sequenced_request:
-        for atom in state.sequenced_request:
-            ui.display_atom(atom, verbose=True)
 
     _log.phase("generate_implementation")
     run_generate_implementation(state, agents_config, tasks_config, box_id=box.box_id, target_hostname=box.hostname, ui=ui)
@@ -322,7 +330,7 @@ def run_box_pipeline(
         _log.info("test environment cleaned up")
 
     _log.phase("finalize_script")
-    run_finalize_script(state, agents_config, tasks_config, skip_disk_write=True, ui=ui)
+    run_finalize_script(state, agents_config, tasks_config, skip_disk_write=False, ui=ui)
     _log.phase_done("finalize_script")
 
     _log.close()
@@ -374,8 +382,14 @@ def run_box_pipelines(
             topology=topology, ui=ui,
         )
         state.box_states[box.box_id] = box_state
+        # Propagate per-box virtual state to top-level so downstream steps
+        # (summary, deploy) can find them.
+        state.generated_snippets = box_state.generated_snippets
+        state.test_results = box_state.test_results
         if box_state.final_script:
             state.deploy_scripts[box.box_id] = box_state.final_script
+            state.final_script = box_state.final_script
+            state.output_path = box_state.output_path
 
         # Credential validation still applies even for single-box
         cred_warnings = validate_deploy_script_credentials(topology, state.deploy_scripts)

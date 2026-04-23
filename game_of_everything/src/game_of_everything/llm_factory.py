@@ -56,15 +56,24 @@ def make_llm(agent_name: Optional[str] = None) -> LLM:
 
     provider = agent_yaml.get("provider") or default_yaml.get("provider", "bedrock")
 
+    # Resolve temperature: agent yaml → default yaml → None (LLM class default)
+    # Use explicit None sentinel so temperature=0 is not silently skipped.
+    temperature = agent_yaml.get("temperature")
+    if temperature is None:
+        temperature = default_yaml.get("temperature")
+
     if provider == "bedrock":
         if not model_id.startswith("us.") and not model_id.startswith("eu."):
             model_id = f"us.{model_id}"
-        return LLM(
+        llm_kwargs = dict(
             model=f"bedrock/{model_id}",
             aws_access_key_id=cfg.aws_access_key_id,
             aws_secret_access_key=cfg.aws_secret_access_key,
             region=cfg.aws_region,
         )
+        if temperature is not None:
+            llm_kwargs["temperature"] = temperature
+        return LLM(**llm_kwargs)
 
     raise ValueError(
         f"Unsupported LLM provider: '{provider}'. Currently only 'bedrock' is supported."

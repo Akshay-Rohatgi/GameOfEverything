@@ -34,7 +34,7 @@ def run_finalize_script(
             and written once by finalize_topology rather than as stray timestamped files.
         ui: Optional GoEConsole for structured output.
     """
-    if not state.generated_snippets and not state.resolved_custom_apps:
+    if not state.generated_snippets and not state.resolved_custom_apps and not state.resolved_preset_apps:
         if ui:
             ui.log("No generated snippets to finalize. Skipping.")
         return
@@ -68,13 +68,41 @@ def run_finalize_script(
     custom_sections = []
     for app in state.resolved_custom_apps:
         if app.validation_passed:
-            header = f"# --- custom_app/{app.vector.vuln_atom_id} ---"
+            header = f"# --- custom_app/{app.vector.display_name} ---"
             custom_sections.append(f"{header}\n{app.deploy_snippet}")
         else:
             if ui:
-                ui.log(f"  Skipping custom app '{app.vector.vuln_atom_id}' (validation failed)")
+                ui.log(f"  Skipping custom app '{app.vector.display_name}' (validation failed)")
 
-    if not (state.generated_snippets or []) and not custom_sections:
+    # Prepend validated preset app deploy snippets (with stack deduplication)
+    preset_sections = []
+    emitted_stacks: set = set()
+    for app in state.resolved_preset_apps:
+        if app.validation_passed:
+            # The deploy_snippet includes the stack install. For dedup, we split
+            # on the "# --- Preset:" marker: everything before it is stack setup,
+            # everything from it onward is app-specific.
+            stack_marker = f"# --- Preset: {app.vector.preset_id} ---"
+            if stack_marker in app.deploy_snippet and app.stack_id not in emitted_stacks:
+                # First app using this stack — emit full snippet
+                header = f"# --- preset_app/{app.vector.preset_id} ({', '.join(app.vector.vuln_profile_ids)}) ---"
+                preset_sections.append(f"{header}\n{app.deploy_snippet}")
+                emitted_stacks.add(app.stack_id)
+            elif stack_marker in app.deploy_snippet and app.stack_id in emitted_stacks:
+                # Stack already emitted — only emit from the preset marker onward
+                idx = app.deploy_snippet.index(stack_marker)
+                app_only = app.deploy_snippet[idx:]
+                header = f"# --- preset_app/{app.vector.preset_id} ({', '.join(app.vector.vuln_profile_ids)}) ---"
+                preset_sections.append(f"{header}\n{app_only}")
+            else:
+                # No marker found — emit the whole snippet
+                header = f"# --- preset_app/{app.vector.preset_id} ({', '.join(app.vector.vuln_profile_ids)}) ---"
+                preset_sections.append(f"{header}\n{app.deploy_snippet}")
+        else:
+            if ui:
+                ui.log(f"  Skipping preset app '{app.vector.preset_id}' (validation failed)")
+
+    if not (state.generated_snippets or []) and not custom_sections and not preset_sections:
         if ui:
             ui.log("No snippets passed validation. No deployment script generated.")
         else:
@@ -94,7 +122,7 @@ def run_finalize_script(
     # Concatenate: custom apps first, then all snippets in sequenced order.
     # Failed snippets are included as commented-out stubs so the reader knows
     # what was attempted and why it was skipped.
-    sections = custom_sections[:]
+    sections = preset_sections[:] + custom_sections[:]
     for snippet in state.generated_snippets or []:
         if snippet.validated:
             header = f"# --- {snippet.atom_name} ---"

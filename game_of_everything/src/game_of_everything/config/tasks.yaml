@@ -18,6 +18,12 @@ synthesize_scenario_task:
     connect the scenario. Do not add game artifacts, extra users for flavour,
     or services beyond what's needed.
 
+    DIVERSITY REQUIREMENT:
+    The atom library contains many viable technique combinations. You MUST NOT
+    default to the same chain you would "naturally" choose. Actively consider
+    all atoms in the available list and construct a chain that is distinct from
+    the most obvious pairing. 
+    
     If the request implies a custom web application, describe it in
     custom_app_scope (single-file, single-endpoint, Tier 1 only). If the
     request is misconfig-only, set custom_app_scope to null and custom_vectors
@@ -27,13 +33,17 @@ synthesize_scenario_task:
     When custom_app_scope is non-null, also populate custom_vectors with one
     CustomVector per distinct web app in the scenario. Each CustomVector must
     contain:
-      - vuln_atom_id: exact web vuln atom id from the available list above
-        (e.g. "sqli_union", "ssti_jinja2", "cmd_injection", "file_upload_bypass",
-        "path_traversal_lfi", "xss_stored", "xss_reflected", "sqli_tautology",
-        "sqli_blind")
-      - attack_chain_goal: the attack outcome this app enables; use one of:
+      - vuln_atom_ids: a LIST of exact web vuln atom ids from the available list
+        above. Use a single-element list for a standalone vulnerability, or a
+        multi-element list when multiple vulnerabilities CHAIN WITHIN ONE APP.
+        Available ids: "sqli_union", "ssti_jinja2", "cmd_injection",
+        "file_upload_bypass", "path_traversal_lfi", "xss_stored",
+        "xss_reflected", "sqli_tautology", "sqli_blind", "xss_admin_bot"
+      - attack_chain_goals: a LIST of attack outcomes this app enables. Use one
+        goal per vuln atom (same order). Available goals:
         "credential_theft", "auth_bypass", "rce_via_cmd_injection",
-        "rce_via_webshell", "rce_via_sqli", "lfi_to_rce"
+        "rce_via_webshell", "rce_via_sqli", "lfi_to_rce",
+        "upload_lfi_rce", "session_theft_via_xss"
       - runtime_id: the web technology; use one of: "apache_php", "flask",
         "express"
       - port: 80 for apache_php, 5000 for flask, 3000 for express
@@ -45,6 +55,49 @@ synthesize_scenario_task:
       - seed_password: their password (must exactly match misconfig_scope value)
       - synthesis_context: 2-4 sentence prose describing this specific app's
         vulnerability, the credentials it exposes, and its role in the attack chain
+
+    CRITICAL — CHAINING VULNS IN ONE APP:
+    When the user's request describes multiple vulnerabilities that work TOGETHER
+    within a single application (e.g. "file upload + LFI to execute uploaded
+    webshells", or "SQLi to steal creds + stored XSS"), emit ONE CustomVector
+    with MULTIPLE entries in vuln_atom_ids and attack_chain_goals. Do NOT create
+    separate CustomVectors for vulns that belong to the same app — separate
+    vectors produce separate apps that overwrite each other on the same port.
+
+    WHEN TO USE MULTIPLE VECTORS vs ONE MULTI-VULN VECTOR:
+    - ONE vector with multiple atom ids: vulns chain in a single app (upload +
+      LFI, SQLi + stored XSS in the same app)
+    - MULTIPLE vectors with one atom id each: completely independent apps on
+      different ports or different runtimes
+
+    PRESET APP VECTORS (preset_vectors field):
+    When the user requests a REAL-WORLD web application (not a custom single-file
+    app), populate preset_vectors instead of custom_vectors. Currently supported
+    preset apps:
+      - "wordpress": WordPress CMS (LAMP stack). Use when the user asks for
+        WordPress, a blog, a CMS, or similar.
+      - "phpbb": phpBB forum (LAMP stack). Use when the user asks for a forum,
+        bulletin board, phpBB, or similar.
+
+    Each PresetVector must contain:
+      - preset_id: one of "wordpress", "phpbb"
+      - vuln_profile_ids: list of vulnerability profiles to apply. Available:
+        For wordpress: ["wp_default_creds", "wp_seeded_credential"]
+        For phpbb: ["phpbb_default_creds"]
+        "wp_seeded_credential" requires extra_vars with seed_username and
+        seed_password — the OS user credentials hidden in a private WordPress
+        post. These must match the username/password in misconfig_scope.
+      - port: 80 (both use Apache)
+      - admin_user: admin username (realistic, e.g. "admin", "wpadmin")
+      - admin_password: admin password (realistic, not security-themed)
+      - db_name: database name (null to use preset default)
+      - db_user: database user (null to use preset default)
+      - db_password: database password (null to use preset default)
+      - synthesis_context: 1-2 sentence description of this app's role
+
+    IMPORTANT: If the user asks for WordPress, phpBB, or any supported preset app,
+    use preset_vectors — do NOT use custom_vectors or custom_app_scope for these.
+    custom_vectors is for LLM-generated single-file vulnerable apps only.
 
     The narrative describes the ENVIRONMENT. The attack_narrative describes the
     OPERATOR'S JOURNEY through it. The scopes tell downstream pipelines exactly
@@ -71,6 +124,17 @@ synthesize_scenario_task:
     If the custom app handles initial access entirely (e.g. SSTI gives a shell),
     misconfig_scope should still describe the post-exploitation surface — the OS
     user whose credentials the app leaks, and any privilege escalation path.
+
+    CRITICAL — NO OVERLAP BETWEEN custom_vectors AND misconfig_scope:
+    Vulnerabilities handled by custom_vectors (web app vulns like file upload,
+    LFI, SQLi, XSS, SSTI, command injection) MUST NOT also appear in
+    misconfig_scope. The misconfig pipeline generates independent bash snippets
+    for each atom — if the same web vulnerability appears in both pipelines,
+    they will produce conflicting deployments that overwrite each other.
+    misconfig_scope should ONLY describe: OS-level misconfigurations, service
+    misconfigurations (SSH, Samba, cron, SUID), user accounts, and privilege
+    escalation paths. If the entire scenario is web-app-only with no OS-level
+    misconfigs, set misconfig_scope to an empty string "".
 
     NUM_BOXES — how many separate machines this scenario requires:
     Set num_boxes to the minimum number of distinct machines needed to realise
@@ -142,19 +206,24 @@ synthesize_scenario_task:
 
     Single-box (num_boxes == 1):
       misconfig_scope (str), custom_app_scope (str or null),
-      custom_vectors (list of CustomVector or []), boxes=[], shared_secrets=[],
+      custom_vectors (list of CustomVector or []),
+      preset_vectors (list of PresetVector or []),
+      boxes=[], shared_secrets=[],
       attack_vector (str), goal (str), kill_chain (list of KillChainStep).
 
     Multi-box (num_boxes > 1):
       boxes (list of BoxSpec — one per machine), shared_secrets (list of
       SharedSecret — one per cross-box credential), misconfig_scope="",
-      custom_vectors=[], custom_app_scope=null,
+      custom_vectors=[], preset_vectors=[], custom_app_scope=null,
       kill_chain (list of KillChainStep).
 
-    Each CustomVector has: vuln_atom_id, attack_chain_goal, runtime_id, port,
-    db_name, db_user, db_password, seed_username, seed_password, synthesis_context.
+    Each CustomVector has: vuln_atom_ids (list of str), attack_chain_goals (list of str),
+    runtime_id, port, db_name, db_user, db_password, seed_username, seed_password,
+    synthesis_context.
+    Each PresetVector has: preset_id, vuln_profile_ids, port, admin_user,
+    admin_password, db_name, db_user, db_password, synthesis_context, extra_vars.
     Each BoxSpec has: box_id, hostname, role, misconfig_scope, custom_app_scope,
-    custom_vectors, services, attack_vector, goal.
+    custom_vectors, preset_vectors, services, attack_vector, goal.
     Each SharedSecret has: key, value, description, source_box, target_box,
     target_user, access_method.
     Each KillChainStep has: tag, action.
@@ -304,21 +373,77 @@ validate_mapping_task:
 enumerate_dependencies_task:
   description: >
     You have been given a validated MappedRequest as context from the previous
-    task. Your job is to identify all OS-level packages implicitly required by
-    the scenario and add a `install_package` atom for each one not already present.
+    task. Your job is twofold:
+      A. Ensure a `create_user` atom exists for EVERY OS user referenced across
+         all atoms (with the correct password if one appears in the scenario).
+      B. Ensure an `install_package` atom exists for every OS package implicitly
+         required by the scenario.
 
-    STEP 1 — Read all atoms.
+    ═══════════════════════════════════════════════════════
+    PART A — USER DEPENDENCY ENUMERATION
+    ═══════════════════════════════════════════════════════
+
+    STEP A1 — Collect every username referenced in the mapping.
+    Scan ALL atoms in both lists. A username is referenced when it appears in
+    ANY of these parameter keys:
+      - `username`, `cron_user`, `script_owner`, `target_username`,
+        `reader_user`, `escalation_user`, `attacker_user`, `target_user`
+    Also scan atom `context` fields for phrases like "user 'NAME'" or
+    "account 'NAME'" that name OS users.
+    Build a set of all unique usernames found.
+
+    STEP A2 — Identify passwords for each user.
+    For each username, search ALL atom parameters and context strings for a
+    matching password. Common locations:
+      - `password`, `target_password` parameters
+      - Context strings like "password 'VALUE'" or "(password VALUE)"
+      - Env var atoms where `var_value` is a password for the same user
+    If a password is found, record it. If not, the user has no password (service
+    account or key-based access).
+
+    STEP A3 — Check for existing `create_user` atoms.
+    For each username, check whether a `create_user` atom with
+    `parameters.username == <username>` already exists in either list.
+    If it does AND it already has the correct password, skip it.
+    If it exists but is MISSING the password (and one was found in A2), update
+    the existing atom's parameters to include the password.
+
+    STEP A4 — Add missing `create_user` atoms.
+    For each username that has NO corresponding `create_user` atom, call:
+      Action: search_vulnerability_atoms
+      Action Input: {"query": "create user account", "n_results": 1}
+    Confirm the atom id is `create_user` and read its `required_vars`.
+    Create a new MappedAtom:
+      - `name`: "create_user"
+      - `context`: "OS user '<username>' is referenced by <atom_name> and must
+        exist before that atom runs"
+      - `parameters`: {"username": "<username>", "password": "<password>"}
+        (omit password key if no password was found in A2)
+    Append to `mapped_initial_access_atoms`.
+
+    IMPORTANT: Some atoms (e.g. ssh_password_login, shell_history_credential_exposure)
+    create users INLINE in their code snippets. That is an implementation detail —
+    you must STILL add an explicit `create_user` atom for every referenced user.
+    The snippet generator will see the `create_user` atom and generate the user
+    creation commands, and downstream atoms will NOT duplicate user creation.
+
+    ═══════════════════════════════════════════════════════
+    PART B — PACKAGE DEPENDENCY ENUMERATION
+    ═══════════════════════════════════════════════════════
+
+    STEP B1 — Read all atoms.
     List every atom in `mapped_initial_access_atoms` and
     `mapped_post_exploitation_goal_atoms`, including their `name`, `context`,
     and `parameters`.
 
-    STEP 2 — Identify required packages.
+    STEP B2 — Identify required packages.
     For each atom, reason about what Ubuntu/Debian packages it needs at runtime:
       - `samba_insecure_share`            → samba
       - `sensitive_file` with a .zip path → zip
       - `set_suid` on a non-base binary   → that binary's apt package
         (e.g. binary_path "/usr/bin/vim" → package "vim",
                binary_path "/usr/bin/find" → already in base, skip)
+      - `cron_job_hijack` or `writable_cron_script` → cron
       - Any atom whose `context` mentions SSH as the access method,
         OR any scenario where a `create_user` atom is present and the overall
         context implies SSH login                                → openssh-server
@@ -326,35 +451,38 @@ enumerate_dependencies_task:
     Also read the `section` field and all atom `context` strings for any service
     or tool names that imply additional packages not covered above.
 
-    STEP 3 — Deduplicate and diff.
+    STEP B3 — Deduplicate and diff.
     Build a flat list of all required package names. Remove any for which an
     `install_package` atom already exists in `mapped_initial_access_atoms`
     with matching `parameters.package_name`.
 
-    STEP 4 — Confirm atom format via RAG.
+    STEP B4 — Confirm atom format via RAG.
     For each missing package, call:
       Action: search_vulnerability_atoms
       Action Input: {"query": "install package <package_name>", "n_results": 1}
     Read the returned atom to confirm the `id` is `install_package` and note
     its `required_vars`. This grounds your output in real atom data.
 
-    STEP 5 — Build and add the new MappedAtoms.
+    STEP B5 — Build and add the new MappedAtoms.
     For each missing package, create:
       - `name`: "install_package"
       - `context`: "<package_name> is required by <atom_name> to function at runtime"
       - `parameters`: {"package_name": "<package_name>"}
     Append each to `mapped_initial_access_atoms`.
 
-    STEP 6 — Return the updated MappedRequest.
+    ═══════════════════════════════════════════════════════
+
+    STEP FINAL — Return the updated MappedRequest.
     Output a MappedRequest identical to the input except for the newly appended
-    install_package atoms. Keep `section` and all existing atoms unchanged.
+    `create_user` and `install_package` atoms. Keep `section` and all existing
+    atoms unchanged.
 
     CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
     and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
     no backticks, no explanations, no trailing comments. Do all reasoning internally.
     Do NOT write any text after the closing `}` of the JSON object.
 
-    You MUST call `search_vulnerability_atoms` for each missing package.
+    You MUST call `search_vulnerability_atoms` for each missing user and package.
     Never skip the tool or invent atom names.
 
     CROSS-BOX EXCLUSION RULE:
@@ -366,10 +494,14 @@ enumerate_dependencies_task:
     A single valid JSON object — no markdown, no surrounding text.
     Start the response with { and end with }. All keys must be quoted strings.
     The JSON object must be a MappedRequest identical to the input except that
-    `mapped_initial_access_atoms` now includes one `install_package` MappedAtom
-    per implicitly required package that was not already present.
-    Each new atom has `name`: "install_package", a clear `context`, and
-    `parameters`: {"package_name": "<package>"}.
+    `mapped_initial_access_atoms` now includes:
+      - One `create_user` MappedAtom per OS user referenced across all atoms
+        that did not already have one. Each has `name`: "create_user", a clear
+        `context`, and `parameters`: {"username": "<user>", "password": "<pw>"}
+        (password omitted if none was found).
+      - One `install_package` MappedAtom per implicitly required package that
+        was not already present. Each has `name`: "install_package", a clear
+        `context`, and `parameters`: {"package_name": "<package>"}.
   agent: dependency_enumeration_agent
 
 sequence_atoms_task:
@@ -388,12 +520,17 @@ sequence_atoms_task:
        and which other atoms provide those prerequisites.
     3. Apply these ordering rules:
        a. `install_package` atoms always run first.
-       b. `create_user` runs before any atom whose parameters reference that username.
+       b. `create_user` runs before any atom whose parameters reference that
+          user's username (in ANY parameter key: username, cron_user,
+          script_owner, target_username, reader_user, escalation_user, etc.).
        c. `samba_insecure_share` runs before `sensitive_file` if the file_path
           is inside the share's path (the share creates the directory).
-       d. All `mapped_initial_access_atoms` run before all
+       d. `cron_job_hijack` (or any cron-related atom) runs AFTER the
+          `create_user` for its `cron_user` — the user must exist before a
+          cron entry can run commands as that user.
+       e. All `mapped_initial_access_atoms` run before all
           `mapped_post_exploitation_goal_atoms`.
-       e. Within a group, preserve original order unless a dependency rule overrides.
+       f. Within a group, preserve original order unless a dependency rule overrides.
 
     CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
     and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
@@ -412,10 +549,16 @@ generate_app_task:
   description: >
     Generate a complete, deployable vulnerable web application.
 
-    VULN ATOM:
+    This application must implement {num_vulns} vulnerability/vulnerabilities in a
+    SINGLE application file. When multiple vulnerabilities are specified, they form
+    an attack chain within one app (e.g. file upload + LFI = upload a webshell then
+    include it via LFI for RCE). Do NOT create separate apps — combine all vulns
+    into one cohesive application with multiple endpoints/handlers.
+
+    VULN ATOM(S):
     {vuln_atom}
 
-    ATTACK GOAL:
+    ATTACK GOAL(S):
     {attack_goal}
 
     WEB RUNTIME:
@@ -427,19 +570,25 @@ generate_app_task:
     {failure_context}
 
     YOUR TASK:
-    1. Read the VULN ATOM's Synthesis Guidance — this is your blueprint for writing the
-       vulnerability. Use the language example that matches the WEB RUNTIME.
+    1. Read ALL VULN ATOM Synthesis Guidance sections — each is a blueprint for one
+       vulnerability. Use the language example that matches the WEB RUNTIME. When
+       multiple atoms are provided, implement ALL of them in one file with separate
+       endpoints or handlers (e.g. one endpoint for upload, another for file inclusion).
     2. Read the SYNTHESIS CONTEXT to understand the exact credentials, usernames, and
        scenario details. Seed data MUST match synthesis_context exactly.
-    3. Read the ATTACK GOAL's test_template and success_criteria — your attack_snippet
-       must produce output matching the success_criteria output_pattern.
-    4. Write app_source as a single file. The vulnerability must be exactly as described
-       in the atom's Synthesis Guidance — do not sanitise it or add protections.
-    5. Write schema_sql to create the necessary tables.
-    6. Write seed_sql to insert the seed credentials from synthesis_context.
+    3. Read ALL ATTACK GOAL test_templates and success_criteria — your attack_snippet
+       must demonstrate the FULL chain across all vulnerabilities. For chained attacks,
+       the attack_snippet should execute each step in sequence (e.g. upload webshell
+       first, then trigger it via LFI).
+    4. Write app_source as a single file implementing ALL vulnerabilities. Each vuln
+       should have its own endpoint/route. The vulnerabilities must be exactly as
+       described in the atoms' Synthesis Guidance — do not sanitise them or add protections.
+    5. Write schema_sql to create the necessary tables (or null if no DB needed).
+    6. Write seed_sql to insert the seed credentials from synthesis_context (or null).
     7. Write setup_db_sh to start the DB service, create the DB and user, and run
        schema + seed. Must be idempotent (IF NOT EXISTS throughout). Use
        `service mysql start` not `systemctl start` (no systemd init in Docker).
+       Set to null if no database is needed.
     8. Write deploy_snippet to:
        a. Install ALL required_packages listed in WEB RUNTIME using apt-get:
           `DEBIAN_FRONTEND=noninteractive apt-get install -y <packages>`
@@ -447,14 +596,26 @@ generate_app_task:
           install `mariadb-server` (NOT mysql-server — it fails to configure in Docker).
           Start it with `service mariadb start && sleep 2`.
        b. Copy files from /tmp/goe_app/ to the runtime app_dir.
-       c. Run setup_db_sh to initialise the database.
+       c. Run setup_db_sh to initialise the database (skip if null).
        d. Configure and start the web server.
-       The target container is a bare ubuntu:22.04 with nothing pre-installed —
-       your deploy_snippet MUST install every package the app needs to run.
+       e. Create any directories the app needs (e.g. uploads directory with correct
+          ownership for www-data).
+       The target container may have the runtime's required packages pre-installed,
+       but your deploy_snippet MUST STILL include all apt-get install commands
+       because the same script is used on bare EC2 instances.
+       For Node.js/Express apps: install Node.js 20 via NodeSource (Ubuntu 22.04
+       apt ships v12 which is broken for modern packages):
+         curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+         apt-get install -y nodejs
+       Then: cd /opt/webapp && npm init -y && npm install express (plus any other
+       packages like better-sqlite3, cookie-parser, mysql2, puppeteer) BEFORE
+       starting the app. Do NOT use `apt-get install nodejs npm` — it gives v12.
        All in bash, no shebang.
-    9. Write testing_snippet to verify: (a) the web server is responding, (b) the
-       vulnerability is present in the app. Run inside the target container.
-    10. Write attack_snippet to exploit the vulnerability from an attacker container.
+    9. Write testing_snippet to verify: (a) the web server is responding, (b) EACH
+       vulnerability is present in the app. For chained vulns, test the full chain.
+       Run inside the target container.
+    10. Write attack_snippet to exploit the FULL vulnerability chain from an attacker
+        container. For multi-vuln apps, execute each exploitation step in sequence.
         The target is addressed as hostname "target" on the runtime's default port.
 
     CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
@@ -467,23 +628,26 @@ generate_app_task:
     A single valid JSON object — no markdown, no surrounding text.
     Start the response with { and end with }. All keys must be quoted strings.
     The JSON object must be a GeneratedApp with: app_filename (str), app_source (str),
-    schema_sql (str), seed_sql (str), setup_db_sh (str), deploy_snippet (str),
-    testing_snippet (str), attack_snippet (str).
+    schema_sql (str or null), seed_sql (str or null), setup_db_sh (str or null),
+    deploy_snippet (str), testing_snippet (str), attack_snippet (str).
   agent: app_generation_agent
 
 generate_snippets_task:
   description: >
-    Generate a Bash code snippet and a testing snippet for every Atom in the
-    following sequenced atom list:
+    Generate a Bash code snippet and a testing snippet for the following atom:
 
-    {sequenced_atoms_json}
+    {atom_json}
 
-    Each entry in the list is a JSON object with:
+    This atom is at position {atom_index} of {total_atoms} in the sequenced list.
+    Previously generated atoms (already applied, in order):
+    {prior_atoms_summary}
+
+    The atom JSON has:
       - `name`: the atom id (e.g. "samba_insecure_share")
       - `context`: why this atom was chosen
       - `parameters`: a dict of values to substitute (may be null if none needed)
 
-    YOUR INSTRUCTIONS (follow in order for EACH atom):
+    YOUR INSTRUCTIONS (follow in order):
 
     STEP 1 — Read the atom definition.
     Call `read_atom` with the atom's `name`.
@@ -517,6 +681,11 @@ generate_snippets_task:
       - Do NOT include a shebang line (#!/bin/bash). That is added automatically.
       - Add a brief inline comment above each logical block explaining the
         security rationale (e.g. `# world-readable share for anonymous enumeration`).
+      - Do NOT create users (useradd/chpasswd) inside non-create_user atoms.
+        User creation is handled exclusively by the `create_user` atom, which
+        runs earlier in the sequence. If an atom references a user, assume
+        the user already exists. Only `create_user` atoms should contain
+        useradd and chpasswd commands.
 
     STEP 4 — Generate the testing_snippet.
     Using the atom's Testing Guidance:
@@ -564,7 +733,7 @@ generate_snippets_task:
         These atoms only affect local state and are fully covered by Layer 1.
 
     STEP 6 — Build the GeneratedSnippet.
-    For this atom, create a GeneratedSnippet with:
+    Create a GeneratedSnippet with:
       - `atom_name`: the atom's `name`
       - `code_snippet`: your generated Bash commands (string)
       - `testing_snippet`: your verification commands (string)
@@ -572,30 +741,23 @@ generate_snippets_task:
       - `mapped_atom`: the full MappedAtom object (name, context, parameters)
       - `validated`: false
 
-    Repeat STEPS 1-6 for every atom in the list.
-    Collect all GeneratedSnippet objects into a GeneratedSnippets wrapper.
-
     CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
     and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
     no backticks, no explanations, no trailing comments. Do all reasoning internally.
     Do NOT write any text after the closing `}` of the JSON object.
 
     IMPORTANT:
-    - You MUST call `read_atom` for every single atom. No exceptions.
+    - You MUST call `read_atom` for this atom. No exceptions.
     - The atom markdown is a scaffold. The `context` field is your brief for
       security intent — use it to make decisions the template leaves open.
-    - Process atoms in the order given; do not reorder them.
-    - Never merge multiple atoms' commands into one snippet.
     - For attack_snippet: only atoms with NETWORK-FACING services get one.
       Local-only atoms (install_package, set_suid, sensitive_file not exposed
       via a service) must have attack_snippet set to null.
   expected_output: >
     A single valid JSON object — no markdown, no surrounding text.
     Start the response with { and end with }. All keys must be quoted strings.
-    The JSON object must be a GeneratedSnippets with a `snippets` field containing one
-    GeneratedSnippet per atom, in the same order as the input list.
-    Each GeneratedSnippet has: `atom_name` (str), `code_snippet` (str),
-    `testing_snippet` (str), `attack_snippet` (str or null),
+    The JSON object must be a GeneratedSnippet with: `atom_name` (str),
+    `code_snippet` (str), `testing_snippet` (str), `attack_snippet` (str or null),
     `mapped_atom` (MappedAtom object), `validated` (false).
   agent: snippet_generation_agent
 
@@ -694,3 +856,58 @@ diagnose_snippet_task:
     Fields: `fixed_code_snippet` (str), `fixed_testing_snippet` (str),
     `diagnosis` (str), `confidence` (str).
   agent: diagnostic_agent
+
+fix_attack_snippet_task:
+  description: >
+    A Layer 2 (external attack probe) snippet failed for a custom web application.
+    Layer 1 passed — the app is WORKING and VULNERABLE. Your job is to fix the
+    attack snippet so it successfully exploits the vulnerability from the attacker
+    container.
+
+    APP SOURCE ({app_filename}):
+    {app_source}
+
+    ATTACK GOAL:
+    {attack_goal}
+
+    SYNTHESIS CONTEXT:
+    {synthesis_context}
+
+    FAILED ATTACK SNIPPET:
+    {failed_attack_snippet}
+
+    EXECUTION OUTPUT:
+    - Exit code: {l2_exit_code}
+    - Stdout:
+    {l2_stdout}
+    - Stderr:
+    {l2_stderr}
+
+    VERDICT REASONING (why the testing agent judged it as failed):
+    {verdict_reasoning}
+
+    L1 TESTING SNIPPET (proof the vulnerability exists internally):
+    {testing_snippet}
+
+    L1 OUTPUT (exit code {l1_exit_code}):
+    {l1_stdout}
+
+    DEPLOY SNIPPET (how the app was deployed):
+    {deploy_snippet}
+
+    Port: {port}. Attack agent attempt: {attempt_number} of {max_attempts}.
+
+    YOUR TASK:
+    1. Read the app source carefully — note the exact endpoint paths, parameter
+       names, expected request format, and response structure.
+    2. Compare the failed attack snippet against the app source to find mismatches.
+    3. Use exec_in_attacker to probe the target incrementally — curl endpoints,
+       check response format, verify the vulnerability is exploitable externally.
+    4. Use exec_in_target if needed to inspect logs or service state.
+    5. Construct and TEST a fixed attack snippet using exec_in_attacker.
+    6. Return the working snippet.
+  expected_output: >
+    A single raw JSON object — no markdown, no surrounding text, no reasoning
+    before or after. Start the response with { and end with }.
+    Fields: fixed_attack_snippet (str), diagnosis (str), confidence (str).
+  agent: attack_agent

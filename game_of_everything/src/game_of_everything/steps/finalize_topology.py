@@ -286,10 +286,8 @@ def run_finalize_topology(
     """
     topology = state.topology
     if topology is None or len(topology.boxes) <= 1:
-        _out(ui,
-            "[dim]run_finalize_topology: single-box or no topology — "
-            "output already written by finalize_script.[/dim]"
-        )
+        if ui:
+            ui.log("run_finalize_topology: single-box or no topology — output already written by finalize_script.")
         return
 
     deploy_scripts = state.deploy_scripts

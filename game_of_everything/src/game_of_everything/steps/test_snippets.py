@@ -285,7 +285,6 @@ def run_test_snippets(
                 # Layer 1: run testing_snippet, ask LLM to judge
                 if ui:
                     ui.log("  Running Layer 1 (internal state check)...")
-                    ui.test_layer_status(snippet.atom_name, "L1", snippet.testing_snippet)
                 l1_exit, l1_stdout, l1_stderr = env.exec_in_target(snippet.testing_snippet)
                 if ui:
                     ui.log(f"  Layer 1 exit code: {l1_exit}")
@@ -382,7 +381,6 @@ def run_test_snippets(
                 if attack:
                     if ui:
                         ui.log(f"  Running Layer 2 probe for snippet {j} ({snippets[j].atom_name})...")
-                        ui.test_layer_status(snippets[j].atom_name, "L2", attack)
                     a_exit, a_stdout, a_stderr = env.exec_in_attacker(attack)
 
                     verdict = _run_verdict_crew(

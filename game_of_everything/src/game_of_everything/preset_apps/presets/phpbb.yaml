@@ -1,0 +1,41 @@
+id: phpbb
+description: phpBB forum installation with CLI-based headless setup
+stack_id: lamp
+required_vars:
+  - admin_user
+  - admin_password
+  - db_name
+  - db_user
+  - db_password
+defaults:
+  db_name: phpbb_db
+  db_user: phpbb
+  db_password: phpbbpass123
+  board_name: "Company Forum"
+install_template: |
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends php-intl
+  cd /tmp
+  curl -sL https://download.phpbb.com/pub/release/3.3/3.3.11/phpBB-3.3.11.tar.bz2 | tar xj
+  mv phpBB3 /var/www/html/phpBB3
+  chown -R www-data:www-data /var/www/html/phpBB3
+  chmod 666 /var/www/html/phpBB3/config.php
+  cd /var/www/html/phpBB3
+  php install/phpbbcli.php install \
+    --board-url="http://localhost/phpBB3" \
+    --board-name="{{board_name}}" \
+    --board-description="Internal Discussion" \
+    --db-driver="mysqli" --db-host="127.0.0.1" \
+    --db-name="{{db_name}}" --db-user="{{db_user}}" --db-passwd="{{db_password}}" \
+    --db-table-prefix="phpbb_" \
+    --admin-name="{{admin_user}}" --admin-pass1="{{admin_password}}" \
+    --admin-pass2="{{admin_password}}" --admin-email="admin@localhost" \
+    --no-interaction
+  chmod 640 /var/www/html/phpBB3/config.php
+  chown www-data:www-data /var/www/html/phpBB3/config.php
+  rm -rf /var/www/html/phpBB3/install
+healthcheck: |
+  for i in $(seq 1 20); do
+    curl -s -o /dev/null -w '%{http_code}' http://localhost/phpBB3/ 2>/dev/null | grep -q '200' && break
+    sleep 2
+  done
+harness_id: phpbb_helpers

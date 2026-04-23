@@ -85,7 +85,7 @@ def _display_scenario(
         if scenario.custom_vectors:
             ui.log(f"Custom vectors: {len(scenario.custom_vectors)}")
             for v in scenario.custom_vectors:
-                ui.log(f"  - {v.vuln_atom_id} / {v.attack_chain_goal} / {v.runtime_id}")
+                ui.log(f"  - {v.display_name} / {'+'.join(v.attack_chain_goals)} / {v.runtime_id}")
         if scenario.shared_resources:
             ui.log(f"Shared resources: {scenario.shared_resources}")
         if scenario.explicit_decisions:

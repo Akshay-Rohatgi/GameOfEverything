@@ -52,19 +52,20 @@ _event_context_config.set(
     )
 )
 
-logging.getLogger('crewai').setLevel(logging.WARNING)
+logging.getLogger('crewai.flow.flow').setLevel(logging.WARNING)
 
 os.environ["GOE_VERSION"] = "0.1.0"
 os.environ["OTEL_SDK_DISABLED"] = "true"  # Disable OpenTelemetry to avoid unrelated warnings
 os.environ["LOG_LEVEL"] = "ERROR"  # Suppress lower-level logs from CrewAI and dependencies to reduce noise
 os.environ["CREWAI_TRACING_ENABLED"] = "false"  # Disable CrewAI's internal tracing to reduce noise
+os.environ["CREWAI_VERBOSE"] = "false"  # Disable CrewAI's verbose logging to reduce noise
 
 load_dotenv()
 
 
 class GoEFlow(Flow[GoEState]):
     def __init__(self, resume_dir: Path | None = None):
-        super().__init__()
+        super().__init__(tracing=False)
         config_dir = Path(__file__).parent / "config"
         with open(config_dir / "agents.yaml", "r") as f:
             self.agents_config = yaml.safe_load(f)
@@ -141,12 +142,22 @@ class GoEFlow(Flow[GoEState]):
         self.ui.step_done("Finalizing output", time.monotonic() - t0)
         save_checkpoint(self.state, "finalize_topology")
 
-        # Print summary
+        # Print summary — count both misconfig snippets and custom/preset apps
         all_snippets = self.state.generated_snippets or []
-        validated = sum(1 for s in all_snippets if s.validated)
-        skipped = len(all_snippets) - validated
+        validated_snippets = sum(1 for s in all_snippets if s.validated)
+
+        # Aggregate across all box states for custom/preset apps
+        all_box_states = list(self.state.box_states.values()) or [self.state]
+        custom_apps = [a for bs in all_box_states for a in (bs.resolved_custom_apps or [])]
+        preset_apps = [a for bs in all_box_states for a in (bs.resolved_preset_apps or [])]
+        validated_apps = sum(1 for a in custom_apps + preset_apps if a.validation_passed)
+        total_apps = len(custom_apps) + len(preset_apps)
+
+        validated = validated_snippets + validated_apps
+        total = len(all_snippets) + total_apps
+        skipped = total - validated
         if self.state.output_path:
-            self.ui.summary(validated, len(all_snippets), skipped, Path(self.state.output_path))
+            self.ui.summary(validated, total, skipped, Path(self.state.output_path))
 
     @listen(finalize_topology)
     def deploy(self):

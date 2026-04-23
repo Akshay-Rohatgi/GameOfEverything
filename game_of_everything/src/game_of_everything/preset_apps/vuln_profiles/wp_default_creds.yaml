@@ -1,0 +1,11 @@
+id: wp_default_creds
+description: WordPress with weak/default administrator credentials
+compatible_presets:
+  - wordpress
+vuln_config_snippet: ""
+testing_snippet_template: |
+  wp user list --fields=user_login --allow-root --path=/var/www/html | grep "{{admin_user}}"
+  wp eval 'if(wp_check_password("{{admin_password}}", get_user_by("login","{{admin_user}}")->user_pass)) echo "AUTH_OK";' --allow-root --path=/var/www/html | grep "AUTH_OK"
+attack_snippet_template: |
+  source /tmp/harnesses/wp_helpers.sh
+  wp_login "http://target:{{port}}" "{{admin_user}}" "{{admin_password}}" && echo "WP_LOGIN_SUCCESS"

