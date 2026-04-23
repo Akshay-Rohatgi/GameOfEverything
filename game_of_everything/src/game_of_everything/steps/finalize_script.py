@@ -21,6 +21,7 @@ def run_finalize_script(
     agents_config: dict,
     tasks_config: dict,
     skip_disk_write: bool = False,
+    ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Concatenate validated snippets through the post-processor pipeline and write the final script.
 
@@ -31,8 +32,9 @@ def run_finalize_script(
         skip_disk_write: When True, populate state.final_script but do not write to disk.
             Used by run_box_pipelines so per-box scripts are collected into deploy_scripts
             and written once by finalize_topology rather than as stray timestamped files.
+        ui: Optional GoEConsole for structured output.
     """
-    if not state.generated_snippets and not state.resolved_custom_apps:
+    if not state.generated_snippets and not state.resolved_custom_apps and not state.resolved_preset_apps:
         if ui:
             ui.log("No generated snippets to finalize. Skipping.")
         return
@@ -66,14 +68,45 @@ def run_finalize_script(
     custom_sections = []
     for app in state.resolved_custom_apps:
         if app.validation_passed:
-            header = f"# --- custom_app/{app.vector.vuln_atom_id} ---"
+            header = f"# --- custom_app/{app.vector.display_name} ---"
             custom_sections.append(f"{header}\n{app.deploy_snippet}")
         else:
             if ui:
-                ui.log(f"  Skipping custom app '{app.vector.vuln_atom_id}' (validation failed)")
+                ui.log(f"  Skipping custom app '{app.vector.display_name}' (validation failed)")
 
-    if not (state.generated_snippets or []) and not custom_sections:
-        rich.print("[bold red]No snippets passed validation. No deployment script generated.[/bold red]")
+    # Prepend validated preset app deploy snippets (with stack deduplication)
+    preset_sections = []
+    emitted_stacks: set = set()
+    for app in state.resolved_preset_apps:
+        if app.validation_passed:
+            # The deploy_snippet includes the stack install. For dedup, we split
+            # on the "# --- Preset:" marker: everything before it is stack setup,
+            # everything from it onward is app-specific.
+            stack_marker = f"# --- Preset: {app.vector.preset_id} ---"
+            if stack_marker in app.deploy_snippet and app.stack_id not in emitted_stacks:
+                # First app using this stack — emit full snippet
+                header = f"# --- preset_app/{app.vector.preset_id} ({', '.join(app.vector.vuln_profile_ids)}) ---"
+                preset_sections.append(f"{header}\n{app.deploy_snippet}")
+                emitted_stacks.add(app.stack_id)
+            elif stack_marker in app.deploy_snippet and app.stack_id in emitted_stacks:
+                # Stack already emitted — only emit from the preset marker onward
+                idx = app.deploy_snippet.index(stack_marker)
+                app_only = app.deploy_snippet[idx:]
+                header = f"# --- preset_app/{app.vector.preset_id} ({', '.join(app.vector.vuln_profile_ids)}) ---"
+                preset_sections.append(f"{header}\n{app_only}")
+            else:
+                # No marker found — emit the whole snippet
+                header = f"# --- preset_app/{app.vector.preset_id} ({', '.join(app.vector.vuln_profile_ids)}) ---"
+                preset_sections.append(f"{header}\n{app.deploy_snippet}")
+        else:
+            if ui:
+                ui.log(f"  Skipping preset app '{app.vector.preset_id}' (validation failed)")
+
+    if not (state.generated_snippets or []) and not custom_sections and not preset_sections:
+        if ui:
+            ui.log("No snippets passed validation. No deployment script generated.")
+        else:
+            rich.print("[bold red]No snippets passed validation. No deployment script generated.[/bold red]")
         return
 
     # Build a lookup of failure reasons from test_results for commented-out stubs
@@ -89,7 +122,7 @@ def run_finalize_script(
     # Concatenate: custom apps first, then all snippets in sequenced order.
     # Failed snippets are included as commented-out stubs so the reader knows
     # what was attempted and why it was skipped.
-    sections = custom_sections[:]
+    sections = preset_sections[:] + custom_sections[:]
     for snippet in state.generated_snippets or []:
         if snippet.validated:
             header = f"# --- {snippet.atom_name} ---"
@@ -111,7 +144,10 @@ def run_finalize_script(
     state.final_script = final_script
 
     if skip_disk_write:
-        rich.print("[dim]finalize_script: skip_disk_write=True — script stored in state, not written to disk.[/dim]")
+        if ui:
+            ui.log("finalize_script: skip_disk_write=True — script stored in state, not written to disk.")
+        else:
+            rich.print("[dim]finalize_script: skip_disk_write=True — script stored in state, not written to disk.[/dim]")
         return
 
     # Write to output/<timestamp>_deploy.sh

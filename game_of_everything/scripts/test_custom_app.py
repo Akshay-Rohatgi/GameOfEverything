@@ -50,6 +50,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import game_of_everything.patches  # noqa: F401 — monkey-patches crewAI for Bedrock
+
 from game_of_everything.models import CustomVector, GeneratedApp, CustomAppState
 from game_of_everything.steps.custom_app_flow import (
     CustomAppFlow, AppGenerationError,
@@ -72,8 +74,8 @@ for noisy in ("httpx", "httpcore", "botocore", "boto3", "urllib3"):
 # ---------------------------------------------------------------------------
 
 DEFAULT_VECTOR = CustomVector(
-    vuln_atom_id="sqli_union",
-    attack_chain_goal="credential_theft",
+    vuln_atom_ids=["sqli_union"],
+    attack_chain_goals=["credential_theft"],
     runtime_id="apache_php",
     port=80,
     db_name="employee_directory",
@@ -135,8 +137,8 @@ def _load_app(path: str) -> tuple[GeneratedApp, CustomVector]:
 
 def run_generate_only(vector: CustomVector, save_path: str | None) -> GeneratedApp:
     _section("GENERATE-ONLY MODE (no Docker)")
-    rich.print(f"  vuln_atom_id : [cyan]{vector.vuln_atom_id}[/cyan]")
-    rich.print(f"  attack_goal  : [cyan]{vector.attack_chain_goal}[/cyan]")
+    rich.print(f"  vuln_atoms   : [cyan]{vector.display_name}[/cyan]")
+    rich.print(f"  attack_goals : [cyan]{'+'.join(vector.attack_chain_goals)}[/cyan]")
     rich.print(f"  runtime      : [cyan]{vector.runtime_id}[/cyan]")
 
     agents_config = _load_yaml(_CONFIG_DIR / "agents.yaml")
@@ -144,10 +146,10 @@ def run_generate_only(vector: CustomVector, save_path: str | None) -> GeneratedA
 
     state = CustomAppState(vector=vector)
 
-    rich.print("\n[yellow]Fetching vuln atom from ChromaDB...[/yellow]")
-    state.vuln_atom_content = _fetch_vuln_atom(vector.vuln_atom_id)
-    rich.print("[yellow]Loading attack goal and runtime...[/yellow]")
-    state.attack_goal = _load_attack_goal(vector.attack_chain_goal)
+    rich.print("\n[yellow]Fetching vuln atom(s) from ChromaDB...[/yellow]")
+    state.vuln_atom_contents = [_fetch_vuln_atom(aid) for aid in vector.vuln_atom_ids]
+    rich.print("[yellow]Loading attack goal(s) and runtime...[/yellow]")
+    state.attack_goals = [_load_attack_goal(gid) for gid in vector.attack_chain_goals]
     state.web_runtime = _load_web_runtime(vector.runtime_id)
 
     rich.print("\n[yellow]Running app generation crew (Opus)...[/yellow]")
@@ -167,7 +169,7 @@ def run_generate_only(vector: CustomVector, save_path: str | None) -> GeneratedA
 
 def run_docker_only(app: GeneratedApp, vector: CustomVector, no_rebuild: bool) -> None:
     _section("DOCKER-ONLY MODE (skipping generation)")
-    rich.print(f"  vuln_atom_id : [cyan]{vector.vuln_atom_id}[/cyan]")
+    rich.print(f"  vuln_atoms   : [cyan]{vector.display_name}[/cyan]")
     rich.print(f"  runtime      : [cyan]{vector.runtime_id}[/cyan]  port: [cyan]{vector.port}[/cyan]")
 
     if no_rebuild:
@@ -203,7 +205,7 @@ def run_docker_only(app: GeneratedApp, vector: CustomVector, no_rebuild: bool) -
             rich.print(f"  [dim]stderr    : {l1_err}[/dim]")
 
         l1_verdict = _run_verdict_crew(
-            atom_name=vector.vuln_atom_id,
+            atom_name=vector.display_name,
             atom_context=vector.synthesis_context,
             layer="internal state check",
             snippet_executed=app.testing_snippet,
@@ -226,7 +228,7 @@ def run_docker_only(app: GeneratedApp, vector: CustomVector, no_rebuild: bool) -
             rich.print(f"  [dim]stderr    : {l2_err}[/dim]")
 
         l2_verdict = _run_verdict_crew(
-            atom_name=vector.vuln_atom_id,
+            atom_name=vector.display_name,
             atom_context=vector.synthesis_context,
             layer="external attack probe",
             snippet_executed=app.attack_snippet,
@@ -250,8 +252,8 @@ def run_docker_only(app: GeneratedApp, vector: CustomVector, no_rebuild: bool) -
 
 def run_full(vector: CustomVector, no_rebuild: bool, save_path: str | None) -> None:
     _section("FULL END-TO-END MODE")
-    rich.print(f"  vuln_atom_id : [cyan]{vector.vuln_atom_id}[/cyan]")
-    rich.print(f"  attack_goal  : [cyan]{vector.attack_chain_goal}[/cyan]")
+    rich.print(f"  vuln_atoms   : [cyan]{vector.display_name}[/cyan]")
+    rich.print(f"  attack_goals : [cyan]{'+'.join(vector.attack_chain_goals)}[/cyan]")
     rich.print(f"  runtime      : [cyan]{vector.runtime_id}[/cyan]  port: [cyan]{vector.port}[/cyan]")
 
     if no_rebuild:
@@ -325,8 +327,8 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("--vuln",      default=DEFAULT_VECTOR.vuln_atom_id,      help="Vuln atom id")
-    p.add_argument("--goal",      default=DEFAULT_VECTOR.attack_chain_goal,  help="Attack goal id")
+    p.add_argument("--vuln",      default=",".join(DEFAULT_VECTOR.vuln_atom_ids),  help="Vuln atom id(s), comma-separated")
+    p.add_argument("--goal",      default=",".join(DEFAULT_VECTOR.attack_chain_goals),  help="Attack goal id(s), comma-separated")
     p.add_argument("--runtime",   default=DEFAULT_VECTOR.runtime_id,         help="Runtime id")
     p.add_argument("--context",   default=DEFAULT_VECTOR.synthesis_context,  help="Synthesis context prose")
     p.add_argument("--generate-only", action="store_true",
@@ -344,8 +346,8 @@ def main() -> None:
     args = parse_args()
     port = RUNTIME_PORTS.get(args.runtime, 80)
     vector = DEFAULT_VECTOR.model_copy(update={
-        "vuln_atom_id":      args.vuln,
-        "attack_chain_goal": args.goal,
+        "vuln_atom_ids":      [v.strip() for v in args.vuln.split(",")],
+        "attack_chain_goals": [g.strip() for g in args.goal.split(",")],
         "runtime_id":        args.runtime,
         "port":              port,
         "synthesis_context": args.context,

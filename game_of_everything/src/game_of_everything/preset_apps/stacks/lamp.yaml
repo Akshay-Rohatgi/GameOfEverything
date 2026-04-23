@@ -1,0 +1,29 @@
+id: lamp
+description: Apache + PHP + MariaDB on Ubuntu 22.04
+packages:
+  - apache2
+  - php
+  - libapache2-mod-php
+  - php-mysql
+  - php-curl
+  - php-gd
+  - php-mbstring
+  - php-xml
+  - php-zip
+  - php-json
+  - mariadb-server
+  - curl
+  - ca-certificates
+install_snippet: |
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    apache2 php libapache2-mod-php php-mysql php-curl php-gd php-mbstring \
+    php-xml php-zip php-json mariadb-server curl ca-certificates
+  service mariadb start
+  for i in $(seq 1 15); do mysqladmin ping -s 2>/dev/null && break; sleep 1; done
+  service apache2 start
+  sleep 1
+db_setup_template: |
+  mysql -e "CREATE DATABASE IF NOT EXISTS {{db_name}};"
+  mysql -e "CREATE USER IF NOT EXISTS '{{db_user}}'@'localhost' IDENTIFIED BY '{{db_password}}';"
+  mysql -e "GRANT ALL ON {{db_name}}.* TO '{{db_user}}'@'localhost'; FLUSH PRIVILEGES;"

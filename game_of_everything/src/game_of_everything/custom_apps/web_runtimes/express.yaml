@@ -1,25 +1,35 @@
 id: express
-description: Node.js + Express on Ubuntu 22.04. App runs as a systemd service on real machines, nohup fallback in Docker.
+description: Node.js 20 + Express on Ubuntu 22.04. App runs as a systemd service on real machines, nohup fallback in Docker.
 required_packages:
   - nodejs
-  - npm
 app_dir: /opt/webapp
 file_extension: .js
 port: 3000
 service_name: webapp
 setup_notes: >
-  Node.js and npm are installed via apt. The app.js must call
+  Node.js MUST be installed via NodeSource — Ubuntu 22.04 apt ships v12 which
+  is EOL and incompatible with modern npm packages (Express 5, better-sqlite3,
+  Puppeteer all require v18+). The deploy_snippet must run:
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+  Do NOT use `apt-get install nodejs npm` — that gives v12. NodeSource's
+  nodejs package includes npm. The app.js must call
   app.listen(3000, '0.0.0.0') to be reachable from other containers.
-  Run `npm install express` and any DB drivers (better-sqlite3, mysql2) in
-  app_dir before starting.
+  Run `cd /opt/webapp && npm init -y && npm install express` and any DB
+  drivers (better-sqlite3, mysql2) or middleware (cookie-parser) in app_dir
+  BEFORE starting the app. Missing npm install causes "Cannot find module".
   The deploy_snippet must create a systemd unit file AND use the detection
   pattern below so it works both on real machines (systemd) and in Docker (nohup).
 deploy_reference: |
+  # Install Node.js 20 via NodeSource (NOT apt default which is v12)
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt-get install -y nodejs
+
   # Copy app file
   mkdir -p /opt/webapp
   cp /tmp/goe_app/app.js /opt/webapp/app.js
 
-  # Install dependencies
+  # Install npm dependencies (MUST happen before starting the app)
   cd /opt/webapp
   npm init -y
   npm install express

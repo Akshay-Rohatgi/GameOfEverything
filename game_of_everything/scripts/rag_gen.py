@@ -14,10 +14,15 @@ PROJECT_DIR = SCRIPT_DIR.parent
 ATOMS_DIR = PROJECT_DIR / "atoms"
 CHROMA_DB_PATH = PROJECT_DIR / "src/game_of_everything" / "chroma_db"
 
+# grab aws keys/data from goe.toml
+
+import tomllib
+with open(PROJECT_DIR / "goe.toml", 'rb') as f:
+    data = tomllib.load(f)
 
 aws_session = boto3.Session(
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
+    aws_access_key_id=data['aws']['access_key_id'],
+    aws_secret_access_key=data['aws']['secret_access_key'],
     region_name=os.getenv("AWS_REGION", "us-east-1"),
 )
 

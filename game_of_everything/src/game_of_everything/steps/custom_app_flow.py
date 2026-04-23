@@ -30,8 +30,9 @@ from game_of_everything.config import GoEConfig
 
 from game_of_everything.models import (
     CustomVector, CustomAppState, GeneratedApp, ResolvedCustomApp, TestVerdict,
+    AttackDiagnosticResult,
 )
-from game_of_everything.tools.test_environment import TestEnvironmentTool
+from game_of_everything.tools.test_environment import TestEnvironmentTool, RUNTIME_TARGET_IMAGES
 from game_of_everything.llm_factory import make_llm
 
 if TYPE_CHECKING:
@@ -114,7 +115,7 @@ def _run_app_generation_crew(
     ui: Optional["GoEConsole"] = None,
 ) -> GeneratedApp:
     """Run the app_generation_agent crew and return a GeneratedApp."""
-    assert state.vuln_atom_content and state.attack_goal and state.web_runtime and state.vector
+    assert state.vuln_atom_contents and state.attack_goals and state.web_runtime and state.vector
 
     llm = make_llm("app_generation_agent")
     generator = Agent(
@@ -143,13 +144,24 @@ def _run_app_generation_crew(
         else ""
     )
 
+    # Join multiple vuln atoms with clear separators
+    vuln_atoms_text = "\n\n---\n\n".join(
+        f"VULN ATOM {i+1}/{len(state.vuln_atom_contents)} ({state.vector.vuln_atom_ids[i]}):\n{content}"
+        for i, content in enumerate(state.vuln_atom_contents)
+    )
+    attack_goals_text = "\n\n---\n\n".join(
+        f"ATTACK GOAL {i+1}/{len(state.attack_goals)} ({state.vector.attack_chain_goals[i]}):\n{yaml.dump(goal)}"
+        for i, goal in enumerate(state.attack_goals)
+    )
+
     inputs = {
-        "vuln_atom": state.vuln_atom_content,
-        "attack_goal": yaml.dump(state.attack_goal),
+        "vuln_atom": vuln_atoms_text,
+        "attack_goal": attack_goals_text,
         "web_runtime": yaml.dump(state.web_runtime),
         "synthesis_context": state.vector.synthesis_context,
         "failure_context": failure_section,
         "port": str(state.vector.port),
+        "num_vulns": str(len(state.vuln_atom_contents)),
     }
 
     if ui:
@@ -218,6 +230,98 @@ def _run_verdict_crew(
     if verdict_task.output.pydantic:  # type: ignore
         return verdict_task.output.pydantic  # type: ignore
     return TestVerdict(passed=False, reasoning="Failed to parse LLM verdict output.")
+
+
+MAX_ATTACK_RETRIES = 2
+
+
+def _run_attack_agent_crew(
+    state: CustomAppState,
+    agents_config: dict,
+    tasks_config: dict,
+    l2_exit_code: int,
+    l2_stdout: str,
+    l2_stderr: str,
+    l1_exit_code: int,
+    l1_stdout: str,
+    verdict_reasoning: str,
+    attempt_number: int,
+    target_container_name: str,
+    attacker_container_name: str,
+    ui: Optional["GoEConsole"] = None,
+) -> AttackDiagnosticResult:
+    """Run the Attack Agent to fix a failing L2 attack snippet."""
+    from game_of_everything.tools.bound_exec_tools import (
+        BoundExecInAttackerTool,
+        BoundExecInTargetTool,
+    )
+
+    llm = make_llm("attack_agent")
+
+    attacker_tool = BoundExecInAttackerTool(container_name=attacker_container_name)
+    target_tool = BoundExecInTargetTool(container_name=target_container_name)
+
+    agent = Agent(
+        config=agents_config["attack_agent"],
+        llm=llm,
+        tools=[attacker_tool, target_tool],
+        verbose=False,
+    )  # type: ignore
+
+    task = Task(
+        config=tasks_config["fix_attack_snippet_task"],  # type: ignore
+        agent=agent,
+        output_pydantic=AttackDiagnosticResult,
+    )
+
+    crew = Crew(
+        agents=[agent],
+        tasks=[task],
+        process=Process.sequential,
+        verbose=False,
+        function_calling_llm=llm,
+    )
+
+    generated_app = state.generated_app
+    assert generated_app and state.vector
+
+    attack_goals_text = "\n\n---\n\n".join(
+        f"ATTACK GOAL {i+1}/{len(state.attack_goals)} ({state.vector.attack_chain_goals[i]}):\n{yaml.dump(goal)}"
+        for i, goal in enumerate(state.attack_goals)
+    )
+
+    inputs = {
+        "app_filename": generated_app.app_filename,
+        "app_source": _si(generated_app.app_source),
+        "attack_goal": _si(attack_goals_text),
+        "synthesis_context": _si(state.vector.synthesis_context or ""),
+        "failed_attack_snippet": _si(generated_app.attack_snippet),
+        "l2_exit_code": str(l2_exit_code),
+        "l2_stdout": _si(l2_stdout[:2000] or "(empty)"),
+        "l2_stderr": _si(l2_stderr[:2000] or "(empty)"),
+        "verdict_reasoning": _si(verdict_reasoning),
+        "testing_snippet": _si(generated_app.testing_snippet),
+        "l1_exit_code": str(l1_exit_code),
+        "l1_stdout": _si(l1_stdout[:2000] or "(empty)"),
+        "deploy_snippet": _si(generated_app.deploy_snippet),
+        "port": str(state.vector.port),
+        "attempt_number": str(attempt_number),
+        "max_attempts": str(MAX_ATTACK_RETRIES),
+    }
+
+    if ui:
+        with ui.capture():
+            crew.kickoff(inputs=inputs)
+    else:
+        crew.kickoff(inputs=inputs)
+
+    if task.output.pydantic:  # type: ignore
+        return task.output.pydantic  # type: ignore
+    return AttackDiagnosticResult(
+        fixed_attack_snippet=generated_app.attack_snippet,
+        diagnosis="Failed to parse attack agent output.",
+        confidence="low",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -294,27 +398,36 @@ class CustomAppFlow(Flow[CustomAppState]):
         else:
             print(msg)
 
+    def _progress(self, msg: str) -> None:
+        """Write a dim sub-line to the terminal (and log file)."""
+        if self.ui:
+            self.ui.info(f"    [dim]{msg}[/dim]")
+            self.ui.log(msg)
+        else:
+            print(msg)
+
     @start()
     def load_context(self) -> None:
-        """Fetch vuln atom from ChromaDB and load attack goal + web runtime YAMLs."""
+        """Fetch vuln atoms from ChromaDB and load attack goal + web runtime YAMLs."""
         v = self.state.vector
         assert v is not None
 
         self._log(f"\n=== CustomAppFlow: load_context ===")
-        self._log(f"  vuln_atom_id    : {v.vuln_atom_id}")
-        self._log(f"  attack_goal     : {v.attack_chain_goal}")
+        self._log(f"  vuln_atom_ids   : {v.vuln_atom_ids}")
+        self._log(f"  attack_goals    : {v.attack_chain_goals}")
         self._log(f"  runtime         : {v.runtime_id}")
 
-        self.state.vuln_atom_content = _fetch_vuln_atom(v.vuln_atom_id)
-        self.state.attack_goal = _load_attack_goal(v.attack_chain_goal)
+        self.state.vuln_atom_contents = [_fetch_vuln_atom(aid) for aid in v.vuln_atom_ids]
+        self.state.attack_goals = [_load_attack_goal(gid) for gid in v.attack_chain_goals]
         self.state.web_runtime = _load_web_runtime(v.runtime_id)
 
-        self._log("  Context loaded.")
+        self._log(f"  Context loaded ({len(v.vuln_atom_ids)} vuln atom(s), {len(v.attack_chain_goals)} goal(s)).")
 
     @listen(load_context)
     def generate_app(self) -> None:
         """Run the Opus-class generation crew to produce app code and snippets."""
         self._log("\n=== CustomAppFlow: generate_app (attempt 1) ===")
+        self._progress("Generating app (Opus)...")
         self.state.generated_app = _run_app_generation_crew(
             self.state, self.agents_config, self.tasks_config, ui=self.ui,
         )
@@ -328,7 +441,10 @@ class CustomAppFlow(Flow[CustomAppState]):
 
         self._log("\n=== CustomAppFlow: validate_end_to_end ===")
 
-        env = TestEnvironmentTool()
+        runtime_id = self.state.vector.runtime_id
+        runtime_info = RUNTIME_TARGET_IMAGES.get(runtime_id)
+        target_image = runtime_info["tag"] if runtime_info else ""
+        env = TestEnvironmentTool(target_image=target_image)
         failure_context = ""
 
         try:
@@ -342,6 +458,7 @@ class CustomAppFlow(Flow[CustomAppState]):
 
                 if is_retry:
                     self._log(f"\n--- Regenerating app (attempt {attempt + 1}/{1 + MAX_GENERATE_RETRIES}) ---")
+                    self._progress(f"Regenerating app (attempt {attempt + 1}/{1 + MAX_GENERATE_RETRIES})...")
                     self.state.generated_app = _run_app_generation_crew(
                         self.state, self.agents_config, self.tasks_config,
                         failure_context=failure_context,
@@ -354,6 +471,7 @@ class CustomAppFlow(Flow[CustomAppState]):
 
                 # Stage files and run deploy_snippet
                 self._log("  Staging app files...")
+                self._progress("Deploying app in container...")
                 _stage_app_files(env, generated_app)
 
                 self._log("  Running deploy_snippet...")
@@ -366,13 +484,14 @@ class CustomAppFlow(Flow[CustomAppState]):
 
                 # --- Layer 1 ---
                 self._log("  Running Layer 1 (internal state check)...")
+                self._progress("L1: internal state check...")
                 l1_exit, l1_stdout, l1_stderr = env.exec_in_target(generated_app.testing_snippet)
                 self._log(f"  L1 exit code: {l1_exit}")
 
                 l1_verdict = _run_verdict_crew(
                     agents_config=self.agents_config,
                     tasks_config=self.tasks_config,
-                    atom_name=self.state.vector.vuln_atom_id,  # type: ignore
+                    atom_name=self.state.vector.display_name,  # type: ignore
                     atom_context=self.state.vector.synthesis_context,  # type: ignore
                     layer="internal state check",
                     snippet_executed=generated_app.testing_snippet,
@@ -381,7 +500,10 @@ class CustomAppFlow(Flow[CustomAppState]):
                     stderr=l1_stderr,
                     ui=self.ui,
                 )
+                l1_icon = "[green]✓[/green]" if l1_verdict.passed else "[red]✗[/red]"
                 self._log(f"  Layer 1: {'PASS' if l1_verdict.passed else 'FAIL'} — {l1_verdict.reasoning}")
+                if self.ui:
+                    self.ui.info(f"    {l1_icon} L1")
 
                 if not l1_verdict.passed:
                     failure_context = (
@@ -405,6 +527,7 @@ class CustomAppFlow(Flow[CustomAppState]):
 
                 # --- Layer 2 ---
                 self._log("  Running Layer 2 (external attack probe)...")
+                self._progress("L2: external attack probe...")
                 env.ensure_attacker_tools([generated_app.attack_snippet])
                 l2_exit, l2_stdout, l2_stderr = env.exec_in_attacker(generated_app.attack_snippet)
                 self._log(f"  L2 exit code: {l2_exit}")
@@ -412,7 +535,7 @@ class CustomAppFlow(Flow[CustomAppState]):
                 l2_verdict = _run_verdict_crew(
                     agents_config=self.agents_config,
                     tasks_config=self.tasks_config,
-                    atom_name=self.state.vector.vuln_atom_id,  # type: ignore
+                    atom_name=self.state.vector.display_name,  # type: ignore
                     atom_context=self.state.vector.synthesis_context,  # type: ignore
                     layer="external attack probe",
                     snippet_executed=generated_app.attack_snippet,
@@ -424,9 +547,68 @@ class CustomAppFlow(Flow[CustomAppState]):
                 self._log(f"  Layer 2: {'PASS' if l2_verdict.passed else 'FAIL'} — {l2_verdict.reasoning}")
 
                 if not l2_verdict.passed:
+                    # --- Attack Agent retry loop ---
+                    attack_fixed = False
+                    for attack_attempt in range(1, MAX_ATTACK_RETRIES + 1):
+                        self._log(f"  Attack Agent: attempt {attack_attempt}/{MAX_ATTACK_RETRIES}...")
+                        self._progress(f"Attack agent: fixing exploit (attempt {attack_attempt}/{MAX_ATTACK_RETRIES})...")
+
+                        attack_result = _run_attack_agent_crew(
+                            state=self.state,
+                            agents_config=self.agents_config,
+                            tasks_config=self.tasks_config,
+                            l2_exit_code=l2_exit,
+                            l2_stdout=l2_stdout,
+                            l2_stderr=l2_stderr,
+                            l1_exit_code=l1_exit,
+                            l1_stdout=l1_stdout,
+                            verdict_reasoning=l2_verdict.reasoning,
+                            attempt_number=attack_attempt,
+                            target_container_name=env.target_name,
+                            attacker_container_name=env.attacker_name,
+                            ui=self.ui,
+                        )
+                        self._log(f"  Attack Agent diagnosis: {attack_result.diagnosis}")
+                        self._log(f"  Attack Agent confidence: {attack_result.confidence}")
+
+                        fixed = attack_result.fixed_attack_snippet
+                        env.ensure_attacker_tools([fixed])
+                        l2_exit, l2_stdout, l2_stderr = env.exec_in_attacker(fixed)
+
+                        l2_verdict = _run_verdict_crew(
+                            agents_config=self.agents_config,
+                            tasks_config=self.tasks_config,
+                            atom_name=self.state.vector.display_name,
+                            atom_context=self.state.vector.synthesis_context,
+                            layer="external attack probe",
+                            snippet_executed=fixed,
+                            exit_code=l2_exit,
+                            stdout=l2_stdout,
+                            stderr=l2_stderr,
+                            ui=self.ui,
+                        )
+                        retest_icon = "[green]✓[/green]" if l2_verdict.passed else "[red]✗[/red]"
+                        self._log(f"  Attack Agent L2 re-test: {'PASS' if l2_verdict.passed else 'FAIL'} — {l2_verdict.reasoning}")
+                        if self.ui:
+                            self.ui.info(f"    {retest_icon} L2 (attack agent attempt {attack_attempt})")
+
+                        if l2_verdict.passed:
+                            generated_app.attack_snippet = fixed
+                            attack_fixed = True
+                            break
+
+                    if attack_fixed:
+                        self.state.layer1_verdict = l1_verdict
+                        self.state.layer2_verdict = l2_verdict
+                        self._log(f"  Attack Agent fixed the exploit on attempt {attack_attempt}.")
+                        return
+
+                    # Attack agent exhausted — fall through to app regeneration
                     failure_context = (
                         f"Layer 1 PASSED but Layer 2 (external attack probe) FAILED.\n"
-                        f"Attack snippet:\n{generated_app.attack_snippet}\n"
+                        f"Attack agent tried {MAX_ATTACK_RETRIES} times but could not fix the exploit.\n"
+                        f"Last diagnosis: {attack_result.diagnosis}\n"
+                        f"Last attack snippet:\n{fixed}\n"
                         f"L2 exit code: {l2_exit}\n"
                         f"L2 stdout:\n{l2_stdout[:800]}\n"
                         f"L2 stderr:\n{l2_stderr[:800]}\n"
@@ -437,13 +619,16 @@ class CustomAppFlow(Flow[CustomAppState]):
                     else:
                         self.state.layer1_verdict = l1_verdict
                         self.state.layer2_verdict = l2_verdict
-                        self._log(f"Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts.")
+                        self._log(f"Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts (attack agent also failed).")
                         raise AppGenerationError(
                             f"CustomAppFlow: Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts. "
                             f"Last reason: {l2_verdict.reasoning}"
                         )
 
                 # Both layers passed
+                l2_icon = "[green]✓[/green]" if l2_verdict.passed else "[red]✗[/red]"
+                if self.ui:
+                    self.ui.info(f"    {l2_icon} L2")
                 self.state.layer1_verdict = l1_verdict
                 self.state.layer2_verdict = l2_verdict
                 self._log(f"Both layers passed on attempt {attempt + 1}.")

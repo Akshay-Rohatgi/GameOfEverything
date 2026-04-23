@@ -7,9 +7,17 @@ default:
 # Per-agent overrides. Keys must match agents.yaml keys.
 # Uncomment and modify to assign different models to specific agents.
 agents:
+  # High temperature for scenario synthesis — prevents identical chains on repeated runs
+  # with the same prompt. Without this, Bedrock defaults to near-deterministic output.
+  scenario_synthesis_agent:
+    temperature: 1.0
+
   # app_generation_agent writes complex multi-file app code — use Opus for quality.
   app_generation_agent:
     model_id: anthropic.claude-opus-4-6-v1
+
+  attack_agent:
+    model_id: anthropic.claude-sonnet-4-6
 # agents:
 #   request_parser_agent:
 #     model_id: anthropic.claude-haiku-3-5

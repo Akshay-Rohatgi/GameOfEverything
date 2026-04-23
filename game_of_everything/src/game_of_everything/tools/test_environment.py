@@ -20,12 +20,6 @@ from typing import Dict, List, Set, Tuple, Optional
 import docker
 from docker.errors import DockerException, NotFound, APIError
 
-from game_of_everything.tools.naming import (
-    box_container_name as _box_name,
-    attacker_container_name as _attacker_name,
-    network_name as _network_name,
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -64,9 +58,9 @@ def wait_for_docker(action: str = "setup Docker environment") -> None:
 
 # Default names (single-box / no scope). Multi-box runs use a scope prefix
 # so that each box gets its own isolated set of containers + network.
-_DEFAULT_NETWORK = _network_name()
-_DEFAULT_TARGET = _box_name("target")
-_DEFAULT_ATTACKER = _attacker_name()
+_DEFAULT_NETWORK = "goe_test_net"
+_DEFAULT_TARGET = "goe_target"
+_DEFAULT_ATTACKER = "goe_attacker"
 
 # Legacy module-level constants kept for backwards-compat (test scripts, etc.)
 NETWORK_NAME = _DEFAULT_NETWORK
@@ -77,6 +71,33 @@ ATTACKER_DOCKERFILE_DIR = str(
     Path(__file__).parent.parent.parent.parent / "docker" / "attacker"
 )
 ATTACKER_IMAGE_TAG = "goe-attacker:latest"
+
+# Preset target image — Ubuntu 22.04 with WP-CLI pre-installed.
+# Used by PresetAppFlow so deploy snippets don't download WP-CLI at runtime.
+PRESET_TARGET_DOCKERFILE_DIR = str(
+    Path(__file__).parent.parent.parent.parent / "docker" / "preset_target"
+)
+PRESET_TARGET_IMAGE_TAG = "goe-preset-target:latest"
+
+# Per-runtime target images for custom app testing.
+# Each pre-installs the runtime's required packages so deploy_snippets skip
+# the most fragile apt-install steps during Docker testing.
+_DOCKER_DIR = Path(__file__).parent.parent.parent.parent / "docker"
+
+RUNTIME_TARGET_IMAGES: Dict[str, Dict[str, str]] = {
+    "express": {
+        "tag": "goe-target-express:latest",
+        "dockerfile_dir": str(_DOCKER_DIR / "target_express"),
+    },
+    "flask": {
+        "tag": "goe-target-flask:latest",
+        "dockerfile_dir": str(_DOCKER_DIR / "target_flask"),
+    },
+    "apache_php": {
+        "tag": "goe-target-php:latest",
+        "dockerfile_dir": str(_DOCKER_DIR / "target_php"),
+    },
+}
 
 # Maps attacker-side command names to their apt package names (Kali/Debian).
 # Used by ensure_attacker_tools() to detect and install missing tools at runtime.
@@ -127,6 +148,9 @@ TARGET_TOOL_TO_PACKAGE: Dict[str, str] = {
     "php":      "php-cli",
     "python3":  "python3",
     "pip3":     "python3-pip",
+    "node":     "nodejs",
+    "nodejs":   "nodejs",
+    "npm":      "npm",
 }
 
 # Tools that cannot be installed via apt (no Kali/Debian package available) and
@@ -148,19 +172,24 @@ TOOL_TO_INSTALL_CMD: Dict[str, str] = {
 class TestEnvironmentTool:
     """Manages Docker network + container lifecycle for snippet testing."""
 
-    def __init__(self, scope: str = "", hostname: str = ""):
+    def __init__(self, scope: str = "", hostname: str = "", target_image: str = ""):
         """Args:
             scope: Optional prefix for container and network names.
-                   Empty string → default names (goe_target, goe_attacker, goe_net).
-                   Non-empty    → scoped names (goe_{scope}, goe_{scope}_attacker, goe_{scope}_net)
-                                  so that multiple boxes can run independently without collisions.
+                   Empty string → default names (goe_target, goe_attacker, goe_test_net).
+                   Non-empty    → scoped names (goe_{scope}_target, etc.) so that
+                                  multiple boxes can run independently without collisions.
             hostname: Hostname to assign to the target container.
                       Defaults to "target" when empty so single-box / legacy callers
                       are unaffected. Pass box.hostname for per-box multi-box runs so
                       that tested scripts see the same hostname as the final deployment.
+            target_image: Docker image to use for the target container.
+                          Defaults to TARGET_IMAGE (ubuntu:22.04) when empty.
+                          Pass PRESET_TARGET_IMAGE_TAG for preset app testing so
+                          WP-CLI and other preset tools are pre-installed.
         """
         self._scope = scope
         self._hostname = hostname or "target"
+        self._target_image = target_image or TARGET_IMAGE
         self._client: Optional[docker.DockerClient] = None
         self.network = None
         self.target_container = None
@@ -189,16 +218,20 @@ class TestEnvironmentTool:
     # ------------------------------------------------------------------
 
     @property
+    def _prefix(self) -> str:
+        return f"goe_{self._scope}_" if self._scope else "goe_"
+
+    @property
     def network_name(self) -> str:
-        return _network_name(self._scope)
+        return f"{self._prefix}test_net"
 
     @property
     def target_name(self) -> str:
-        return _box_name(self._scope) if self._scope else _box_name("target")
+        return f"{self._prefix}target"
 
     @property
     def attacker_name(self) -> str:
-        return _attacker_name(self._scope)
+        return f"{self._prefix}attacker"
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -216,40 +249,48 @@ class TestEnvironmentTool:
         self.network = self.client.networks.create(self.network_name, driver="bridge")
         logger.info(f"Created network: {self.network_name}")
 
-        # Start target container.
-        # The hostname is added as a network alias so Docker's embedded DNS
-        # resolves it from the attacker container (Docker DNS resolves container
-        # names and aliases, not the hostname= setting).
-        _net_cfg = self.client.api.create_networking_config({
-            self.network_name: self.client.api.create_endpoint_config(
-                aliases=[self._hostname]
-            )
-        })
+        # Build target image if it's a custom image (not stock ubuntu:22.04)
+        if self._target_image != TARGET_IMAGE:
+            dockerfile_dir = None
+            if self._target_image == PRESET_TARGET_IMAGE_TAG:
+                dockerfile_dir = PRESET_TARGET_DOCKERFILE_DIR
+            else:
+                for info in RUNTIME_TARGET_IMAGES.values():
+                    if info["tag"] == self._target_image:
+                        dockerfile_dir = info["dockerfile_dir"]
+                        break
+            if dockerfile_dir:
+                logger.info(f"Building target image {self._target_image} from {dockerfile_dir}...")
+                self.client.images.build(path=dockerfile_dir, tag=self._target_image, rm=True)
+                logger.info(f"Built target image: {self._target_image}")
+
+        # Start target container
         self.target_container = self.client.containers.run(
-            TARGET_IMAGE,
+            self._target_image,
             command="sleep infinity",
             name=self.target_name,
+            network=self.network_name,
             hostname=self._hostname,
-            networking_config=_net_cfg,
             detach=True,
             remove=False,
         )
-        logger.info(f"Started target container: {self.target_name} ({TARGET_IMAGE})")
+        logger.info(f"Started target container: {self.target_name} ({self._target_image})")
 
         # Bootstrap target with tools that generated snippets commonly rely on.
-        # ubuntu:22.04 base image omits curl, wget, and many standard utilities.
-        # This list covers the most common testing-snippet patterns; tools not
-        # listed here are caught at runtime by ensure_target_tools().
-        logger.info("Bootstrapping target container with base tools...")
-        bootstrap_cmd = (
-            "apt-get update -qq && "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
-            "curl wget ca-certificates gnupg lsb-release "
-            "iproute2 net-tools procps iputils-ping sudo sshpass"
-        )
-        exit_code, _, stderr = self._exec_in_container(self.target_container, bootstrap_cmd)
-        if exit_code != 0:
-            logger.warning(f"Target bootstrap had non-zero exit ({exit_code}): {stderr[:300]}")
+        # Pre-built runtime images already have these baked in — skip for them.
+        if self._target_image == TARGET_IMAGE:
+            logger.info("Bootstrapping target container with base tools...")
+            bootstrap_cmd = (
+                "apt-get update -qq && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+                "curl wget ca-certificates gnupg lsb-release "
+                "iproute2 net-tools procps iputils-ping sudo sshpass"
+            )
+            exit_code, _, stderr = self._exec_in_container(self.target_container, bootstrap_cmd)
+            if exit_code != 0:
+                logger.warning(f"Target bootstrap had non-zero exit ({exit_code}): {stderr[:300]}")
+        else:
+            logger.info("Skipping bootstrap — pre-built target image already has base tools.")
 
         # Build the attacker image from the Kali Dockerfile
         logger.info(f"Building attacker image from {ATTACKER_DOCKERFILE_DIR}...")
@@ -487,6 +528,26 @@ class TestEnvironmentTool:
             (exit_code, stdout, stderr)
         """
         return self._exec_in_container(self.target_container, snippet)
+
+    def copy_to_attacker(self, content: str, remote_path: str) -> None:
+        """Write a string as a file inside the attacker container.
+
+        Mirrors copy_to_target() but for the attacker (Kali) container.
+
+        Args:
+            content: File content to write.
+            remote_path: Absolute path inside the attacker container.
+        """
+        import base64
+        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        cmd = (
+            f"mkdir -p \"$(dirname '{remote_path}')\" && "
+            f"echo '{b64}' | base64 -d > '{remote_path}' && "
+            f"chmod +x '{remote_path}'"
+        )
+        exit_code, _, stderr = self._exec_in_container(self.attacker_container, cmd)
+        if exit_code != 0:
+            raise RuntimeError(f"copy_to_attacker failed for {remote_path}: {stderr}")
 
     def exec_in_attacker(self, snippet: str) -> Tuple[int, str, str]:
         """Run a bash snippet inside the attacker (Kali) container.

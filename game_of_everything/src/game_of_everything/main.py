@@ -8,7 +8,9 @@ which must live on methods of a Flow[State] subclass.
 
 import argparse
 import json
+import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +23,8 @@ from crewai.events.event_context import (
     MismatchBehavior,
 )
 from dotenv import load_dotenv
+
+import game_of_everything.patches  # noqa: F401 — monkey-patches crewAI JSON converter
 
 from game_of_everything.checkpoint import (
     checkpoint_dir,
@@ -37,6 +41,7 @@ from game_of_everything.steps import (
     run_chain_test,
     run_finalize_topology,
     run_review_and_fix,
+    run_deploy,
     run_deploy_ec2,
 )
 
@@ -50,12 +55,13 @@ _event_context_config.set(
     )
 )
 
-logging.getLogger('crewai').setLevel(logging.WARNING)
+logging.getLogger('crewai.flow.flow').setLevel(logging.WARNING)
 
 os.environ["GOE_VERSION"] = "0.1.0"
 os.environ["OTEL_SDK_DISABLED"] = "true"  # Disable OpenTelemetry to avoid unrelated warnings
 os.environ["LOG_LEVEL"] = "ERROR"  # Suppress lower-level logs from CrewAI and dependencies to reduce noise
 os.environ["CREWAI_TRACING_ENABLED"] = "false"  # Disable CrewAI's internal tracing to reduce noise
+os.environ["CREWAI_VERBOSE"] = "false"  # Disable CrewAI's verbose logging to reduce noise
 
 load_dotenv()
 
@@ -71,7 +77,7 @@ class GoEFlow(Flow[GoEState]):
         ec2_attacker_cidr: str | None = None,
         ec2_ttl_hours: int = 4,
     ):
-        super().__init__()
+        super().__init__(tracing=False)
         self._deploy_target = deploy_target
         self._review = review
         self._ec2_region = ec2_region
@@ -112,35 +118,14 @@ class GoEFlow(Flow[GoEState]):
             return True
         return False
 
-        if resume_dir is not None:
-            latest = find_latest_checkpoint(resume_dir)
-            if latest is None:
-                raise ValueError(f"No checkpoint files found in {resume_dir}")
-            loaded = load_checkpoint(latest)
-            for field_name in GoEState.model_fields:
-                setattr(self.state, field_name, getattr(loaded, field_name))
-            self.state.box_states = loaded.box_states
-            self._resume_dir: Path | None = resume_dir
-            print(f"[checkpoint] Resuming run {self.state.run_id} from {latest.name}")
-        else:
-            self.state.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._resume_dir = None
-
-    def _should_skip(self, step_name: str) -> bool:
-        """Return True when resuming and this step already has a checkpoint."""
-        if self._resume_dir is None:
-            return False
-        done = completed_steps(self._resume_dir)
-        if step_name in done:
-            print(f"[checkpoint] Skipping {step_name} (already completed)")
-            return True
-        return False
-
     @start()
     def synthesize_scenario(self):
         if self._should_skip("synthesize_scenario"):
             return
-        run_synthesize_topology(self.state, self.agents_config, self.tasks_config)
+        self.ui.status("Synthesizing scenario")
+        t0 = time.monotonic()
+        run_synthesize_topology(self.state, self.agents_config, self.tasks_config, ui=self.ui)
+        self.ui.step_done("Synthesizing scenario", time.monotonic() - t0)
         save_checkpoint(self.state, "synthesize_scenario")
 
     @listen(synthesize_scenario)
@@ -148,7 +133,10 @@ class GoEFlow(Flow[GoEState]):
         """Run the full per-box pipeline for every box in the topology (parallel)."""
         if self._should_skip("box_pipelines"):
             return
-        run_box_pipelines(self.state, self.agents_config, self.tasks_config)
+        self.ui.status("Running box pipelines")
+        t0 = time.monotonic()
+        run_box_pipelines(self.state, self.agents_config, self.tasks_config, ui=self.ui)
+        self.ui.step_done("Running box pipelines", time.monotonic() - t0)
         save_checkpoint(self.state, "box_pipelines")
 
     @listen(box_pipelines)
@@ -156,7 +144,10 @@ class GoEFlow(Flow[GoEState]):
         """Multi-box: validate end-to-end attack chain. Single-box: no-op."""
         if self._should_skip("chain_test"):
             return
-        run_chain_test(self.state, self.agents_config, self.tasks_config)
+        self.ui.status("Chain testing")
+        t0 = time.monotonic()
+        run_chain_test(self.state, self.agents_config, self.tasks_config, ui=self.ui)
+        self.ui.step_done("Chain testing", time.monotonic() - t0)
         save_checkpoint(self.state, "chain_test")
 
     @listen(chain_test)
@@ -164,8 +155,28 @@ class GoEFlow(Flow[GoEState]):
         """Multi-box: write output package. Single-box: no-op."""
         if self._should_skip("finalize_topology"):
             return
-        run_finalize_topology(self.state, self.agents_config, self.tasks_config)
+        self.ui.status("Finalizing output")
+        t0 = time.monotonic()
+        run_finalize_topology(self.state, self.agents_config, self.tasks_config, ui=self.ui)
+        self.ui.step_done("Finalizing output", time.monotonic() - t0)
         save_checkpoint(self.state, "finalize_topology")
+
+        # Print summary — count both misconfig snippets and custom/preset apps
+        all_snippets = self.state.generated_snippets or []
+        validated_snippets = sum(1 for s in all_snippets if s.validated)
+
+        # Aggregate across all box states for custom/preset apps
+        all_box_states = list(self.state.box_states.values()) or [self.state]
+        custom_apps = [a for bs in all_box_states for a in (bs.resolved_custom_apps or [])]
+        preset_apps = [a for bs in all_box_states for a in (bs.resolved_preset_apps or [])]
+        validated_apps = sum(1 for a in custom_apps + preset_apps if a.validation_passed)
+        total_apps = len(custom_apps) + len(preset_apps)
+
+        validated = validated_snippets + validated_apps
+        total = len(all_snippets) + total_apps
+        skipped = total - validated
+        if self.state.output_path:
+            self.ui.summary(validated, total, skipped, Path(self.state.output_path))
 
     @listen(finalize_topology)
     def review_and_fix(self):
@@ -178,8 +189,12 @@ class GoEFlow(Flow[GoEState]):
         save_checkpoint(self.state, "review_and_fix")
 
     @listen(review_and_fix)
+    def deploy(self):
+        run_deploy(self.state, ui=self.ui)
+
+    @listen(deploy)
     def deploy_ec2(self):
-        """Optional: deploy to AWS EC2. Activated via --deploy ec2."""
+        """Optional: deploy to AWS EC2 via Terraform. Activated via --deploy ec2."""
         if self._deploy_target != "ec2":
             return
         if self._should_skip("deploy_ec2"):
@@ -192,6 +207,10 @@ class GoEFlow(Flow[GoEState]):
             ttl_hours=self._ec2_ttl_hours,
         )
         save_checkpoint(self.state, "deploy_ec2")
+
+    def _cleanup(self):
+        if hasattr(self, "ui"):
+            self.ui.close()
 
 
 def load_state_from_output(output_dir: Path) -> GoEState:
@@ -374,7 +393,10 @@ def kickoff():
         ec2_attacker_cidr=args.ec2_attacker_cidr,
         ec2_ttl_hours=args.ec2_ttl_hours,
     )
-    goe_flow.kickoff()
+    try:
+        goe_flow.kickoff()
+    finally:
+        goe_flow._cleanup()
 
 
 def plot():

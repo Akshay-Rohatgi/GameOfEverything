@@ -1,0 +1,31 @@
+id: wordpress
+description: WordPress CMS installation with WP-CLI for headless setup
+stack_id: lamp
+required_vars:
+  - admin_user
+  - admin_password
+  - db_name
+  - db_user
+  - db_password
+defaults:
+  db_name: wordpress
+  db_user: wp
+  db_password: wpdbpass123
+  site_title: "Corporate Blog"
+install_template: |
+  cd /var/www/html && rm -f index.html
+  curl -sL https://wordpress.org/latest.tar.gz | tar xz
+  mv wordpress/* . && rmdir wordpress
+  cp wp-config-sample.php wp-config.php
+  sed -i "s/database_name_here/{{db_name}}/; s/username_here/{{db_user}}/; s/password_here/{{db_password}}/; s/localhost/127.0.0.1/" wp-config.php
+  chown -R www-data:www-data /var/www/html
+  wp core install --path=/var/www/html \
+    --url="http://localhost" --title="{{site_title}}" \
+    --admin_user="{{admin_user}}" --admin_password="{{admin_password}}" \
+    --admin_email="admin@localhost" --allow-root
+healthcheck: |
+  for i in $(seq 1 30); do
+    curl -s -o /dev/null -w '%{http_code}' http://localhost/ 2>/dev/null | grep -qE '200|302' && break
+    sleep 2
+  done
+harness_id: wp_helpers
