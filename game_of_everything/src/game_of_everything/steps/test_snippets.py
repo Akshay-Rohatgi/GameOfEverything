@@ -50,16 +50,15 @@ def run_verdict_crew(
     stdout: str,
     stderr: str,
     box_id: str = "",
+    ui: Optional["GoEConsole"] = None,
 ) -> TestVerdict:
     """Kick off a one-task Testing Agent crew to judge command output."""
     llm = make_llm("testing_agent")
-    _tag = f"[{box_id}][TESTER]" if box_id else "[TESTER]"
 
     tester = Agent(
         config=agents_config["testing_agent"],
         llm=llm,
-        verbose=True,
-        step_callback=lambda step: print(f"{_tag} {step}"),
+        verbose=False,
     )  # type: ignore
 
     verdict_task = Task(
@@ -120,17 +119,16 @@ def run_diagnostic_crew(
     target_container_name: str = "goe_target",  # overridden by caller with env.target_name
     attacker_container_name: str = "goe_attacker",  # overridden by caller with env.attacker_name
     extra_context: str = "",
+    ui: Optional["GoEConsole"] = None,
 ) -> DiagnosticResult:
     """Kick off a one-task Diagnostic Agent crew to diagnose and fix a failing snippet."""
     llm = make_llm("diagnostic_agent")
-    _tag = f"[{box_id}][DIAGNOSTICIAN]" if box_id else "[DIAGNOSTICIAN]"
 
     diagnostician = Agent(
         config=agents_config["diagnostic_agent"],
         llm=llm,
         tools=[ReadAtomTool(), ExecInContainerTool()],
-        verbose=True,
-        step_callback=lambda step: print(f"{_tag} {step}"),
+        verbose=False,
     )  # type: ignore
 
     diag_task = Task(
@@ -148,23 +146,26 @@ def run_diagnostic_crew(
         function_calling_llm=llm,
     )
 
-    diag_crew.kickoff(
-        inputs={
-            "atom_name": atom_name,
-            "atom_context": _si(atom_context),
-            "atom_parameters": _si(atom_parameters or "(none)"),
-            "original_code_snippet": _si(original_code_snippet),
-            "original_testing_snippet": _si(original_testing_snippet),
-            "apply_stderr": _si(apply_stderr or "(empty)"),
-            "l1_exit_code": str(l1_exit_code),
-            "l1_stdout": _si(l1_stdout or "(empty)"),
-            "l1_stderr": _si(l1_stderr or "(empty)"),
-            "verdict_reasoning": _si(verdict_reasoning + ("\n\n--- ADDITIONAL CONTEXT FROM USER ---\n" + extra_context if extra_context else "")),
-            "attempt_number": str(attempt_number),
-            "target_container_name": target_container_name,
-            "attacker_container_name": attacker_container_name,
-        }
-    )
+    diag_inputs = {
+        "atom_name": atom_name,
+        "atom_context": _si(atom_context),
+        "atom_parameters": _si(atom_parameters or "(none)"),
+        "original_code_snippet": _si(original_code_snippet),
+        "original_testing_snippet": _si(original_testing_snippet),
+        "apply_stderr": _si(apply_stderr or "(empty)"),
+        "l1_exit_code": str(l1_exit_code),
+        "l1_stdout": _si(l1_stdout or "(empty)"),
+        "l1_stderr": _si(l1_stderr or "(empty)"),
+        "verdict_reasoning": _si(verdict_reasoning + ("\n\n--- ADDITIONAL CONTEXT FROM USER ---\n" + extra_context if extra_context else "")),
+        "attempt_number": str(attempt_number),
+        "target_container_name": target_container_name,
+        "attacker_container_name": attacker_container_name,
+    }
+    if ui:
+        with ui.capture():
+            diag_crew.kickoff(inputs=diag_inputs)
+    else:
+        diag_crew.kickoff(inputs=diag_inputs)
 
     if diag_task.output.pydantic:  # type: ignore
         return diag_task.output.pydantic  # type: ignore
@@ -187,6 +188,7 @@ def run_test_snippets(
     tasks_config: dict,
     env: Optional[TestEnvironmentTool] = None,
     box_id: str = "",
+    ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Test generated snippets in Docker containers with two-layer validation.
 
@@ -217,9 +219,15 @@ def run_test_snippets(
 
     try:
         if _owns_env:
-            rich.print("\n[bold yellow]=== SETTING UP TEST ENVIRONMENT ===[/bold yellow]")
+            if ui:
+                ui.log("=== SETTING UP TEST ENVIRONMENT ===")
+            else:
+                rich.print("\n[bold yellow]=== SETTING UP TEST ENVIRONMENT ===[/bold yellow]")
             env.setup()
-            rich.print(f"[green]Test environment ready ({env.target_name} + {env.attacker_name} on {env.network_name})[/green]")
+            if ui:
+                ui.log(f"Test environment ready ({env.target_name} + {env.attacker_name} on {env.network_name})")
+            else:
+                rich.print(f"[green]Test environment ready ({env.target_name} + {env.attacker_name} on {env.network_name})[/green]")
 
         # Ensure attacker container has all referenced tools
         all_attack_snippets = [s.attack_snippet for s in snippets if s.attack_snippet]
@@ -239,14 +247,13 @@ def run_test_snippets(
         if not ui:
             rich.print("[green]Target tools verified.[/green]")
 
-        # Ensure target container has all tools referenced in code/testing snippets
-        all_code_snippets = [s.code_snippet for s in snippets]
-        all_testing_snippets = [s.testing_snippet for s in snippets]
-        rich.print("[yellow]Checking target container for required tools...[/yellow]")
-        env.ensure_target_tools(all_code_snippets, all_testing_snippets)
-        rich.print("[green]Target tools verified.[/green]")
-
         MAX_DIAGNOSTIC_RETRIES = 2
+
+        # Track each snippet's most recent L1/L2 outcomes across the whole loop
+        # so cumulative reprobes can redeem earlier atoms whose attack surface
+        # only comes online once a later atom is applied.
+        l1_passed_per_snippet: List[bool] = [False] * len(snippets)
+        latest_l2_verdict: List[Optional[TestVerdict]] = [None] * len(snippets)
 
         for i, snippet in enumerate(snippets):
             if ui:
@@ -292,6 +299,7 @@ def run_test_snippets(
                     stdout=l1_stdout,
                     stderr=l1_stderr,
                     box_id=box_id,
+                    ui=ui,
                 )
 
                 if ui:
@@ -300,6 +308,7 @@ def run_test_snippets(
 
                 if l1_verdict.passed:
                     l1_passed = True
+                    l1_passed_per_snippet[i] = True
                     break
 
                 # Layer 1 failed — attempt diagnosis if retries remain
@@ -324,6 +333,7 @@ def run_test_snippets(
                         box_id=box_id,
                         target_container_name=env.target_name,
                         attacker_container_name=env.attacker_name,
+                        ui=ui,
                     )
 
                     diagnostic_attempts.append(diag_result)
@@ -347,16 +357,25 @@ def run_test_snippets(
                     diagnostic_results=diagnostic_attempts if diagnostic_attempts else None,
                     error=f"Layer 1 failed after {len(diagnostic_attempts)} diagnostic retries — snippet skipped.",
                 ))
-                rich.print(f"  [bold yellow]Snippet {i} ({snippet.atom_name}) skipped — continuing with remaining snippets.[/bold yellow]")
+                if ui:
+                    ui.log(f"  Snippet {i} ({snippet.atom_name}) skipped — continuing with remaining snippets.")
+                else:
+                    rich.print(f"  [bold yellow]Snippet {i} ({snippet.atom_name}) skipped — continuing with remaining snippets.[/bold yellow]")
                 continue
 
             # --- Layer 2: re-run ALL accumulated attack probes 0..i ---
+            # Cumulative model: a prior atom's L2 may only succeed once a later
+            # atom brings the surface online (e.g. create_user's SSH probe only
+            # works after weak_service_password starts sshd). So we reprobe all
+            # prior snippets whose L1 passed — and update each snippet's
+            # `validated` flag based on its MOST RECENT L2 outcome. That lets
+            # earlier atoms be redeemed by later ones.
             l2_verdicts: List[TestVerdict] = []
             l2_diagnostics: List[DiagnosticResult] = []
 
             for j in range(i + 1):
-                if j < i and not snippets[j].validated:
-                    continue  # skip L2 probes for snippets that failed L1
+                if j < i and not l1_passed_per_snippet[j]:
+                    continue  # skip reprobe for snippets whose L1 never passed
                 attack = snippets[j].attack_snippet
                 if attack:
                     if ui:
@@ -374,8 +393,10 @@ def run_test_snippets(
                         stdout=a_stdout,
                         stderr=a_stderr,
                         box_id=box_id,
+                        ui=ui,
                     )
                     l2_verdicts.append(verdict)
+                    latest_l2_verdict[j] = verdict
 
                     if ui:
                         ui.log(f"    Snippet {j} ({snippets[j].atom_name}) Layer 2: {'PASS' if verdict.passed else 'FAIL'}")
@@ -386,7 +407,10 @@ def run_test_snippets(
                             ui.log(f"    REGRESSION: snippet {j} Layer 2 was passing, now fails after snippet {i}")
 
                         # Run diagnostic for L2 failure (log only, no retry)
-                        rich.print(f"    [yellow]Running Diagnostic Agent for L2 failure (log only)...[/yellow]")
+                        if ui:
+                            ui.log("    Running Diagnostic Agent for L2 failure (log only)...")
+                        else:
+                            rich.print("    [yellow]Running Diagnostic Agent for L2 failure (log only)...[/yellow]")
                         l2_diag = run_diagnostic_crew(
                             agents_config=agents_config,
                             tasks_config=tasks_config,
@@ -404,6 +428,7 @@ def run_test_snippets(
                             box_id=box_id,
                             target_container_name=env.target_name,
                             attacker_container_name=env.attacker_name,
+                            ui=ui,
                         )
                         l2_diagnostics.append(l2_diag)
                         if ui:
@@ -438,6 +463,21 @@ def run_test_snippets(
                 diagnostic_results=all_diagnostics if all_diagnostics else None,
             ))
 
+        # --- Final reconciliation: prior atoms may have been redeemed by
+        # later cumulative reprobes (e.g. create_user's SSH probe only works
+        # after weak_service_password brings sshd up). Update each snippet's
+        # `validated` flag based on its MOST RECENT L2 outcome, and surface
+        # any redemptions to the user.
+        for idx, s in enumerate(snippets):
+            if not l1_passed_per_snippet[idx]:
+                continue  # L1 never passed — stays invalidated
+            latest = latest_l2_verdict[idx]
+            final_validated = latest.passed if latest is not None else True
+            if s.validated != final_validated:
+                s.set_validated(final_validated)
+                if ui and final_validated:
+                    ui.log(f"  {s.atom_name}: redeemed by later cumulative reprobe — L2 now PASS")
+
         state.test_results = results
 
         if ui:
@@ -460,6 +500,12 @@ def run_test_snippets(
 
     finally:
         if _owns_env:
-            rich.print("\n[bold yellow]=== TEARING DOWN TEST ENVIRONMENT ===[/bold yellow]")
+            if ui:
+                ui.log("=== TEARING DOWN TEST ENVIRONMENT ===")
+            else:
+                rich.print("\n[bold yellow]=== TEARING DOWN TEST ENVIRONMENT ===[/bold yellow]")
             env.teardown()
-            rich.print("[green]Test environment cleaned up.[/green]")
+            if ui:
+                ui.log("Test environment cleaned up.")
+            else:
+                rich.print("[green]Test environment cleaned up.[/green]")

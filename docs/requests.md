@@ -109,3 +109,13 @@ I want an ubuntu system with a vulnerable website. It should be one PHP-based we
 ```
 A Node.js/Express support ticket portal where users submit bug reports and an admin reviews them. The admin bot visits submitted tickets in a headless browser. The ticket content is not sanitized, allowing XSS to steal the admin's session cookie. Avoid any post-exploitation goals, this is purely an XSS lab.
 ```
+
+```
+Two Ubuntu hosts. web01 runs an Apache/PHP app with a union-based SQL injection in a product search endpoint; the seeded database contains a developer account mwhite/Preston2022!. On db01, MySQL is exposed on port 3306 with root access and no password, and the same mwhite/Preston2022! credential works for SSH on db01 where mwhite has passwordless sudo.
+```
+
+```
+A single Ubuntu host thats running a Samba server with an anonymous binded share. The share contains a git repository with source code for a developer's dotfiles. This dotfiles repository's commit history shows a previously committed SSH key that was later removed, but the key is still accessible in the git history. The key allows SSH access to the same host as the user 'dev01.'
+
+Once on the system, there is a locally listening python service running as root that accepts pickled data over HTTP. The python service is a microservice that performs some internal function for the system, but it does not validate or sanitize the input data before deserializing it with pickle. The service is vulnerable to arbitrary code execution via deserialization of malicious pickle payloads. The attacker can use the SSH access directly to deliver a malicious payload or port forward to the service and deliver the payload from their own machine.
+```

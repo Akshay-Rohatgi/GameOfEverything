@@ -1,4 +1,3 @@
-import os
 import boto3
 import chromadb
 from dotenv import load_dotenv
@@ -7,6 +6,8 @@ from typing import Literal, Type
 from pydantic import BaseModel, Field
 from crewai.tools import BaseTool
 from chromadb.utils.embedding_functions import AmazonBedrockEmbeddingFunction
+
+from game_of_everything.config import GoEConfig
 
 load_dotenv()
 
@@ -67,11 +68,12 @@ class SearchAtomsTool(BaseTool):
                 f"Valid values: {list(_COLLECTION_NAMES.keys())}"
             )
 
-        # 1. Authenticate with AWS
+        # 1. Authenticate with AWS (config chain: env → goe.toml → default)
+        cfg = GoEConfig.get()
         aws_session = boto3.Session(
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
-            region_name=os.getenv("AWS_REGION", "us-east-1"),
+            aws_access_key_id=cfg.aws_access_key_id or None,
+            aws_secret_access_key=cfg.aws_secret_access_key or None,
+            region_name=cfg.aws_region,
         )
 
         # 2. Initialize the Bedrock embedding function

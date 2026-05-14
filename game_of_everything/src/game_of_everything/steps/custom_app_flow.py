@@ -444,7 +444,8 @@ class CustomAppFlow(Flow[CustomAppState]):
         runtime_id = self.state.vector.runtime_id
         runtime_info = RUNTIME_TARGET_IMAGES.get(runtime_id)
         target_image = runtime_info["tag"] if runtime_info else ""
-        env = TestEnvironmentTool(target_image=target_image)
+        # Enable browser for all custom app testing (Phase 2: Attack Orchestrator)
+        env = TestEnvironmentTool(target_image=target_image, enable_browser=True)
         failure_context = ""
 
         try:
@@ -482,155 +483,88 @@ class CustomAppFlow(Flow[CustomAppState]):
                 if deploy_stderr:
                     self._log(f"  Deploy stderr: {deploy_stderr[:500]}")
 
-                # --- Layer 1 ---
-                self._log("  Running Layer 1 (internal state check)...")
-                self._progress("L1: internal state check...")
-                l1_exit, l1_stdout, l1_stderr = env.exec_in_target(generated_app.testing_snippet)
-                self._log(f"  L1 exit code: {l1_exit}")
+                # --- Attack Orchestrator (L1 + L2) ---
+                self._log("  Running Attack Orchestrator (L1 + L2)...")
+                self._progress("Attack orchestrator: validating app...")
 
-                l1_verdict = _run_verdict_crew(
+                from game_of_everything.crews.attack_orchestrator_crew import run_attack_orchestrator_crew
+                from game_of_everything.models import TestVerdict
+
+                orch_result = run_attack_orchestrator_crew(
                     agents_config=self.agents_config,
                     tasks_config=self.tasks_config,
-                    atom_name=self.state.vector.display_name,  # type: ignore
-                    atom_context=self.state.vector.synthesis_context,  # type: ignore
-                    layer="internal state check",
-                    snippet_executed=generated_app.testing_snippet,
-                    exit_code=l1_exit,
-                    stdout=l1_stdout,
-                    stderr=l1_stderr,
+                    generated_app=generated_app,
+                    synthesis_context=self.state.vector.synthesis_context,  # type: ignore
+                    port=self.state.vector.port,  # type: ignore
+                    target_container_name=env.target_name,
+                    attacker_container_name=env.attacker_name,
+                    cdp_url=env.browser_cdp_url,
+                    attempt_number=attempt + 1,
+                    max_attempts=1 + MAX_GENERATE_RETRIES,
+                    failure_context=failure_context,
                     ui=self.ui,
                 )
-                l1_icon = "[green]✓[/green]" if l1_verdict.passed else "[red]✗[/red]"
-                self._log(f"  Layer 1: {'PASS' if l1_verdict.passed else 'FAIL'} — {l1_verdict.reasoning}")
+
+                l1_icon = "[green]✓[/green]" if orch_result.l1_passed else "[red]✗[/red]"
+                l2_icon = "[green]✓[/green]" if orch_result.l2_passed else "[red]✗[/red]"
+                self._log(f"  Layer 1: {'PASS' if orch_result.l1_passed else 'FAIL'}")
+                self._log(f"  Layer 2: {'PASS' if orch_result.l2_passed else 'FAIL'}")
+                self._log(f"  Reasoning: {orch_result.reasoning}")
+                if orch_result.used_browser:
+                    self._log(f"  Used browser: yes")
+
                 if self.ui:
                     self.ui.info(f"    {l1_icon} L1")
+                    if orch_result.l1_passed:
+                        self.ui.info(f"    {l2_icon} L2")
 
-                if not l1_verdict.passed:
+                if not orch_result.l1_passed:
                     failure_context = (
                         f"Layer 1 (internal state check) FAILED.\n"
                         f"Deploy stderr:\n{deploy_stderr[:800]}\n"
-                        f"Testing snippet:\n{generated_app.testing_snippet}\n"
-                        f"L1 exit code: {l1_exit}\n"
-                        f"L1 stdout:\n{l1_stdout[:800]}\n"
-                        f"L1 stderr:\n{l1_stderr[:800]}\n"
-                        f"Verdict reasoning: {l1_verdict.reasoning}"
+                        f"L1 evidence:\n{orch_result.l1_evidence[:800]}\n"
+                        f"Reasoning: {orch_result.reasoning}"
                     )
                     if attempt < MAX_GENERATE_RETRIES:
                         continue
                     else:
-                        self.state.layer1_verdict = l1_verdict
+                        self.state.layer1_verdict = TestVerdict(
+                            passed=False, reasoning=orch_result.reasoning
+                        )
                         self._log(f"Layer 1 failed after {1 + MAX_GENERATE_RETRIES} attempts.")
                         raise AppGenerationError(
                             f"CustomAppFlow: Layer 1 failed after {1 + MAX_GENERATE_RETRIES} attempts. "
-                            f"Last reason: {l1_verdict.reasoning}"
+                            f"Last reason: {orch_result.reasoning}"
                         )
 
-                # --- Layer 2 ---
-                self._log("  Running Layer 2 (external attack probe)...")
-                self._progress("L2: external attack probe...")
-                env.ensure_attacker_tools([generated_app.attack_snippet])
-                l2_exit, l2_stdout, l2_stderr = env.exec_in_attacker(generated_app.attack_snippet)
-                self._log(f"  L2 exit code: {l2_exit}")
-
-                l2_verdict = _run_verdict_crew(
-                    agents_config=self.agents_config,
-                    tasks_config=self.tasks_config,
-                    atom_name=self.state.vector.display_name,  # type: ignore
-                    atom_context=self.state.vector.synthesis_context,  # type: ignore
-                    layer="external attack probe",
-                    snippet_executed=generated_app.attack_snippet,
-                    exit_code=l2_exit,
-                    stdout=l2_stdout,
-                    stderr=l2_stderr,
-                    ui=self.ui,
-                )
-                self._log(f"  Layer 2: {'PASS' if l2_verdict.passed else 'FAIL'} — {l2_verdict.reasoning}")
-
-                if not l2_verdict.passed:
-                    # --- Attack Agent retry loop ---
-                    attack_fixed = False
-                    for attack_attempt in range(1, MAX_ATTACK_RETRIES + 1):
-                        self._log(f"  Attack Agent: attempt {attack_attempt}/{MAX_ATTACK_RETRIES}...")
-                        self._progress(f"Attack agent: fixing exploit (attempt {attack_attempt}/{MAX_ATTACK_RETRIES})...")
-
-                        attack_result = _run_attack_agent_crew(
-                            state=self.state,
-                            agents_config=self.agents_config,
-                            tasks_config=self.tasks_config,
-                            l2_exit_code=l2_exit,
-                            l2_stdout=l2_stdout,
-                            l2_stderr=l2_stderr,
-                            l1_exit_code=l1_exit,
-                            l1_stdout=l1_stdout,
-                            verdict_reasoning=l2_verdict.reasoning,
-                            attempt_number=attack_attempt,
-                            target_container_name=env.target_name,
-                            attacker_container_name=env.attacker_name,
-                            ui=self.ui,
-                        )
-                        self._log(f"  Attack Agent diagnosis: {attack_result.diagnosis}")
-                        self._log(f"  Attack Agent confidence: {attack_result.confidence}")
-
-                        fixed = attack_result.fixed_attack_snippet
-                        env.ensure_attacker_tools([fixed])
-                        l2_exit, l2_stdout, l2_stderr = env.exec_in_attacker(fixed)
-
-                        l2_verdict = _run_verdict_crew(
-                            agents_config=self.agents_config,
-                            tasks_config=self.tasks_config,
-                            atom_name=self.state.vector.display_name,
-                            atom_context=self.state.vector.synthesis_context,
-                            layer="external attack probe",
-                            snippet_executed=fixed,
-                            exit_code=l2_exit,
-                            stdout=l2_stdout,
-                            stderr=l2_stderr,
-                            ui=self.ui,
-                        )
-                        retest_icon = "[green]✓[/green]" if l2_verdict.passed else "[red]✗[/red]"
-                        self._log(f"  Attack Agent L2 re-test: {'PASS' if l2_verdict.passed else 'FAIL'} — {l2_verdict.reasoning}")
-                        if self.ui:
-                            self.ui.info(f"    {retest_icon} L2 (attack agent attempt {attack_attempt})")
-
-                        if l2_verdict.passed:
-                            generated_app.attack_snippet = fixed
-                            attack_fixed = True
-                            break
-
-                    if attack_fixed:
-                        self.state.layer1_verdict = l1_verdict
-                        self.state.layer2_verdict = l2_verdict
-                        self._log(f"  Attack Agent fixed the exploit on attempt {attack_attempt}.")
-                        return
-
-                    # Attack agent exhausted — fall through to app regeneration
+                if not orch_result.l2_passed:
                     failure_context = (
                         f"Layer 1 PASSED but Layer 2 (external attack probe) FAILED.\n"
-                        f"Attack agent tried {MAX_ATTACK_RETRIES} times but could not fix the exploit.\n"
-                        f"Last diagnosis: {attack_result.diagnosis}\n"
-                        f"Last attack snippet:\n{fixed}\n"
-                        f"L2 exit code: {l2_exit}\n"
-                        f"L2 stdout:\n{l2_stdout[:800]}\n"
-                        f"L2 stderr:\n{l2_stderr[:800]}\n"
-                        f"Verdict reasoning: {l2_verdict.reasoning}"
+                        f"L2 evidence:\n{orch_result.l2_evidence[:800]}\n"
+                        f"Reasoning: {orch_result.reasoning}"
                     )
                     if attempt < MAX_GENERATE_RETRIES:
                         continue
                     else:
-                        self.state.layer1_verdict = l1_verdict
-                        self.state.layer2_verdict = l2_verdict
-                        self._log(f"Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts (attack agent also failed).")
+                        self.state.layer1_verdict = TestVerdict(
+                            passed=True, reasoning=orch_result.l1_evidence
+                        )
+                        self.state.layer2_verdict = TestVerdict(
+                            passed=False, reasoning=orch_result.reasoning
+                        )
+                        self._log(f"Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts.")
                         raise AppGenerationError(
                             f"CustomAppFlow: Layer 2 failed after {1 + MAX_GENERATE_RETRIES} attempts. "
-                            f"Last reason: {l2_verdict.reasoning}"
+                            f"Last reason: {orch_result.reasoning}"
                         )
 
                 # Both layers passed
-                l2_icon = "[green]✓[/green]" if l2_verdict.passed else "[red]✗[/red]"
-                if self.ui:
-                    self.ui.info(f"    {l2_icon} L2")
-                self.state.layer1_verdict = l1_verdict
-                self.state.layer2_verdict = l2_verdict
+                self.state.layer1_verdict = TestVerdict(
+                    passed=True, reasoning=orch_result.l1_evidence
+                )
+                self.state.layer2_verdict = TestVerdict(
+                    passed=True, reasoning=orch_result.l2_evidence
+                )
                 self._log(f"Both layers passed on attempt {attempt + 1}.")
                 return
 
@@ -652,7 +586,7 @@ class CustomAppFlow(Flow[CustomAppState]):
             vector=self.state.vector,
             deploy_snippet=packaged_snippet,
             testing_snippet=self.state.generated_app.testing_snippet,
-            attack_snippet=self.state.generated_app.attack_snippet,
+            attack_snippet="",  # Deprecated: orchestrator uses attack_objective instead
             validation_passed=l1_passed and l2_passed,
         )
 

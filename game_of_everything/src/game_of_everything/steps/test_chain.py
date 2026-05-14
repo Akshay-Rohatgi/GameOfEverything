@@ -16,11 +16,14 @@ model — there is no point running step N+1 if step N's credential pivot failed
 
 import logging
 import re
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from game_of_everything.models import ChainTestResult
 from game_of_everything.state import GoEState
 from game_of_everything.tools.chain_test_environment import ChainTestEnvironment
+
+if TYPE_CHECKING:
+    from game_of_everything.ui import GoEConsole
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,7 @@ def run_chain_test(
     state: GoEState,
     agents_config: Optional[dict] = None,
     tasks_config: Optional[dict] = None,
+    ui: Optional["GoEConsole"] = None,
 ) -> None:
     """Execute all ChainProbes against a live topology. Mutates ``state.chain_test_results``."""
 

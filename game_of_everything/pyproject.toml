@@ -3,12 +3,13 @@ name = "game_of_everything"
 version = "0.1.0"
 description = "game_of_everything using crewAI"
 authors = [{ name = "Your Name", email = "you@example.com" }]
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "crewai[bedrock,tools]==1.9.3",
     "langchain-aws>=1.1.0",
     "docker>=7.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
+    "playwright>=1.40.0",
 ]
 
 [project.scripts]

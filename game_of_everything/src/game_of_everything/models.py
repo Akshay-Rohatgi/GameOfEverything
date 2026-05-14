@@ -104,6 +104,12 @@ class SharedSecret(BaseModel):
     access_method: str              # "ssh", "web_login", "smb", "ftp", "mysql"
 
 
+class KillChainStep(BaseModel):
+    """One step in the tactical kill-chain display."""
+    tag: str                        # ENUM, WEB, CRED, RCE, LPE, LAT, PERSIST, EXFIL
+    action: str                     # "Upload PHP Webshell -> Achieve www-data shell"
+
+
 class BoxSpec(BaseModel):
     """Per-box description produced by synthesize_scenario for multi-box scenarios.
 
@@ -118,6 +124,9 @@ class BoxSpec(BaseModel):
     custom_vectors: List[CustomVector] = []
     preset_vectors: List["PresetVector"] = []
     services: List[str] = []        # ["ssh:22", "http:80", "mysql:3306"]
+    # Tactical display fields populated by the synthesis agent
+    attack_vector: Optional[str] = None   # "Unauth Web RCE -> SUID Data Exfil"
+    goal: Optional[str] = None            # "Harvest internal credentials for [backup01]"
 
 
 class SynthesizedScenario(BaseModel):
@@ -137,6 +146,11 @@ class SynthesizedScenario(BaseModel):
     # Multi-box: per-box pipeline descriptions (populated when num_boxes > 1)
     boxes: List[BoxSpec] = []
     shared_secrets: List[SharedSecret] = []     # Cross-box credentials (the dependency map)
+    # Tactical display fields (single-box scope; for multi-box the per-box
+    # attack_vector/goal live on each BoxSpec).
+    attack_vector: Optional[str] = None
+    goal: Optional[str] = None
+    kill_chain: List[KillChainStep] = []        # Full numbered operation plan across all boxes
 
 
 class ParsedRequest(BaseModel):
@@ -229,6 +243,16 @@ class AttackDiagnosticResult(BaseModel):
     confidence: str          # "high", "medium", or "low"
 
 
+class AttackOrchestratorResult(BaseModel):
+    """Output from the Attack Orchestrator's L1+L2 validation."""
+    l1_passed: bool
+    l2_passed: bool
+    l1_evidence: str          # what exec_in_target returned for testing_snippet
+    l2_evidence: str          # browser output or CLI output proving exploit success/failure
+    reasoning: str            # orchestrator's synthesis of pass/fail
+    used_browser: bool = False
+
+
 class TestResult(BaseModel):
     """
     Captures the full test outcome for a single snippet across both layers.
@@ -248,7 +272,10 @@ class GeneratedApp(BaseModel):
     setup_db_sh: Optional[str] = None  # Script to create DB, user, apply schema and seed (None if no DB)
     deploy_snippet: str         # Bash to deploy the app and start the web server
     testing_snippet: str        # Layer 1: internal state check
-    attack_snippet: str         # Layer 2: external exploit from attacker container
+    attack_objective: str       # Layer 2: structured natural language task for Attack Orchestrator
+
+    # Tolerate old checkpoints that have attack_snippet field
+    model_config = {"extra": "ignore"}
 
 
 class ResolvedCustomApp(BaseModel):
@@ -256,7 +283,7 @@ class ResolvedCustomApp(BaseModel):
     vector: CustomVector
     deploy_snippet: str
     testing_snippet: str
-    attack_snippet: str
+    attack_snippet: str = ""  # Deprecated: orchestrator uses attack_objective from GeneratedApp instead
     validation_passed: bool
 
 

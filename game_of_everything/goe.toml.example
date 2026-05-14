@@ -1,0 +1,42 @@
+# Game of Everything — local configuration
+#
+# Environment variables override values set here:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+#   GOE_DEFAULT_MODEL, GOE_MODEL_<AGENT_NAME>
+
+[aws]
+# Leave blank to fall back to the default AWS credential chain (env vars,
+# ~/.aws/credentials, instance profile, etc.).
+access_key_id = ""
+secret_access_key = ""
+region = "us-east-1"
+
+[models]
+# Default Bedrock model ID used when an agent has no explicit override.
+# The "us." inference-profile prefix is added automatically by llm_factory.
+default = "anthropic.claude-sonnet-4-6"
+
+[models.overrides]
+# Per-agent model overrides. Keys must match agent names in config/agents.yaml.
+# Uncomment to override a specific agent; otherwise the defaults from
+# config/models.yaml (Opus for app_generation_agent, Sonnet for attack_agent)
+# are used.
+# request_parser_agent          = "anthropic.claude-haiku-3-5"
+# mapping_agent                 = "anthropic.claude-sonnet-4-6"
+# mapping_validator_agent       = "anthropic.claude-haiku-3-5"
+# dependency_enumeration_agent  = "anthropic.claude-haiku-3-5"
+# sequencing_agent              = "anthropic.claude-haiku-3-5"
+# snippet_generation_agent      = "anthropic.claude-sonnet-4-6"
+# testing_agent                 = "anthropic.claude-haiku-3-5"
+# diagnostic_agent              = "anthropic.claude-sonnet-4-6"
+# app_generation_agent          = "anthropic.claude-opus-4-6-v1"
+# attack_agent                  = "anthropic.claude-sonnet-4-6"
+
+[deploy]
+# EC2 one-click deploy settings used by steps/deploy.py + ec2_deploy.py.
+# key_pair_name is required for deploy to proceed; the other fields are
+# optional and auto-discovered/created when blank.
+instance_type      = "t3.medium"
+key_pair_name      = ""
+security_group_id  = ""
+subnet_id          = ""

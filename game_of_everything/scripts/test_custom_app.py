@@ -101,11 +101,14 @@ def _section(title: str) -> None:
     rich.print(f"\n[bold white on blue] {title} [/bold white on blue]")
 
 
-def _print_snippet(label: str, snippet: str) -> None:
+def _print_snippet(label: str, snippet: str | None) -> None:
     rich.print(f"\n[bold cyan]{label}:[/bold cyan]")
     rich.print(f"[dim]{'─' * 60}[/dim]")
-    for line in snippet.splitlines():
-        rich.print(f"  {line}")
+    if snippet is None:
+        rich.print("  [dim](null)[/dim]")
+    else:
+        for line in snippet.splitlines():
+            rich.print(f"  {line}")
     rich.print(f"[dim]{'─' * 60}[/dim]")
 
 
@@ -118,7 +121,7 @@ def _print_generated_app(app: GeneratedApp) -> None:
     _print_snippet("setup_db_sh", app.setup_db_sh)
     _print_snippet("deploy_snippet", app.deploy_snippet)
     _print_snippet("testing_snippet (L1)", app.testing_snippet)
-    _print_snippet("attack_snippet (L2)", app.attack_snippet)
+    _print_snippet("attack_objective (L2)", app.attack_objective)
 
 
 def _save_app(app: GeneratedApp, vector: CustomVector, path: str) -> None:
@@ -178,7 +181,10 @@ def run_docker_only(app: GeneratedApp, vector: CustomVector, no_rebuild: bool) -
     agents_config = _load_yaml(_CONFIG_DIR / "agents.yaml")
     tasks_config  = _load_yaml(_CONFIG_DIR / "tasks.yaml")
 
-    env = TestEnvironmentTool()
+    from game_of_everything.tools.test_environment import RUNTIME_TARGET_IMAGES
+    runtime_info = RUNTIME_TARGET_IMAGES.get(vector.runtime_id)
+    target_image = runtime_info["tag"] if runtime_info else ""
+    env = TestEnvironmentTool(target_image=target_image, enable_browser=True)
     rich.print("\n[yellow]Starting Docker containers...[/yellow]")
     env.setup()
 
@@ -219,28 +225,28 @@ def run_docker_only(app: GeneratedApp, vector: CustomVector, no_rebuild: bool) -
         rich.print(f"\n  L1 verdict : {icon}")
         rich.print(f"  reasoning  : {l1_verdict.reasoning}")
 
-        # Layer 2
-        _section("LAYER 2 — external attack probe")
-        l2_exit, l2_out, l2_err = env.exec_in_attacker(app.attack_snippet)
-        rich.print(f"  exit_code : {l2_exit}")
-        rich.print(f"  stdout    :\n{l2_out}")
-        if l2_err.strip():
-            rich.print(f"  [dim]stderr    : {l2_err}[/dim]")
+        # Layer 2 — run via Attack Orchestrator (parses attack_objective)
+        _section("LAYER 2 — external attack probe (orchestrator)")
+        from game_of_everything.crews.attack_orchestrator_crew import run_attack_orchestrator_crew
+        from game_of_everything.tools.test_environment import RUNTIME_TARGET_IMAGES
 
-        l2_verdict = _run_verdict_crew(
-            atom_name=vector.display_name,
-            atom_context=vector.synthesis_context,
-            layer="external attack probe",
-            snippet_executed=app.attack_snippet,
-            exit_code=l2_exit,
-            stdout=l2_out,
-            stderr=l2_err,
+        runtime_info = RUNTIME_TARGET_IMAGES.get(vector.runtime_id)
+        target_image = runtime_info["tag"] if runtime_info else ""
+        orch_result = run_attack_orchestrator_crew(
             agents_config=agents_config,
             tasks_config=tasks_config,
+            generated_app=app,
+            synthesis_context=vector.synthesis_context,
+            port=vector.port,
+            target_container_name=env.target_name,
+            attacker_container_name=env.attacker_name,
+            cdp_url=env.browser_cdp_url,
         )
-        icon = "[green]✓ PASS[/green]" if l2_verdict.passed else "[red]✗ FAIL[/red]"
-        rich.print(f"\n  L2 verdict : {icon}")
-        rich.print(f"  reasoning  : {l2_verdict.reasoning}")
+        l2_icon = "[green]✓ PASS[/green]" if orch_result.l2_passed else "[red]✗ FAIL[/red]"
+        rich.print(f"  L1 passed  : {orch_result.l1_passed}")
+        rich.print(f"  L2 verdict : {l2_icon}")
+        rich.print(f"  reasoning  : {orch_result.reasoning}")
+        rich.print(f"  L2 evidence:\n{orch_result.l2_evidence}")
 
     finally:
         rich.print("\n[yellow]Tearing down containers...[/yellow]")

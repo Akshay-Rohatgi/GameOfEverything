@@ -72,6 +72,10 @@ ATTACKER_DOCKERFILE_DIR = str(
 )
 ATTACKER_IMAGE_TAG = "goe-attacker:latest"
 
+# Browser sidecar — headless Chromium container for XSS and browser-based attacks
+BROWSER_DOCKERFILE_DIR = str(Path(__file__).parent.parent.parent.parent / "docker" / "browser")
+BROWSER_IMAGE_TAG = "goe-browser:latest"
+
 # Preset target image — Ubuntu 22.04 with WP-CLI pre-installed.
 # Used by PresetAppFlow so deploy snippets don't download WP-CLI at runtime.
 PRESET_TARGET_DOCKERFILE_DIR = str(
@@ -172,7 +176,7 @@ TOOL_TO_INSTALL_CMD: Dict[str, str] = {
 class TestEnvironmentTool:
     """Manages Docker network + container lifecycle for snippet testing."""
 
-    def __init__(self, scope: str = "", hostname: str = "", target_image: str = ""):
+    def __init__(self, scope: str = "", hostname: str = "", target_image: str = "", enable_browser: bool = False):
         """Args:
             scope: Optional prefix for container and network names.
                    Empty string → default names (goe_target, goe_attacker, goe_test_net).
@@ -186,14 +190,21 @@ class TestEnvironmentTool:
                           Defaults to TARGET_IMAGE (ubuntu:22.04) when empty.
                           Pass PRESET_TARGET_IMAGE_TAG for preset app testing so
                           WP-CLI and other preset tools are pre-installed.
+            enable_browser: Whether to start a browser sidecar container for browser-based attacks.
+                            When enabled, a headless Chromium container is started and its Chrome
+                            DevTools Protocol (CDP) endpoint is exposed via browser_cdp_url.
         """
         self._scope = scope
         self._hostname = hostname or "target"
         self._target_image = target_image or TARGET_IMAGE
+        self._enable_browser = enable_browser
         self._client: Optional[docker.DockerClient] = None
         self.network = None
         self.target_container = None
         self.attacker_container = None
+        self.browser_container = None
+        self.browser_cdp_url: str = ""  # ws://localhost:{host_port} — set in setup()
+        self._browser_host_port: int = 0
         # Tracks whether `apt-get update` has been run in the attacker container
         # this session, so we only pay the cost once even if ensure_attacker_tools
         # is called multiple times.
@@ -312,6 +323,38 @@ class TestEnvironmentTool:
             remove=False,
         )
         logger.info(f"Started attacker container: {self.attacker_name} ({ATTACKER_IMAGE_TAG})")
+
+        # Start browser sidecar if requested
+        if self._enable_browser:
+            logger.info(f"Building browser image from {BROWSER_DOCKERFILE_DIR}...")
+            self.client.images.build(
+                path=BROWSER_DOCKERFILE_DIR,
+                tag=BROWSER_IMAGE_TAG,
+                rm=True,
+            )
+            logger.info(f"Built browser image: {BROWSER_IMAGE_TAG}")
+
+            # Pick a free host port for CDP endpoint
+            import socket
+            with socket.socket() as s:
+                s.bind(('', 0))
+                self._browser_host_port = s.getsockname()[1]
+
+            self.browser_container = self.client.containers.run(
+                BROWSER_IMAGE_TAG,
+                name=f"{self._prefix}browser",
+                network=self.network_name,
+                hostname="browser",
+                ports={"9222/tcp": self._browser_host_port},
+                detach=True,
+                remove=False,
+            )
+            logger.info(f"Started browser container: {self._prefix}browser ({BROWSER_IMAGE_TAG})")
+
+            # Wait until CDP endpoint is connectable
+            self.browser_cdp_url = f"ws://localhost:{self._browser_host_port}"
+            self._wait_for_cdp()
+            logger.info(f"Browser CDP endpoint ready at {self.browser_cdp_url}")
 
     def teardown(self) -> None:
         """Stop and remove both containers and the network. Safe to call multiple times."""
@@ -582,9 +625,32 @@ class TestEnvironmentTool:
         stderr = (output[1] or b"").decode("utf-8", errors="replace")
         return exit_code, stdout, stderr
 
+    def _wait_for_cdp(self) -> None:
+        """Poll the Chrome DevTools Protocol endpoint until it's ready or timeout."""
+        import urllib.request
+        import urllib.error
+
+        cdp_health_url = f"http://localhost:{self._browser_host_port}/json/version"
+        timeout = 15  # seconds
+        start = time.time()
+
+        while time.time() - start < timeout:
+            try:
+                with urllib.request.urlopen(cdp_health_url, timeout=2) as response:
+                    if response.status == 200:
+                        return
+            except (urllib.error.URLError, OSError):
+                time.sleep(0.5)
+
+        raise RuntimeError(
+            f"Browser CDP endpoint did not become ready within {timeout}s. "
+            f"Health check URL: {cdp_health_url}"
+        )
+
     def _force_cleanup(self) -> None:
         """Remove any existing containers and network with our well-known names."""
-        for name in (self.target_name, self.attacker_name):
+        browser_name = f"{self._prefix}browser"
+        for name in (self.target_name, self.attacker_name, browser_name):
             try:
                 c = self.client.containers.get(name)
                 c.stop(timeout=5)
