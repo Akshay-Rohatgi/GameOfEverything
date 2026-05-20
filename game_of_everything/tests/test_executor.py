@@ -215,6 +215,66 @@ class TestFixtureProcedures:
         assert result.passed, _format_failure(result)
 
 
+# ---------------------------------------------------------------------------
+# Docker tests — ubuntu environment (SSH + SUID privesc)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def ubuntu_env_module():
+    """Module-scoped Ubuntu environment for SSH/privesc executor tests."""
+    from goe.container.environment import TestEnvironment
+    from tests.conftest import ubuntu_deploy_script
+    env = TestEnvironment(runtime="ubuntu", scope="test_ubuntu_exec")
+    env.setup()
+    exit_code, stdout, stderr = env.deploy(ubuntu_deploy_script())
+    assert exit_code == 0, f"Ubuntu deploy failed:\n{stdout}\n{stderr}"
+    assert "ubuntu_env_ready" in stdout
+    yield env
+    env.teardown()
+
+
+@pytest.fixture
+def ubuntu_ctx(ubuntu_env_module):
+    return {
+        "target_host": ubuntu_env_module.get_target_host(),
+        "attacker_host": ubuntu_env_module.get_attacker_host(),
+        "target_port": "22",
+        "edges": {},
+    }
+
+
+class TestBasicProcedures:
+    def test_basic_exec(self, express_env_module, exec_ctx):
+        """Attacker container basics: whoami, nmap version, target reachable."""
+        from goe.executor.runner import run
+        procedure = load_procedure("basic_exec")
+        result = run(procedure, express_env_module, exec_ctx)
+        assert result.passed, _format_failure(result)
+
+    def test_step_chaining(self, express_env_module, exec_ctx):
+        """exec_target plants a token; downstream step interpolates captured output."""
+        from goe.executor.runner import run
+        procedure = load_procedure("step_chaining")
+        result = run(procedure, express_env_module, exec_ctx)
+        assert result.passed, _format_failure(result)
+
+
+class TestSSHPrivesc:
+    def test_ssh_login(self, ubuntu_env_module, ubuntu_ctx):
+        """Attacker SSHes into target as lowpriv user."""
+        from goe.executor.runner import run
+        procedure = load_procedure("ssh_login")
+        result = run(procedure, ubuntu_env_module, ubuntu_ctx)
+        assert result.passed, _format_failure(result)
+
+    def test_suid_privesc(self, ubuntu_env_module, ubuntu_ctx):
+        """Attacker finds SUID rootbash and exploits it for uid=0."""
+        from goe.executor.runner import run
+        procedure = load_procedure("suid_privesc")
+        result = run(procedure, ubuntu_env_module, ubuntu_ctx)
+        assert result.passed, _format_failure(result)
+
+
 def _format_failure(result) -> str:
     lines = [f"Procedure failed at step: {result.failed_step}"]
     if result.error:

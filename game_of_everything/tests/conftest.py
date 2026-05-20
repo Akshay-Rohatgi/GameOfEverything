@@ -95,3 +95,44 @@ def express_env_ctx(express_env):
         "target_port": "3000",
         "edges": {},
     }
+
+
+def ubuntu_deploy_script() -> str:
+    """Deploy SSH + a low-priv user + a SUID rootbash to the ubuntu target."""
+    return """
+set -e
+apt-get install -y --no-install-recommends openssh-server sshpass 2>/dev/null
+mkdir -p /run/sshd
+useradd -m -s /bin/bash lowpriv 2>/dev/null || true
+echo 'lowpriv:password123' | chpasswd
+sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+/usr/sbin/sshd
+cp /bin/bash /tmp/rootbash
+chmod +s /tmp/rootbash
+echo "ubuntu_env_ready"
+"""
+
+
+@pytest.fixture(scope="session")
+def ubuntu_env():
+    """Session-scoped Ubuntu environment with SSH + SUID privesc setup."""
+    from goe.container.environment import TestEnvironment
+    env = TestEnvironment(runtime="ubuntu", scope="test_ubuntu")
+    env.setup()
+    exit_code, stdout, stderr = env.deploy(ubuntu_deploy_script())
+    assert exit_code == 0, f"Ubuntu deploy failed:\nstdout: {stdout}\nstderr: {stderr}"
+    assert "ubuntu_env_ready" in stdout
+    yield env
+    env.teardown()
+
+
+@pytest.fixture(scope="session")
+def ubuntu_env_ctx(ubuntu_env):
+    """Interpolation context for Ubuntu/SSH tests."""
+    return {
+        "target_host": ubuntu_env.get_target_host(),
+        "attacker_host": ubuntu_env.get_attacker_host(),
+        "target_port": "22",
+        "edges": {},
+    }

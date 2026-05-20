@@ -1,0 +1,36 @@
+# Fixture: ssh_login
+# Tests: exec_attacker SSH via sshpass, stdout_contains, exit_code assertions
+# Environment: ubuntu_env (SSH running, user lowpriv/password123)
+procedure:
+  - step_id: ssh_whoami
+    action:
+      type: exec_attacker
+      command: >-
+        sshpass -p 'password123'
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+        lowpriv@${target_host}
+        whoami
+    expect:
+      stdout_contains: "lowpriv"
+
+  - step_id: ssh_id
+    action:
+      type: exec_attacker
+      command: >-
+        sshpass -p 'password123'
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+        lowpriv@${target_host}
+        id
+    expect:
+      stdout_contains: "uid="
+
+  - step_id: ssh_read_etc_passwd
+    action:
+      type: exec_attacker
+      command: >-
+        sshpass -p 'password123'
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+        lowpriv@${target_host}
+        'cat /etc/passwd | grep root'
+    expect:
+      stdout_contains: "root:x:"
