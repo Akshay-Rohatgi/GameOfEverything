@@ -167,9 +167,13 @@ def build_entity(
             log("Resetting attacker container...")
             env.reset_attacker()
 
-            # Re-deploy if artifact changed (implementation_bug or design_flaw)
+            # Re-deploy if artifact changed (implementation_bug or design_flaw).
+            # Also reset the target — old app processes, port bindings, and DB
+            # files from the previous attempt would otherwise persist.
             from goe.retry.diagnostician import DiagnosisCategory
             if diagnosis.category != DiagnosisCategory.procedure_bug:
+                log("Resetting target container...")
+                env.reset_target()
                 log("Re-deploying with updated artifact...")
                 new_deploy = registry.deploy(runtime, crew.artifact)
                 env.deploy(new_deploy)

@@ -624,6 +624,30 @@ class TestEnvironmentTool:
             remove=False,
         )
 
+    def reset_target(self) -> None:
+        """Stop and replace the target container with a fresh one.
+
+        Used before re-deploying on implementation_bug or design_flaw retries —
+        ensures old app processes, DB files, and port bindings are gone.
+        """
+        if self.target_container is not None:
+            try:
+                self.target_container.stop(timeout=3)
+                self.target_container.remove(force=True)
+            except Exception:
+                pass
+            self.target_container = None
+
+        self.target_container = self.client.containers.run(
+            self._target_image,
+            command="sleep infinity",
+            name=self.target_name,
+            network=self.network_name,
+            hostname=self._hostname,
+            detach=True,
+            remove=False,
+        )
+
     def exec_in_attacker_bg(self, snippet: str) -> None:
         """Fire-and-forget exec in the attacker container.
 

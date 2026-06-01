@@ -91,6 +91,10 @@ class TestEnvironment:
         """Replace the attacker container with a fresh one — clears all background processes."""
         self._tool.reset_attacker()
 
+    def reset_target(self) -> None:
+        """Replace the target container with a fresh one — clears app state, processes, DB files."""
+        self._tool.reset_target()
+
     def exec_in_bg(self, container: str, command: str) -> None:
         """Fire-and-forget exec — process survives after the exec shell exits."""
         if container == "attacker":

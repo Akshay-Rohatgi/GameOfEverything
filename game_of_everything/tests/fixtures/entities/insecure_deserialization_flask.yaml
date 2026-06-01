@@ -1,0 +1,13 @@
+id: insecure_deserialization_flask_entity
+description: "Flask app with insecure Python pickle deserialization — attacker sends a crafted base64-encoded pickle payload to achieve RCE"
+system_id: target_system
+requires: []
+provides:
+  - rce_via_deserialization
+app_spec:
+  runtime: flask
+  vulnerabilities:
+    - insecure_deserialization
+  goal: "craft a malicious pickle payload that executes OS commands when deserialized, confirm by reading /etc/passwd"
+atoms:
+  - insecure_deserialization

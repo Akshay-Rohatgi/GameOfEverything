@@ -17,13 +17,8 @@ install_runtime: |
   apt-get update && apt-get install -y nodejs
 install_deps_cmd: "cd /opt/webapp && if [ -f package.json ]; then npm install; else npm init -y && npm install express; fi"
 attacker_rules: |
-  - Express apps commonly respond to form POST submissions with `302 Found` (Post/Redirect/Get pattern). If a POST step stores data (XSS payload, comment, form submission), assert `status: 302` — NOT 200. Then add a separate GET step to verify the stored data is reflected.
-  - When starting a background listener (e.g. python3 http.server), use `exec_attacker_bg` (not `exec_attacker`) so the process survives after the step completes. Write output to a file and read it in a later step.
-  - After starting a background listener, add a verification step using `exec_attacker` + `nc -z localhost 9999 && echo OK` to confirm the port is bound before proceeding.
-  - For cookie exfil attacks, the wait after triggering the admin bot must be at least 20 seconds — Chromium cold-start + login + page load + JS execution takes time.
-
+  - After starting a background listener, verify the port is bound before proceeding: use an `exec_attacker` step with `nc -z localhost 9999 && echo OK`.
+  - For cookie exfil attacks (admin bot), wait at least 20 seconds after triggering — Chromium cold-start + login + page load + JS execution takes time.
 developer_rules: |
-  - Never call res.send()/res.json()/res.redirect() after headers are already sent. For fire-and-forget background tasks (spawning a child process, triggering a bot), send the response FIRST then do the work: `res.json({status:'ok'}); exec('node bot.js');` — NOT `exec('node bot.js', (err, out) => res.json(...))` which fires after the response may already be sent.
-  - For background processes (admin bots, long-running tasks) ALWAYS redirect output to a log file so failures are visible. Use: `const logFd = fs.openSync('/tmp/adminbot.log', 'a'); spawn('node', ['/opt/webapp/admin_bot.js'], {detached: true, stdio: ['ignore', logFd, logFd]}).unref()` — NEVER use `stdio: 'ignore'` for a bot process.
-  - Always call `app.listen(PORT, '0.0.0.0')` — not just `app.listen(PORT)`
-  - If the app uses Puppeteer (admin bot, headless browser), set `system_deps: []` — Chromium is pre-installed in the Docker image via the xtradeb PPA. Use `executablePath: '/usr/bin/chromium'` in puppeteer.launch(). Do NOT use `chromium-browser` — it is a snap stub on Ubuntu 22.04 and does not work in Docker.
+  - For background processes (admin bots), redirect output to a log file so failures are visible: `const logFd = fs.openSync('/tmp/adminbot.log', 'a'); spawn('node', ['bot.js'], {detached: true, stdio: ['ignore', logFd, logFd]}).unref()`
+  - If the app uses Puppeteer, use `executablePath: '/usr/bin/chromium'` — Chromium is pre-installed via the xtradeb PPA. Do NOT use `/usr/bin/chromium-browser` (snap stub, does not work in Docker).

@@ -107,7 +107,14 @@ class RuntimeRegistry:
                 lines.append(f"echo '{b64_seed}' | base64 -d | mysql")
             lines.append("")
 
-        # 5. Start the service (nohup — works in Docker without systemd)
+        # 5. Runtime-specific pre-start setup
+        if runtime_id == "apache_php":
+            lines.append("# Ensure www-data writable dirs")
+            lines.append("mkdir -p /var/db && chown www-data:www-data /var/db")
+            lines.append("mkdir -p /var/www/html/uploads && chown www-data:www-data /var/www/html/uploads")
+            lines.append("")
+
+        # 6. Start the service (nohup — works in Docker without systemd)
         start_cmd = t["start_cmd"]
         log_file = "/var/log/webapp.log"
         lines.append("# Start application")

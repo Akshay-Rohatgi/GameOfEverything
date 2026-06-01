@@ -14,10 +14,8 @@ install_deps_cmd: ""
 attacker_rules: |
   - Apache/PHP apps typically return 200 on POST — only expect 302 if the app source explicitly calls `header('Location: ...')`.
   - File upload webshell attacks: upload a `.php` file to the uploads directory, then GET `/uploads/shell.php?cmd=id` to trigger execution.
-  - PHP SQLi: use `'` to break out of string context, `'--` or `' OR '1'='1` for tautology, `' UNION SELECT ...--` for UNION injection.
 developer_rules: |
   - Use SQLite via PDO (`new PDO('sqlite:/path/to/app.db')`) — never mysql_connect or mysqli without explicit instruction.
+  - **SQLite database files MUST be placed at `/var/db/app.db`, never inside `/var/www/html/`**. The www-data process cannot write to the webroot.
   - Apache serves files from `/var/www/html/` — place the app at `/var/www/html/index.php` or similar.
-  - For file uploads, save to `/var/www/html/uploads/` and ensure the directory exists and is writable.
-  - Do NOT set `HttpOnly` on session cookies when the vulnerability requires JavaScript cookie access.
-  - For background execution use `exec('cmd > /dev/null 2>&1 &')` — shell backgrounding works in PHP without blocking.
+  - For file uploads, save to `/var/www/html/uploads/` — the registry creates this directory and sets ownership automatically.

@@ -1,0 +1,13 @@
+id: ssti_flask_entity
+description: "Flask app with server-side template injection — attacker injects Jinja2 template syntax to achieve RCE and read /etc/passwd"
+system_id: target_system
+requires: []
+provides:
+  - rce_as_app
+app_spec:
+  runtime: flask
+  vulnerabilities:
+    - ssti_jinja2
+  goal: "inject Jinja2 template payload to execute OS commands and read /etc/passwd"
+atoms:
+  - ssti_jinja2

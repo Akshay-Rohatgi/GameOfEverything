@@ -1,0 +1,13 @@
+id: xss_reflected_express_entity
+description: "Express app with reflected XSS in a search endpoint — attacker crafts a URL with a script payload that executes in the response"
+system_id: target_system
+requires: []
+provides:
+  - reflected_xss
+app_spec:
+  runtime: express
+  vulnerabilities:
+    - xss_reflected
+  goal: "inject a <script> payload via a query parameter and confirm it is reflected unencoded in the HTML response"
+atoms:
+  - xss_reflected

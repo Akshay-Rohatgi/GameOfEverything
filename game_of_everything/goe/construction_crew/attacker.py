@@ -83,13 +83,27 @@ Output ONLY valid YAML (no markdown fences)."""
         data = yaml.safe_load(raw)
         return Procedure.model_validate(data)
 
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}])
+    review_msg = """Review your procedure against these correctness checks before finalising:
+
+1. **Payload characters**: Do any payloads contain characters (e.g. single quotes `'`) that would break the app's storage layer (raw SQL concatenation)? If so, rewrite the payload to avoid them — use `<script>alert(1)</script>` not `<script>alert('xss')</script>`.
+2. **POST status codes**: If a POST step submits a form, does the app source show a redirect after success? If yes, assert `status: 302`. If the app returns 200 directly, assert `status: 200`. Check the source — don't assume.
+3. **Final assertion**: Does the last step assert that the attack actually succeeded (credentials visible, command output present, payload reflected)? A procedure that only checks status codes is not sufficient.
+4. **Background listeners**: Are background listener processes started with `exec_attacker_bg` (not `exec_attacker`)?
+
+If any check fails, output the corrected YAML. If all checks pass, output the original YAML unchanged.
+Output ONLY valid YAML (no markdown fences)."""
+
+    messages = [{"role": "user", "content": user_msg}]
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
+    messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": review_msg}]
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
 
     try:
         return _parse(raw)
     except Exception as e:
-        retry_msg = f"{user_msg}\n\nYour previous YAML failed to parse: {e}\n\nOutput ONLY valid YAML."
-        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}])
+        retry_msg = f"Your previous YAML failed to parse: {e}\n\nOutput ONLY valid YAML."
+        messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": retry_msg}]
+        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
         return _parse(raw2)
 
 

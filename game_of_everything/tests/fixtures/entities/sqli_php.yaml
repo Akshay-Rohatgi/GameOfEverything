@@ -1,0 +1,13 @@
+id: sqli_php_entity
+description: "PHP/Apache app with UNION-based SQL injection in a search endpoint — attacker extracts credentials from the users table"
+system_id: target_system
+requires: []
+provides:
+  - credentials
+app_spec:
+  runtime: apache_php
+  vulnerabilities:
+    - sqli_union
+  goal: "dump username and password from users table via UNION-based SQLi in search parameter"
+atoms:
+  - sqli_union

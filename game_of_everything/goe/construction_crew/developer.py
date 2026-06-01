@@ -86,11 +86,27 @@ Output ONLY valid JSON matching the schema in the system prompt."""
         )
         return artifact, outgoing
 
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}])
+    review_msg = """Review your implementation against these correctness checks before finalising:
+
+1. **Binding**: Does the app listen on 0.0.0.0, not 127.0.0.1?
+2. **DB writes**: Are all INSERT/UPDATE/DELETE operations using parameterised queries or prepared statements — never raw string concatenation with user input?
+3. **DB file location**: If using SQLite, is the database file outside the webroot (not inside /var/www/html)?
+4. **Seeding**: Is there exactly ONE seeding approach — either inline startup OR db_setup, never both?
+5. **Vulnerability present**: Is the vulnerability from the plan actually present and not accidentally sanitized?
+6. **Single file**: Is the entire app in a single source file?
+
+If any check fails, output the corrected JSON. If all checks pass, output the original JSON unchanged.
+Output ONLY valid JSON."""
+
+    messages = [{"role": "user", "content": user_msg}]
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
+    messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": review_msg}]
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
 
     try:
         return _parse(raw)
     except Exception as e:
-        retry_msg = f"{user_msg}\n\nYour previous response failed to parse: {e}\n\nOutput ONLY valid JSON."
-        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}])
+        retry_msg = f"Your previous response failed to parse: {e}\n\nOutput ONLY valid JSON."
+        messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": retry_msg}]
+        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
         return _parse(raw2)

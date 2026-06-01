@@ -2,6 +2,9 @@
 
 Requires: Docker daemon + AWS credentials in goe.toml.
 Run with: pytest tests/test_build.py -v -m "llm and docker"
+
+To run a single fixture:
+    pytest tests/test_build.py -v -m "llm and docker" -k "sqli_express"
 """
 
 import pytest
@@ -17,37 +20,127 @@ def load_entity(name: str):
     return Entity.model_validate(yaml.safe_load(path.read_text()))
 
 
-class TestSingleEntityBuild:
+def _run(fixture_name: str):
+    from goe.build import build_entity
+    from goe.models.report import EntityStatus
+
+    entity = load_entity(fixture_name)
+    result = build_entity(entity, scope=f"test_{fixture_name[:20]}", verbose=True)
+    assert result.status == EntityStatus.PASSED, (
+        f"Build failed after {result.attempts} attempts: {result.failure_reason}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SQL Injection
+# ---------------------------------------------------------------------------
+
+class TestSQLi:
     def test_sqli_express(self):
-        """Engineer → Developer → Attacker generates a working SQLi exploit."""
-        from goe.build import build_entity
-        from goe.models.report import EntityStatus
+        _run("sqli_express")
 
-        entity = load_entity("sqli_express")
-        result = build_entity(entity, scope="test_sqli", verbose=True)
+    def test_sqli_flask(self):
+        _run("sqli_flask")
 
-        assert result.status == EntityStatus.PASSED, (
-            f"Build failed after {result.attempts} attempts: {result.failure_reason}"
-        )
+    def test_sqli_php(self):
+        _run("sqli_php")
+
+
+# ---------------------------------------------------------------------------
+# Command Injection
+# ---------------------------------------------------------------------------
+
+class TestCMDi:
+    def test_cmdi_express(self):
+        _run("cmdi_express")
 
     def test_cmdi_flask(self):
-        """Full crew generates a working command injection exploit for Flask."""
-        from goe.build import build_entity
-        from goe.models.report import EntityStatus
+        _run("cmdi_flask")
 
-        entity = load_entity("cmdi_flask")
-        result = build_entity(entity, scope="test_cmdi", verbose=True)
+    def test_cmdi_php(self):
+        _run("cmdi_php")
 
-        assert result.status == EntityStatus.PASSED, (
-            f"Build failed after {result.attempts} attempts: {result.failure_reason}"
-        )
 
+# ---------------------------------------------------------------------------
+# Stored XSS
+# ---------------------------------------------------------------------------
+
+class TestXSSStored:
+    def test_xss_stored_express(self):
+        _run("xss_express")
+
+    def test_xss_stored_flask(self):
+        _run("xss_stored_flask")
+
+    def test_xss_stored_php(self):
+        _run("xss_stored_php")
+
+
+# ---------------------------------------------------------------------------
+# Reflected XSS
+# ---------------------------------------------------------------------------
+
+class TestXSSReflected:
+    def test_xss_reflected_express(self):
+        _run("xss_reflected_express")
+
+    def test_xss_reflected_flask(self):
+        _run("xss_reflected_flask")
+
+
+# ---------------------------------------------------------------------------
+# Path Traversal
+# ---------------------------------------------------------------------------
+
+class TestPathTraversal:
+    def test_path_traversal_express(self):
+        _run("path_traversal_express")
+
+    def test_path_traversal_flask(self):
+        _run("path_traversal_flask")
+
+
+# ---------------------------------------------------------------------------
+# SSTI
+# ---------------------------------------------------------------------------
+
+class TestSSTI:
+    def test_ssti_flask(self):
+        _run("ssti_flask")
+
+
+# ---------------------------------------------------------------------------
+# File Upload
+# ---------------------------------------------------------------------------
+
+class TestFileUpload:
+    def test_file_upload_php(self):
+        _run("file_upload_php")
+
+
+# ---------------------------------------------------------------------------
+# Insecure Deserialization
+# ---------------------------------------------------------------------------
+
+class TestDeserialization:
+    def test_insecure_deserialization_flask(self):
+        _run("insecure_deserialization_flask")
+
+
+# ---------------------------------------------------------------------------
+# XSS Admin Bot (browser-based exfil)
+# ---------------------------------------------------------------------------
+
+class TestXSSAdminBot:
+    def test_xss_admin_bot_express(self):
+        _run("xss_admin_bot_express")
+
+
+# ---------------------------------------------------------------------------
+# Construction crew unit tests (LLM only, no Docker)
+# ---------------------------------------------------------------------------
 
 class TestConstructionCrewUnit:
-    """Smoke tests that verify crew components parse their inputs correctly.
-    These still call the LLM but don't require Docker.
-    """
-
     @pytest.mark.llm
     def test_engineer_returns_plan(self):
         from goe.construction_crew.engineer import plan
@@ -69,7 +162,7 @@ class TestConstructionCrewUnit:
 
     @pytest.mark.llm
     def test_attacker_returns_procedure(self):
-        from goe.construction_crew.engineer import plan, EngineerPlan
+        from goe.construction_crew.engineer import plan
         from goe.construction_crew.attacker import attack
         from goe.models.entity import Entity, AppSpec
         from goe.models.artifacts import BuildArtifact
@@ -85,7 +178,6 @@ class TestConstructionCrewUnit:
         )
         eng_plan = plan(entity, incoming_edges={})
 
-        # Minimal artifact — just enough for the attacker to work with
         artifact = BuildArtifact(
             source_files={"app.js": "// stub"},
             primary_source="app.js",
