@@ -15,5 +15,6 @@ class BuildArtifact(BaseModel):
     source_files: dict[str, str]  # filename → content
     primary_source: str
     port: int
+    app_dir: str = "/opt/webapp"  # deployment directory inside the container
     db_setup: DBSetup | None = None
     extra_deps: list[str] = []

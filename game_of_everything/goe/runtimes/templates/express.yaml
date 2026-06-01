@@ -1,0 +1,18 @@
+id: express
+description: Node.js 20 + Express on Ubuntu 22.04.
+port: 3000
+default_app_dir: /opt/webapp
+primary_file: app.js
+start_cmd: "node app.js"
+healthcheck: "curl -sf http://localhost:3000/ || curl -sf http://localhost:3000/health"
+setup_notes: >
+  Node.js MUST be installed via NodeSource — Ubuntu 22.04 apt ships v12 which is EOL.
+  app.js must call app.listen(3000, '0.0.0.0') to be reachable from other containers.
+  Run npm install in app_dir before starting. Missing npm install causes "Cannot find module".
+install_runtime: |
+  apt-get install -y build-essential python3 ca-certificates curl gnupg
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
+  apt-get update && apt-get install -y nodejs
+install_deps_cmd: "cd /opt/webapp && if [ -f package.json ]; then npm install; else npm init -y && npm install express; fi"

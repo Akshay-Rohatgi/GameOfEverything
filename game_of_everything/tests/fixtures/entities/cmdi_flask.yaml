@@ -1,0 +1,13 @@
+id: cmdi_entity
+description: "Flask app with command injection in a ping/diagnostic endpoint — attacker achieves OS command execution"
+system_id: target_system
+requires: []
+provides:
+  - rce
+app_spec:
+  runtime: flask
+  vulnerabilities:
+    - cmd_injection
+  goal: "execute arbitrary OS commands via unsanitized input in a diagnostic endpoint"
+atoms:
+  - cmd_injection
