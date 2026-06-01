@@ -18,3 +18,4 @@ class BuildArtifact(BaseModel):
     app_dir: str = "/opt/webapp"  # deployment directory inside the container
     db_setup: DBSetup | None = None
     extra_deps: list[str] = []
+    system_deps: list[str] = []  # apt packages to install before runtime setup

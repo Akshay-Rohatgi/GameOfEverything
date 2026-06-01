@@ -39,6 +39,14 @@ type: exec_attacker
 command: "curl -s http://${target_host}:${target_port}/..."
 ```
 
+**Shell background (attacker container — fire and forget):**
+Use this for listeners that must stay alive across multiple steps (e.g. an HTTP exfil listener).
+The process is detached from the exec shell and survives until explicitly killed.
+```yaml
+type: exec_attacker_bg
+command: "python3 -m http.server 9999 > /tmp/listener.log 2>&1"
+```
+
 **Sleep:**
 ```yaml
 type: sleep
@@ -82,6 +90,7 @@ Always use these variables (provided at runtime):
 - The success assertion must match the `success_indicator` from the architecture plan
 - Keep the procedure to the minimum steps needed to demonstrate the exploit
 - Do not add unnecessary navigation or setup steps
+- **POST redirect pattern**: Express apps commonly respond to POST with `302 Found` (Post/Redirect/Get). If a POST step stores data (XSS payload, comment, form submission), assert `status: 302` — NOT 200. Then add a separate GET step to verify the stored data is reflected.
 
 ## Output Format
 

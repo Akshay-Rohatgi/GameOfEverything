@@ -80,16 +80,24 @@ def build_entity(
     log(f"Vulnerability: {crew.plan.vulnerability_placement}")
 
     section("Generated Source Files")
+    import tempfile, os as _os
+    _artifact_dir = tempfile.mkdtemp(prefix=f"goe_{entity.id}_")
     for fname, content in crew.artifact.source_files.items():
         dump(fname, content)
-
+        _path = _os.path.join(_artifact_dir, fname.replace("/", "_"))
+        open(_path, "w").write(content)
     if crew.artifact.db_setup:
         dump("schema.sql", crew.artifact.db_setup.schema_sql)
         dump("seed.sql", crew.artifact.db_setup.seed_sql)
+    log(f"Full source written to: {_artifact_dir}/")
 
     section("Generated Attack Procedure")
     import yaml as _yaml
-    dump("procedure.yaml", _yaml.dump(crew.procedure.model_dump(), default_flow_style=False))
+    _proc_yaml = _yaml.dump(crew.procedure.model_dump(), default_flow_style=False)
+    dump("procedure.yaml", _proc_yaml)
+    _proc_path = _os.path.join(_artifact_dir, "procedure.yaml")
+    open(_proc_path, "w").write(_proc_yaml)
+    log(f"Full procedure written to: {_proc_path}")
 
     env = TestEnvironment(runtime=runtime, scope=scope or f"build_{entity.id[:16]}")
     env.setup()
@@ -153,6 +161,11 @@ def build_entity(
                 )
 
             crew = new_crew
+
+            # Always reset the attacker — clears detached background processes
+            # (listeners, netcat, etc.) that survived from the previous attempt.
+            log("Resetting attacker container...")
+            env.reset_attacker()
 
             # Re-deploy if artifact changed (implementation_bug or design_flaw)
             from goe.retry.diagnostician import DiagnosisCategory

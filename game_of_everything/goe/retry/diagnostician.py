@@ -65,6 +65,7 @@ def diagnose(
 
     # Collect god-view evidence from the running containers
     _, app_log, _ = env.exec_in("target", "cat /var/log/webapp.log 2>/dev/null | tail -50 || echo '(no log)'")
+    _, bot_log, _ = env.exec_in("target", "cat /tmp/adminbot.log 2>/dev/null | tail -30 || echo '(no bot log)'")
     _, ps_out, _ = env.exec_in("target", "ps aux 2>/dev/null | head -20")
     _, port_check, _ = env.exec_in("target", "ss -tlnp 2>/dev/null | head -20 || netstat -tlnp 2>/dev/null | head -20")
 
@@ -95,6 +96,9 @@ Failed steps:
 
 ### App Log (last 50 lines)
 {app_log}
+
+### Admin Bot Log (last 30 lines)
+{bot_log}
 
 ### Running Processes
 {ps_out}

@@ -80,6 +80,7 @@ Output ONLY valid JSON matching the schema in the system prompt."""
             primary_source=data["primary_source"],
             port=data["port"],
             app_dir=data.get("app_dir", "/opt/webapp"),
+            system_deps=data.get("system_deps", []),
             extra_deps=data.get("extra_deps", []),
             db_setup=DBSetup(**db_data) if db_data else None,
         )

@@ -128,7 +128,7 @@ def _execute_step(
     sleep_mod,
 ) -> ActionResult:
     from goe.models.procedure import (
-        HttpRequestAction, ExecAttackerAction, ExecTargetAction,
+        HttpRequestAction, ExecAttackerAction, ExecAttackerBgAction, ExecTargetAction,
         ListenAction, SleepAction,
         NavigateAction, ClickAction, FillAction, FillAndSubmitAction,
         EvaluateAction, WaitForAction, UploadAction, ExtractAction,
@@ -141,6 +141,9 @@ def _execute_step(
 
     if isinstance(action, ExecAttackerAction):
         return shell.exec_attacker(env, action.command)
+
+    if isinstance(action, ExecAttackerBgAction):
+        return shell.exec_attacker_bg(env, action.command)
 
     if isinstance(action, ExecTargetAction):
         return shell.exec_target(env, action.command)

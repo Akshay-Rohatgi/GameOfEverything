@@ -11,3 +11,12 @@ setup_notes: >
 install_runtime: |
   apt-get install -y python3 python3-pip
 install_deps_cmd: "pip3 install flask"
+attacker_rules: |
+  - Flask routes commonly return 200 directly — do not assume redirects unless the app source shows redirect().
+  - SSTI payloads use Jinja2 syntax: `{{7*7}}` to confirm, `{{config.__class__.__init__.__globals__['os'].popen('id').read()}}` for RCE. URL-encode `{` as `%7B` and `}` as `%7D` in GET parameters.
+  - For pickle deserialization attacks, base64-encode the payload before sending.
+developer_rules: |
+  - Use Python stdlib `sqlite3` module — never SQLAlchemy, never MySQL.
+  - For Flask: use `app.run(host='0.0.0.0', port=PORT, debug=False)` — debug=True enables the Werkzeug reloader which forks and causes duplicate processes in Docker.
+  - Flask's `render_template` auto-escapes by default — to create an SSTI vulnerability use `render_template_string(user_input)` directly, NOT a safe template with a variable.
+  - For background tasks (subprocess, bot triggers), use `subprocess.Popen([...])` with no stdout/stderr capture — do NOT use `subprocess.run()` which blocks until completion.

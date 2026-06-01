@@ -42,11 +42,20 @@ class RuntimeRegistry:
         app_dir = artifact.app_dir  # artifact owns the path; template provides the default
         lines = ["#!/bin/bash", "set -e", "export DEBIAN_FRONTEND=noninteractive", ""]
 
-        # 1. Install runtime
+        # 1a. Install system deps (apt packages required by the app, e.g. chromium-browser)
+        if artifact.system_deps:
+            pkgs = " ".join(artifact.system_deps)
+            lines.append("# Install system dependencies")
+            lines.append("apt-get update -qq")
+            lines.append(f"apt-get install -y {pkgs}")
+            lines.append("")
+
+        # 1b. Install runtime
         install = t.get("install_runtime", "").strip()
         if install:
             lines.append("# Install runtime")
-            lines.append("apt-get update -qq")
+            if not artifact.system_deps:
+                lines.append("apt-get update -qq")
             lines.append(install)
             lines.append("")
 

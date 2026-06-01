@@ -48,9 +48,9 @@ def retry(
     if cat == DiagnosisCategory.procedure_bug:
         if attempt > _MAX_PROCEDURE_RETRIES:
             return None
-        # Re-run attacker only — app code is fine
-        new_procedure = attacker.attack(
-            entity, crew_result.plan, crew_result.artifact, crew_result.outgoing_values
+        # Fix the existing procedure using the diagnosis — don't regenerate from scratch
+        new_procedure = attacker.fix_procedure(
+            crew_result.procedure, diagnosis.description
         )
         return CrewResult(
             artifact=crew_result.artifact,

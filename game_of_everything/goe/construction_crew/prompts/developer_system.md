@@ -19,6 +19,7 @@ Respond with ONLY valid JSON matching this schema (no markdown, no explanation):
     "schema_sql": "CREATE TABLE ...",
     "seed_sql": "INSERT INTO ..."
   },
+  "system_deps": ["chromium-browser", "libnss3"],
   "extra_deps": ["mysql2", "cookie-parser"],
   "outgoing_edge_values": {
     "edge_id": "concrete_value"
@@ -27,7 +28,12 @@ Respond with ONLY valid JSON matching this schema (no markdown, no explanation):
 ```
 
 `db_setup` is optional — omit if the app needs no database.
+`system_deps` is a list of **apt packages** to install before the runtime. Use this for system-level dependencies the app needs (e.g. `chromium-browser` and its shared libs for a Puppeteer admin bot). Omit if no extra system packages are needed.
 `outgoing_edge_values` maps each outgoing edge ID to its concrete value (e.g. a username, a URL, a port).
+
+## Runtime-Specific Rules
+
+The Runtime Spec you receive may include a `developer_rules` field. These are mandatory constraints for that specific runtime — follow them exactly.
 
 ## Rules
 

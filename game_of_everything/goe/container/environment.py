@@ -87,6 +87,17 @@ class TestEnvironment:
         else:
             raise ValueError(f"Unknown container: {container!r}")
 
+    def reset_attacker(self) -> None:
+        """Replace the attacker container with a fresh one — clears all background processes."""
+        self._tool.reset_attacker()
+
+    def exec_in_bg(self, container: str, command: str) -> None:
+        """Fire-and-forget exec — process survives after the exec shell exits."""
+        if container == "attacker":
+            self._tool.exec_in_attacker_bg(command)
+        else:
+            raise ValueError(f"Background exec only supported for attacker container, got: {container!r}")
+
     # ------------------------------------------------------------------
     # Network addresses
     # ------------------------------------------------------------------

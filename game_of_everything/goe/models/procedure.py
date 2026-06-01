@@ -23,6 +23,13 @@ class ExecAttackerAction(BaseModel):
     command: str
 
 
+class ExecAttackerBgAction(BaseModel):
+    """Fire-and-forget exec in the attacker container — survives shell exit."""
+    model_config = ConfigDict(strict=True)
+    type: Literal["exec_attacker_bg"]
+    command: str
+
+
 class ExecTargetAction(BaseModel):
     """God-view only — valid in L1 diagnostics, never in L2 procedures."""
     model_config = ConfigDict(strict=True)
@@ -105,6 +112,7 @@ Action = Annotated[
     Union[
         HttpRequestAction,
         ExecAttackerAction,
+        ExecAttackerBgAction,
         ExecTargetAction,
         ListenAction,
         SleepAction,

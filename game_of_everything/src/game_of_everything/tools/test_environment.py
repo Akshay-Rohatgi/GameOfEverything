@@ -600,6 +600,44 @@ class TestEnvironmentTool:
         """
         return self._exec_in_container(self.attacker_container, snippet)
 
+    def reset_attacker(self) -> None:
+        """Stop and replace the attacker container with a fresh one.
+
+        Kills any detached background processes (listeners, ncat, etc.) that
+        survived from a previous attempt without touching the target container.
+        """
+        if self.attacker_container is not None:
+            try:
+                self.attacker_container.stop(timeout=3)
+                self.attacker_container.remove(force=True)
+            except Exception:
+                pass
+            self.attacker_container = None
+
+        self.attacker_container = self.client.containers.run(
+            ATTACKER_IMAGE_TAG,
+            command="sleep infinity",
+            name=self.attacker_name,
+            network=self.network_name,
+            hostname="attacker",
+            detach=True,
+            remove=False,
+        )
+
+    def exec_in_attacker_bg(self, snippet: str) -> None:
+        """Fire-and-forget exec in the attacker container.
+
+        Uses detach=True so the process survives after the exec shell exits.
+        Docker SIGTERM does not reach detached execs on shell exit.
+        Always returns immediately with no output.
+        """
+        if self.attacker_container is None:
+            raise RuntimeError("Container not started. Call setup() before executing commands.")
+        self.attacker_container.exec_run(
+            cmd=["bash", "-c", snippet],
+            detach=True,
+        )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
