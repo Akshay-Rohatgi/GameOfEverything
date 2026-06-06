@@ -8,7 +8,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from goe.models.edge import Edge, EdgeType, ParamValue
-from goe.models.entity import AppSpec, Entity, Requirement
+from goe.models.entity import Entity, Requirement
 from goe.models.system import NetworkConfig, System
 
 

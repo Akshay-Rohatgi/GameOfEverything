@@ -44,7 +44,7 @@ def build_entity(
     from goe.runtimes.registry import get_registry
 
     incoming_edges = incoming_edges or {}
-    runtime = entity.app_spec.runtime if entity.app_spec else "ubuntu"
+    runtime = entity.runtime.value
     registry = get_registry()
 
     def log(msg: str) -> None:

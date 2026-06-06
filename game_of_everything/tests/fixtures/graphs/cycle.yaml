@@ -20,7 +20,7 @@ entities:
         optional: false
     provides:
       - a_to_b
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
   - id: entity_b
@@ -31,7 +31,7 @@ entities:
         optional: false
     provides:
       - b_to_a
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
 edges:

@@ -1,13 +1,9 @@
 id: cmdi_express_entity
-description: "Express app with OS command injection in a network diagnostic endpoint — attacker executes arbitrary commands and reads /etc/passwd"
+description: "Express app with OS command injection in a network diagnostic endpoint — attacker executes arbitrary commands and reads /etc/passwd. Execute arbitrary OS commands via command injection in the host parameter, confirm by reading /etc/passwd."
 system_id: target_system
+runtime: express
 requires: []
 provides:
   - rce_as_app
-app_spec:
-  runtime: express
-  vulnerabilities:
-    - cmd_injection
-  goal: "execute arbitrary OS commands via command injection in the host parameter, confirm by reading /etc/passwd"
 atoms:
   - cmd_injection

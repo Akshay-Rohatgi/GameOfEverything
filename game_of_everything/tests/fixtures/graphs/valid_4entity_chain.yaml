@@ -20,11 +20,7 @@ entities:
         optional: false
     provides:
       - a_to_b
-    app_spec:
-      runtime: express
-      vulnerabilities:
-        - xss_stored
-      goal: steal admin session cookie
+    runtime: express
     atoms:
       - xss_stored
 
@@ -36,11 +32,7 @@ entities:
         optional: false
     provides:
       - b_to_c
-    app_spec:
-      runtime: express
-      vulnerabilities:
-        - file_upload_bypass
-      goal: upload webshell
+    runtime: express
     atoms:
       - file_upload_bypass
 
@@ -52,11 +44,7 @@ entities:
         optional: false
     provides:
       - c_to_d
-    app_spec:
-      runtime: express
-      vulnerabilities:
-        - cmd_injection
-      goal: read /etc/passwd
+    runtime: express
     atoms:
       - cmd_injection
 
@@ -67,7 +55,7 @@ entities:
       - edge_id: c_to_d
         optional: false
     provides: []
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
 edges:

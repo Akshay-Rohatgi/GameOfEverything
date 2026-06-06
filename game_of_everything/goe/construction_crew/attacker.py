@@ -45,14 +45,13 @@ def attack(
         for fname, content in artifact.source_files.items()
     )
 
-    runtime_id = entity.app_spec.runtime if entity.app_spec else ""
+    runtime_id = entity.runtime.value
     attacker_rules = _load_attacker_rules(runtime_id)
     rules_section = f"\n## Runtime-Specific Rules\n\n{attacker_rules}\n" if attacker_rules else ""
 
     user_msg = f"""## Entity Spec
 
 Goal: {entity.description}
-App spec: {entity.app_spec.model_dump_json() if entity.app_spec else 'N/A'}
 
 ## Architecture Plan
 

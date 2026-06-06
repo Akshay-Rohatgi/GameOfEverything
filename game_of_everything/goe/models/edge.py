@@ -15,7 +15,6 @@ class EdgeType(str, Enum):
     code_exec = "code_exec"
     token_for = "token_for"
 
-
 class ParamValue(BaseModel):
     model_config = ConfigDict(strict=True)
 

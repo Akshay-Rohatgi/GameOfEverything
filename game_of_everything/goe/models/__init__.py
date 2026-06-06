@@ -1,5 +1,5 @@
 from goe.models.system import System, NetworkConfig
-from goe.models.entity import Entity, Requirement, AppSpec
+from goe.models.entity import Entity, Requirement, Runtime
 from goe.models.edge import Edge, EdgeType, ParamValue
 from goe.models.procedure import (
     Procedure, Step, Session, SessionAuth, Action,
@@ -14,7 +14,7 @@ from goe.models.report import BuildReport, EntityResult, EntityStatus, ChainTest
 
 __all__ = [
     "System", "NetworkConfig",
-    "Entity", "Requirement", "AppSpec",
+    "Entity", "Requirement", "Runtime",
     "Edge", "EdgeType", "ParamValue",
     "Procedure", "Step", "Session", "SessionAuth", "Action",
     "HttpRequestAction", "ExecAttackerAction", "ExecTargetAction",

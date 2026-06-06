@@ -31,11 +31,7 @@ entities:
         optional: false
     provides:
       - webapp_to_db_creds
-    app_spec:
-      runtime: flask
-      vulnerabilities:
-        - sqli_union
-      goal: extract db admin credentials
+    runtime: flask
     atoms:
       - sqli_union
 
@@ -46,7 +42,7 @@ entities:
       - edge_id: webapp_to_db_creds
         optional: false
     provides: []
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
 edges:

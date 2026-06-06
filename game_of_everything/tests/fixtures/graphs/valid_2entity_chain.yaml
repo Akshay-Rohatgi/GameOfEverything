@@ -18,11 +18,7 @@ entities:
         optional: false
     provides:
       - sqli_to_ssh
-    app_spec:
-      runtime: express
-      vulnerabilities:
-        - sqli_union
-      goal: dump username and password from users table
+    runtime: express
     atoms:
       - sqli_union
 
@@ -33,7 +29,7 @@ entities:
       - edge_id: sqli_to_ssh
         optional: false
     provides: []
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
 edges:

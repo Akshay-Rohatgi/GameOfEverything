@@ -144,15 +144,15 @@ class TestConstructionCrewUnit:
     @pytest.mark.llm
     def test_engineer_returns_plan(self):
         from goe.construction_crew.engineer import plan
-        from goe.models.entity import Entity, AppSpec
+        from goe.models.entity import Entity, Runtime
 
         entity = Entity(
             id="test",
-            description="Test SQLi app",
+            description="Test SQLi app. Extract credentials via UNION-based SQLi in search parameter.",
             system_id="sys",
+            runtime=Runtime.express,
             requires=[],
             provides=[],
-            app_spec=AppSpec(runtime="express", vulnerabilities=["sqli_union"], goal="extract creds"),
             atoms=["sqli_union"],
         )
         eng_plan = plan(entity, incoming_edges={})
@@ -164,16 +164,16 @@ class TestConstructionCrewUnit:
     def test_attacker_returns_procedure(self):
         from goe.construction_crew.engineer import plan
         from goe.construction_crew.attacker import attack
-        from goe.models.entity import Entity, AppSpec
+        from goe.models.entity import Entity, Runtime
         from goe.models.artifacts import BuildArtifact
 
         entity = Entity(
             id="test",
-            description="SQLi app",
+            description="SQLi app. Extract credentials via UNION-based SQLi in search parameter.",
             system_id="sys",
+            runtime=Runtime.express,
             requires=[],
             provides=[],
-            app_spec=AppSpec(runtime="express", vulnerabilities=["sqli_union"], goal="extract creds"),
             atoms=["sqli_union"],
         )
         eng_plan = plan(entity, incoming_edges={})

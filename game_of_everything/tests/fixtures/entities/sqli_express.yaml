@@ -1,13 +1,9 @@
 id: sqli_entity
-description: "Express app with UNION-based SQL injection in a search endpoint — attacker extracts credentials from the users table"
+description: "Express app with UNION-based SQL injection in a search endpoint — attacker extracts credentials from the users table. Dump username and password from users table via UNION-based SQLi in search parameter."
 system_id: target_system
+runtime: express
 requires: []
 provides:
   - credentials
-app_spec:
-  runtime: express
-  vulnerabilities:
-    - sqli_union
-  goal: "dump username and password from users table via UNION-based SQLi in search parameter"
 atoms:
   - sqli_union
