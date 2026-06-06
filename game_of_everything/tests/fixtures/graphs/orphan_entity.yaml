@@ -1,0 +1,54 @@
+systems:
+  - id: target_system
+    os: ubuntu_22_04
+    services:
+      - web
+    network:
+      hostname: target
+      exposed_ports:
+        - 3000
+      internal_ports: []
+
+entities:
+  - id: reachable_entity
+    description: Reachable from operator
+    system_id: target_system
+    requires:
+      - edge_id: op_to_reachable
+        optional: false
+    provides: []
+    app_spec: null
+    atoms: []
+
+  - id: orphan_entity
+    description: Not reachable from operator — no path from operator
+    system_id: target_system
+    requires: []
+    provides: []
+    app_spec: null
+    atoms: []
+
+edges:
+  - id: op_to_reachable
+    from_entity: operator
+    to_entity: reachable_entity
+    type: network_reach
+    params:
+      host:
+        structural: target
+        concrete: null
+      port:
+        structural: "3000"
+        concrete: null
+
+  - id: orphan_internal_edge
+    from_entity: orphan_entity
+    to_entity: null
+    type: shell_as
+    params:
+      user:
+        structural: root
+        concrete: null
+      host:
+        structural: target
+        concrete: null

@@ -1,0 +1,61 @@
+systems:
+  - id: target_system
+    os: ubuntu_22_04
+    services:
+      - web
+    network:
+      hostname: target
+      exposed_ports:
+        - 3000
+      internal_ports: []
+
+entities:
+  - id: entity_a
+    description: Requires a non-operator edge — no initial access
+    system_id: target_system
+    requires:
+      - edge_id: b_to_a
+        optional: false
+    provides:
+      - a_to_b
+    app_spec: null
+    atoms: []
+
+  - id: entity_b
+    description: Also requires a non-operator edge
+    system_id: target_system
+    requires:
+      - edge_id: a_to_b
+        optional: false
+    provides:
+      - b_to_a
+    app_spec: null
+    atoms: []
+
+edges:
+  - id: a_to_b
+    from_entity: entity_a
+    to_entity: entity_b
+    type: shell_as
+    params:
+      user:
+        structural: app_user
+        concrete: null
+      host:
+        structural: target
+        concrete: null
+
+  - id: b_to_a
+    from_entity: entity_b
+    to_entity: entity_a
+    type: creds_for
+    params:
+      user:
+        structural: admin
+        concrete: null
+      host:
+        structural: target
+        concrete: null
+      cred_type:
+        structural: password
+        concrete: null

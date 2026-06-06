@@ -1,0 +1,34 @@
+systems:
+  - id: target_system
+    os: ubuntu_22_04
+    services:
+      - web
+    network:
+      hostname: target
+      exposed_ports:
+        - 3000
+      internal_ports: []
+
+entities:
+  - id: entity_a
+    description: References a nonexistent system ID
+    system_id: nonexistent_system
+    requires:
+      - edge_id: op_to_a
+        optional: false
+    provides: []
+    app_spec: null
+    atoms: []
+
+edges:
+  - id: op_to_a
+    from_entity: operator
+    to_entity: entity_a
+    type: network_reach
+    params:
+      host:
+        structural: target
+        concrete: null
+      port:
+        structural: "3000"
+        concrete: null

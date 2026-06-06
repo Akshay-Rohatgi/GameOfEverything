@@ -1,0 +1,65 @@
+systems:
+  - id: target_system
+    os: ubuntu_22_04
+    services:
+      - web
+    network:
+      hostname: target
+      exposed_ports:
+        - 3000
+      internal_ports: []
+
+entities:
+  - id: sqli_entity
+    description: Express app with SQL injection that leaks credentials
+    system_id: target_system
+    requires:
+      - edge_id: operator_to_sqli
+        optional: false
+    provides:
+      - sqli_to_ssh
+    app_spec:
+      runtime: express
+      vulnerabilities:
+        - sqli_union
+      goal: dump username and password from users table
+    atoms:
+      - sqli_union
+
+  - id: ssh_entity
+    description: SSH login using leaked credentials
+    system_id: target_system
+    requires:
+      - edge_id: sqli_to_ssh
+        optional: false
+    provides: []
+    app_spec: null
+    atoms: []
+
+edges:
+  - id: operator_to_sqli
+    from_entity: operator
+    to_entity: sqli_entity
+    type: network_reach
+    params:
+      host:
+        structural: target
+        concrete: null
+      port:
+        structural: "3000"
+        concrete: null
+
+  - id: sqli_to_ssh
+    from_entity: sqli_entity
+    to_entity: ssh_entity
+    type: creds_for
+    params:
+      user:
+        structural: db_user
+        concrete: null
+      host:
+        structural: target
+        concrete: null
+      cred_type:
+        structural: password
+        concrete: null
