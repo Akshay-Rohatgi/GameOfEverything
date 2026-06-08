@@ -40,8 +40,8 @@ class EngineerPlan(BaseModel):
     model_config = ConfigDict(extra="allow")
     summary: str
     runtime: str
-    app_description: str
-    endpoints: list[EndpointSpec]
+    app_description: str = ""
+    endpoints: list[EndpointSpec] = []
     vulnerability_placement: str
     data_model: DataModel = DataModel()
     attack_entry_point: str

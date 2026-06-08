@@ -46,12 +46,24 @@ def attack(
     )
 
     runtime_id = entity.runtime.value
+    is_ubuntu = runtime_id == "ubuntu"
     attacker_rules = _load_attacker_rules(runtime_id)
     rules_section = f"\n## Runtime-Specific Rules\n\n{attacker_rules}\n" if attacker_rules else ""
 
+    if is_ubuntu:
+        runtime_note = (
+            "The target host is ${target_host}. "
+            "Use `exec_target` steps to run shell commands directly on the target and verify the misconfiguration. "
+            "There is no web server — do NOT use http_request or ${target_port}."
+        )
+        source_header = "## Setup Script"
+    else:
+        runtime_note = "The app listens on port ${target_port} on host ${target_host}."
+        source_header = "## Application Source Code"
+
     user_msg = f"""## Entity Spec
 
-Goal: {entity.description}
+Description: {entity.description}
 
 ## Architecture Plan
 
@@ -59,7 +71,7 @@ Goal: {entity.description}
 - Success indicator: {plan.success_indicator}
 - Vulnerability: {plan.vulnerability_placement}
 
-## Application Source Code
+{source_header}
 
 {source_listing}
 
@@ -69,7 +81,7 @@ Goal: {entity.description}
 
 ## Runtime
 
-The app listens on port ${{target_port}} on host ${{target_host}}.
+{runtime_note}
 {rules_section}
 Write a YAML procedure that exploits the vulnerability and verifies success.
 Output ONLY valid YAML (no markdown fences)."""

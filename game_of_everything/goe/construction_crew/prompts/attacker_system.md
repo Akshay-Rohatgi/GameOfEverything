@@ -39,6 +39,12 @@ type: exec_attacker
 command: "curl -s http://${target_host}:${target_port}/..."
 ```
 
+**Shell (target container — use for ubuntu/misconfig entities to verify exploitation):**
+```yaml
+type: exec_target
+command: "find / -perm -4000 -user root 2>/dev/null"
+```
+
 **Shell background (attacker container — fire and forget):**
 Use this for listeners that must stay alive across multiple steps (e.g. an HTTP exfil listener).
 The process is detached from the exec shell and survives until explicitly killed.
