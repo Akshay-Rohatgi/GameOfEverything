@@ -16,9 +16,10 @@ Rules:
 - `description` must be specific: name the vulnerability type, the endpoint/service, and what capability it provides
 - `system_id` must match one of the provided systems
 - Design entities in attack chain order: initial access → lateral movement → goals
-- **CRITICAL — only generate entities that can be built as web applications.** Every entity must result in a deployed web app with a specific vulnerability. Do NOT create entities for: hash cracking, SSH login, privilege escalation, network scanning, or any step that doesn't involve exploiting a web vulnerability.
-- **One entity per exploitable web vulnerability.** A SQL injection that dumps credentials is ONE entity, not three. Do not split a single vulnerability across multiple entities.
-- For web apps, each entity maps to exactly one vulnerability atom (sqli, xss, cmdi, ssti, file_upload_bypass, path_traversal_lfi, insecure_deserialization)
+- Two kinds of entities are supported:
+  - **Web app entities**: exploitable vulnerable web applications (sqli, xss, cmdi, ssti, file_upload_bypass, path_traversal_lfi, insecure_deserialization). One vulnerability atom per entity.
+  - **Misconfig/system entities**: OS-level misconfigurations or privilege escalation steps (SUID binaries, cron hijacks, weak service passwords, exposed credentials). Each maps to one misconfig atom.
+- **One vulnerability per entity.** A SQL injection that dumps credentials is ONE entity, not three.
 - Keep the chain short: 1-3 entities is typical. More than 4 is almost certainly wrong.
 - The final entity in the chain provides credentials, a shell, or a token — the attacker's goal. Do not add post-exploitation steps beyond that.
 
