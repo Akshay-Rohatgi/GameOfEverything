@@ -44,7 +44,7 @@ def build_entity(
     from goe.runtimes.registry import get_registry
 
     incoming_edges = incoming_edges or {}
-    runtime = entity.app_spec.runtime if entity.app_spec else "ubuntu"
+    runtime = entity.runtime.value
     registry = get_registry()
 
     def log(msg: str) -> None:
@@ -102,9 +102,14 @@ def build_entity(
     env = TestEnvironment(runtime=runtime, scope=scope or f"build_{entity.id[:16]}")
     env.setup()
 
+    def _make_deploy_script(artifact) -> str:
+        if runtime == "ubuntu":
+            return artifact.source_files[artifact.primary_source]
+        return registry.deploy(runtime, artifact)
+
     try:
         # Phase 2 — Deploy
-        deploy_script = registry.deploy(runtime, crew.artifact)
+        deploy_script = _make_deploy_script(crew.artifact)
         section("PHASE 2: Deploy")
         dump("deploy_script.sh", deploy_script)
         log("Deploying app...")
@@ -119,11 +124,11 @@ def build_entity(
             # Fall through to retry with design_flaw
 
         # Phase 3 — L2 test
-        port = registry.port_for(runtime)
+        port = None if runtime == "ubuntu" else registry.port_for(runtime)
         ctx = {
             "target_host": env.get_target_host(),
             "attacker_host": env.get_attacker_host(),
-            "target_port": str(port),
+            "target_port": str(port) if port else "",
             "edges": incoming_edges,
         }
 
@@ -175,8 +180,7 @@ def build_entity(
                 log("Resetting target container...")
                 env.reset_target()
                 log("Re-deploying with updated artifact...")
-                new_deploy = registry.deploy(runtime, crew.artifact)
-                env.deploy(new_deploy)
+                env.deploy(_make_deploy_script(new_crew.artifact))
 
             result = run_procedure(crew.procedure, env, ctx)
             log(f"L2 attempt {attempt + 1}: {'PASSED' if result.passed else 'FAILED'}")

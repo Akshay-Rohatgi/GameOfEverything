@@ -17,7 +17,7 @@ entities:
       - edge_id: op_to_reachable
         optional: false
     provides: []
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
   - id: orphan_entity
@@ -25,7 +25,7 @@ entities:
     system_id: target_system
     requires: []
     provides: []
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
 edges:

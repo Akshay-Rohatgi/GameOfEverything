@@ -20,11 +20,7 @@ Output a JSON array containing ALL specified entities:
       {"edge_id": "edge_id_that_targets_this_entity", "optional": false}
     ],
     "provides": ["edge_id_that_this_entity_produces"],
-    "app_spec": {
-      "runtime": "express",
-      "vulnerabilities": ["sqli_union"],
-      "goal": "specific exploitation goal"
-    },
+    "runtime": "express",
     "atoms": ["sqli_union"]
   }
 ]
@@ -39,10 +35,11 @@ Rules for `provides`:
 - List the edge IDs this entity produces when successfully exploited
 - Terminal entities (end of chain) have an empty `provides` list
 
-Rules for `app_spec`:
-- **REQUIRED for every entity.** Every entity must have an `app_spec` — v2 only builds web applications.
-- `goal` must be specific and achievable in a single exploit (e.g. "dump username and password from users table via UNION-based SQLi in the search parameter")
-- One vulnerability per entity — do not list multiple vulnerabilities unless they are genuinely required together for the goal
+Rules for `runtime`:
+- **REQUIRED for every entity.** Choose from the available runtimes list.
+- Use `ubuntu` for system/misconfig entities that are not web applications (e.g. SSH pivots, privilege escalation targets).
+- Use a web runtime (`express`, `flask`, `apache_php`) for entities that host a vulnerable web application.
+- One vulnerability per entity — do not list multiple atoms unless they are genuinely required together for the exploit.
 
 Rules for edge ID naming:
 - Use descriptive IDs like `op_to_webapp`, `webapp_to_creds`, `creds_to_ssh`

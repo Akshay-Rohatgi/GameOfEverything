@@ -1,13 +1,9 @@
 id: path_traversal_flask_entity
-description: "Flask app with path traversal in a file download endpoint — attacker reads arbitrary files including /etc/passwd"
+description: "Flask app with path traversal in a file download endpoint — attacker reads arbitrary files including /etc/passwd. Read /etc/passwd via path traversal in the filename parameter."
 system_id: target_system
+runtime: flask
 requires: []
 provides:
   - file_read
-app_spec:
-  runtime: flask
-  vulnerabilities:
-    - path_traversal_lfi
-  goal: "read /etc/passwd via path traversal in the filename parameter"
 atoms:
   - path_traversal_lfi

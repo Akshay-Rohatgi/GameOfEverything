@@ -18,7 +18,7 @@ entities:
         optional: false
     provides:
       - a_to_b
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
   - id: entity_b
@@ -28,7 +28,7 @@ entities:
       - edge_id: nonexistent_edge
         optional: false
     provides: []
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
 edges:

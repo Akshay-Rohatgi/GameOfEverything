@@ -32,10 +32,10 @@ High-level attack chain planning. Determines what entities exist and their rough
 ### Step 2: Specify Entities
 
 **Input**: Entity stubs + systems + edge type vocabulary
-**Output**: Fully specified entities with typed `requires`/`provides`, `app_spec` where needed
+**Output**: Fully specified entities with typed `requires`/`provides`, `runtime`, and `atoms`
 **Model**: Sonnet, parallelized per-entity
 
-Each entity is specified independently (parallelizable) with full knowledge of the edge vocabulary. The LLM assigns exact edge types and structural param names. Entities with custom apps get an `app_spec`.
+Each entity is specified independently (parallelizable) with full knowledge of the edge vocabulary. The LLM assigns exact edge types, structural param names, a `runtime`, and an `atoms` list.
 
 ### Step 3: Connect Edges
 
@@ -116,18 +116,18 @@ Each entity is built by a **construction_crew** — an agentic sub-graph with th
 
 ### Engineer (Opus)
 
-**Receives**: Entity spec, resolved incoming edge values, relevant atoms, app_spec (if any)
+**Receives**: Entity spec, resolved incoming edge values, relevant atoms
 **Produces**: Architecture plan — what to build, how the vulnerability works, what the exploit path is
 
-For entities with `app_spec`: produces application architecture (routes, DB schema, where the vuln lives, how it's triggered).
-For simple misconfigs: produces the config approach (what file to modify, what value to set).
+For web entities (`runtime != ubuntu`): produces application architecture (routes, DB schema, where the vuln lives, how it's triggered).
+For misconfig entities (`runtime == ubuntu`): produces the config approach (what file to modify, what value to set).
 
 ### Developer (Sonnet)
 
 **Receives**: Engineer's plan, entity spec, resolved incoming edge values
 **Produces**: Implementation artifacts:
-- **With `app_spec`**: Application source files + DB schema/seed if needed
-- **Without `app_spec`**: Bash configuration snippet
+- **Web entities** (`runtime != ubuntu`): Application source files + DB schema/seed if needed
+- **Misconfig entities** (`runtime == ubuntu`): Bash configuration snippet
 
 Also produces: concrete values for all outgoing edge params (what username, what path, what port the app actually uses).
 

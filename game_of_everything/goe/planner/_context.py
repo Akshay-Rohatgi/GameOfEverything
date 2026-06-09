@@ -21,7 +21,7 @@ def atom_list() -> str:
 
     lines = []
     for path in sorted(_WEB_ATOMS_DIR.glob("*.md")):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         # Extract YAML frontmatter between --- delimiters
         if text.startswith("---"):
             fm_text = text.split("---", 2)[1]

@@ -40,8 +40,8 @@ class EngineerPlan(BaseModel):
     model_config = ConfigDict(extra="allow")
     summary: str
     runtime: str
-    app_description: str
-    endpoints: list[EndpointSpec]
+    app_description: str = ""
+    endpoints: list[EndpointSpec] = []
     vulnerability_placement: str
     data_model: DataModel = DataModel()
     attack_entry_point: str
@@ -86,7 +86,9 @@ def plan(entity: "Entity", incoming_edges: dict) -> EngineerPlan:
 
 {atom_content or "(no atoms specified)"}
 
-Design an architecture plan for this entity as a vulnerable web application.
+Design an architecture plan for this entity. Use the `runtime` field to determine the type:
+- Web runtime (express/flask/apache_php): plan a vulnerable web application.
+- Ubuntu runtime: plan an OS-level misconfiguration or system vulnerability.
 Output ONLY valid JSON matching the schema in the system prompt."""
 
     raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}])

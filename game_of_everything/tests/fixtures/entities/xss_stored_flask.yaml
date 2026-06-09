@@ -1,13 +1,9 @@
 id: xss_stored_flask_entity
-description: "Flask app with stored XSS in a comment board — attacker posts a script payload and verifies it is reflected unencoded in the page"
+description: "Flask app with stored XSS in a comment board — attacker posts a script payload and verifies it is reflected unencoded in the page. Post a <script> payload to the message board and confirm it is reflected unencoded in the HTML response."
 system_id: target_system
+runtime: flask
 requires: []
 provides:
   - stored_xss
-app_spec:
-  runtime: flask
-  vulnerabilities:
-    - xss_stored
-  goal: "post a <script> payload to the message board and confirm it is reflected unencoded in the HTML response"
 atoms:
   - xss_stored

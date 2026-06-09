@@ -1,13 +1,9 @@
 id: xss_express_entity
-description: "Express app with stored XSS in a comment/message board — attacker posts a script payload and verifies it is reflected unencoded in the page"
+description: "Express app with stored XSS in a comment/message board — attacker posts a script payload and verifies it is reflected unencoded in the page. Post a <script> payload to the message board and confirm it is reflected unencoded in the HTML response."
 system_id: target_system
+runtime: express
 requires: []
 provides:
   - stored_xss
-app_spec:
-  runtime: express
-  vulnerabilities:
-    - xss_stored
-  goal: "post a <script> payload to the message board and confirm it is reflected unencoded in the HTML response"
 atoms:
   - xss_stored

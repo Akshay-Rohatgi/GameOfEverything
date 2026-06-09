@@ -3,7 +3,7 @@ import pytest
 from pydantic import ValidationError
 
 from goe.models.system import NetworkConfig, System
-from goe.models.entity import AppSpec, Requirement, Entity
+from goe.models.entity import Runtime, Requirement, Entity
 from goe.models.edge import EdgeType, ParamValue, Edge
 from goe.models.procedure import (
     Procedure, Step, Session, SessionAuth,
@@ -62,14 +62,22 @@ class TestSystem:
 # entity.py
 # ---------------------------------------------------------------------------
 
-class TestAppSpec:
-    def test_basic(self): # Test if the AppSpec can be created with basic parameters``
-        a = AppSpec(runtime="express", vulnerabilities=["sqli_union"], goal="credential_theft")
-        assert a.runtime == "express"
+class TestRuntime:
+    def test_values(self):
+        assert Runtime.express.value == "express"
+        assert Runtime.flask.value == "flask"
+        assert Runtime.apache_php.value == "apache_php"
+        assert Runtime.ubuntu.value == "ubuntu"
 
-    def test_round_trip(self): # Test that serializing and deserializing gives the same object
-        a = AppSpec(runtime="flask", vulnerabilities=["xss_stored"], goal="session_theft")
-        assert AppSpec.model_validate(a.model_dump()) == a
+    def test_default_is_ubuntu(self):
+        e = Entity(
+            id="sys",
+            description="System entity",
+            system_id="s1",
+            requires=[],
+            provides=[],
+        )
+        assert e.runtime == Runtime.ubuntu
 
 
 class TestRequirement:
@@ -84,32 +92,35 @@ class TestRequirement:
 
 class TestEntity:
     def test_minimal(self): # Test that an Entity can be created with minimal parameters
-        e = Entity( # missing optional app_spec and atoms
-            id="vuln_app",
-            description="App with SQLi",
-            system_id="webserver",
-            requires=[Requirement(edge_id="op_to_app")],
-            provides=["app_to_db_creds"],
-        )
-        assert e.app_spec is None
-        assert e.atoms == []
-
-    def test_with_app_spec(self): # Test that an Entity can be created with an AppSpec
         e = Entity(
             id="vuln_app",
             description="App with SQLi",
             system_id="webserver",
             requires=[Requirement(edge_id="op_to_app")],
             provides=["app_to_db_creds"],
-            app_spec=AppSpec(runtime="express", vulnerabilities=["sqli_union"], goal="cred_theft"),
         )
-        assert e.app_spec is not None
+        assert e.runtime == Runtime.ubuntu
+        assert e.atoms == []
 
-    def test_round_trip(self): # Test that serializing and deserializing gives the same object, including nested AppSpec and Requirement
+    def test_web_app_entity(self): # Test that a web-app entity carries its runtime
+        e = Entity(
+            id="vuln_app",
+            description="App with SQLi. Dump users table via UNION SQLi in search param.",
+            system_id="webserver",
+            runtime=Runtime.express,
+            requires=[Requirement(edge_id="op_to_app")],
+            provides=["app_to_db_creds"],
+            atoms=["sqli_union"],
+        )
+        assert e.runtime == Runtime.express
+        assert e.atoms == ["sqli_union"]
+
+    def test_round_trip(self): # Test that serializing and deserializing gives the same object, including Runtime and Requirement
         e = Entity(
             id="e1",
             description="desc",
             system_id="s1",
+            runtime=Runtime.flask,
             requires=[Requirement(edge_id="r1")],
             provides=["p1"],
             atoms=["exposed_env_vars"],

@@ -1,13 +1,9 @@
 id: file_upload_php_entity
-description: "PHP/Apache app with unrestricted file upload — attacker uploads a PHP webshell and executes OS commands via HTTP"
+description: "PHP/Apache app with unrestricted file upload — attacker uploads a PHP webshell and executes OS commands via HTTP. Upload a PHP webshell to the server and execute OS commands by requesting it directly."
 system_id: target_system
+runtime: apache_php
 requires: []
 provides:
   - rce_via_webshell
-app_spec:
-  runtime: apache_php
-  vulnerabilities:
-    - file_upload_bypass
-  goal: "upload a PHP webshell to the server and execute OS commands by requesting it directly"
 atoms:
   - file_upload_bypass

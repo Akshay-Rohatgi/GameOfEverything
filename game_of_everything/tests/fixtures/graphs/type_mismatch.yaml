@@ -17,7 +17,7 @@ entities:
       - edge_id: op_to_a
         optional: false
     provides: []
-    app_spec: null
+    runtime: ubuntu
     atoms: []
 
 edges:

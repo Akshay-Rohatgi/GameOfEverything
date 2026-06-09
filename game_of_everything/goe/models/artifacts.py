@@ -14,7 +14,7 @@ class BuildArtifact(BaseModel):
 
     source_files: dict[str, str]  # filename → content
     primary_source: str
-    port: int
+    port: int | None = None  # None for ubuntu (misconfig) entities — no web server
     app_dir: str = "/opt/webapp"  # deployment directory inside the container
     db_setup: DBSetup | None = None
     extra_deps: list[str] = []

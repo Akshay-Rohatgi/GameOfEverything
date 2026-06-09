@@ -35,9 +35,9 @@ class Entity:
     id: str                         # Unique, snake_case
     description: str                # Natural language: what this vulnerability is
     system_id: str                  # Which System this lives on
+    runtime: Runtime                # "ubuntu" (misconfig) | "express" | "flask" | "apache_php" (web app)
     requires: list[Requirement]     # What must be true for this entity to be reachable
     provides: list[str]             # Edge IDs this entity produces on successful exploit
-    app_spec: AppSpec | None        # If set, construction_crew generates a custom application
     atoms: list[str]                # Atom IDs for builder reference (optional)
 ```
 
@@ -176,17 +176,14 @@ Entity A builds → reports concrete values →
 
 ## Custom Apps
 
-Entities that need a generated custom application carry an `app_spec`:
+Web entities (`runtime != ubuntu`) are built by the construction_crew as generated applications. The `runtime` field and `atoms` list together fully describe what to build:
 
-```python
-@dataclass
-class AppSpec:
-    runtime: str                    # "express" | "flask" | "apache_php"
-    vulnerabilities: list[str]      # Vuln atom IDs or descriptions
-    goal: str                       # What successful exploitation achieves (maps to provides edges)
-```
+- `runtime: express | flask | apache_php` — the web framework to use
+- `atoms: list[str]` — the vulnerability atom IDs to embed (e.g. `["xss_stored"]`, `["sqli_union"]`)
 
-The construction_crew receives the `app_spec` plus all resolved incoming edge values and generates:
+Misconfig entities (`runtime == ubuntu`) produce Bash configuration snippets instead of web applications.
+
+The construction_crew receives the entity spec plus all resolved incoming edge values and generates:
 - Application source file(s)
 - Attack procedure (see Procedure DSL)
 - Concrete param values for all outgoing edges
@@ -233,28 +230,25 @@ entities:
   - id: vuln_webapp
     description: "E-commerce app with stored XSS in product reviews that steals admin session cookies via an admin bot"
     system_id: webserver
+    runtime: express
     requires:
       - edge_id: operator_to_webapp
     provides: [webapp_to_admin_token]
-    app_spec:
-      runtime: express
-      vulnerabilities: [xss_stored]
-      goal: "steal admin session cookie via stored XSS triggering on admin bot visit"
+    atoms: [xss_stored]
 
   - id: admin_panel_rce
     description: "Admin panel with unrestricted file upload allowing PHP webshell execution"
     system_id: webserver
+    runtime: apache_php
     requires:
       - edge_id: webapp_to_admin_token
     provides: [admin_rce_to_shell]
-    app_spec:
-      runtime: apache_php
-      vulnerabilities: [file_upload_bypass]
-      goal: "upload and execute a webshell to gain code execution as www-data"
+    atoms: [file_upload_bypass]
 
   - id: db_creds_in_config
     description: "Database credentials stored in plaintext config file readable by www-data"
     system_id: webserver
+    runtime: ubuntu
     requires:
       - edge_id: admin_rce_to_shell
     provides: [config_to_db_creds]
@@ -263,6 +257,7 @@ entities:
   - id: ssh_reuse
     description: "PostgreSQL admin reuses the same password for SSH access"
     system_id: db_server
+    runtime: ubuntu
     requires:
       - edge_id: config_to_db_creds
     provides: [db_creds_to_ssh]

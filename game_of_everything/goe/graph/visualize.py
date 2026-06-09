@@ -10,6 +10,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from goe.graph.topology import topological_sort
+from goe.models.entity import Runtime
 
 if TYPE_CHECKING:
     from goe.graph.models import EntityGraph
@@ -61,9 +62,9 @@ def render(graph: "EntityGraph") -> str:
             continue
 
         tag = ""
-        if entity.app_spec:
-            vulns = "/".join(entity.app_spec.vulnerabilities)
-            tag = f"  [{entity.app_spec.runtime} · {vulns}]"
+        if entity.runtime != Runtime.ubuntu:
+            vulns = "/".join(entity.atoms) if entity.atoms else ""
+            tag = f"  [{entity.runtime.value} · {vulns}]" if vulns else f"  [{entity.runtime.value}]"
 
         lines.append(f"{entity.id}{tag}")
 
@@ -116,9 +117,10 @@ def _to_graph_easy_input(graph: "EntityGraph") -> str:
         entity = graph.entity_by_id(entity_id)
         if entity is None:
             return entity_id
-        if entity.app_spec:
-            vulns = "/".join(entity.app_spec.vulnerabilities)
-            return f"{entity.id}\\n({entity.app_spec.runtime}·{vulns})"
+        if entity.runtime != Runtime.ubuntu:
+            vulns = "/".join(entity.atoms) if entity.atoms else ""
+            suffix = f"·{vulns}" if vulns else ""
+            return f"{entity.id}\\n({entity.runtime.value}{suffix})"
         return entity.id
 
     for edge in graph.edges:
