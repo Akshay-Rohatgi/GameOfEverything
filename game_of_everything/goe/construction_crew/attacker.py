@@ -105,16 +105,16 @@ If any check fails, output the corrected YAML. If all checks pass, output the or
 Output ONLY valid YAML (no markdown fences)."""
 
     messages = [{"role": "user", "content": user_msg}]
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="attacker")
     messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": review_msg}]
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="attacker.self_review")
 
     try:
         return _parse(raw)
     except Exception as e:
         retry_msg = f"Your previous YAML failed to parse: {e}\n\nOutput ONLY valid YAML."
         messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": retry_msg}]
-        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
+        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="attacker.retry")
         return _parse(raw2)
 
 
@@ -164,11 +164,11 @@ Output ONLY valid YAML (no markdown fences, no explanation)."""
         data = yaml.safe_load(raw)
         return Procedure.model_validate(data)
 
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}])
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}], caller="attacker.fix_procedure")
 
     try:
         return _parse(raw)
     except Exception as e:
         retry_msg = f"{user_msg}\n\nYour previous YAML failed to parse: {e}\n\nOutput ONLY valid YAML."
-        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}])
+        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}], caller="attacker.fix_procedure.retry")
         return _parse(raw2)

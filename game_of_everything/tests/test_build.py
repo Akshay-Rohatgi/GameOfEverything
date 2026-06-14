@@ -25,7 +25,7 @@ def _run(fixture_name: str):
     from goe.models.report import EntityStatus
 
     entity = load_entity(fixture_name)
-    result = build_entity(entity, scope=f"test_{fixture_name[:20]}", verbose=True)
+    result = build_entity(entity, scope=f"test_{fixture_name[:20]}", verbose=True).result
     assert result.status == EntityStatus.PASSED, (
         f"Build failed after {result.attempts} attempts: {result.failure_reason}"
     )

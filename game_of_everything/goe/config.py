@@ -71,3 +71,25 @@ class GoEConfig:
         if override:
             return override
         return self.default_model
+
+    @property
+    def save_artifacts(self) -> bool:
+        """Whether to persist workflow artifacts (conversations + generated scripts).
+
+        Resolution order: GOE_SAVE_ARTIFACTS env var → [artifacts].enabled in goe.toml → False.
+        Accepted truthy values: "1", "true", "yes", "on" (case-insensitive).
+        """
+        raw = os.getenv("GOE_SAVE_ARTIFACTS") or self._data.get("artifacts", {}).get("enabled", "")
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+    @property
+    def artifacts_dir(self) -> str:
+        """Root directory for artifact output.
+
+        Resolution order: GOE_ARTIFACTS_DIR env var → [artifacts].dir in goe.toml → "artifacts".
+        Per-run timestamped subdirectories are created under this root.
+        """
+        return (
+            os.getenv("GOE_ARTIFACTS_DIR")
+            or self._data.get("artifacts", {}).get("dir", "artifacts")
+        )

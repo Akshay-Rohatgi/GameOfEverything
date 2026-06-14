@@ -46,5 +46,5 @@ def connect_edges(
 
     user_msg += "Create the Edge objects that wire these entities together."
 
-    data = call_json(model, _SYSTEM_PROMPT, user_msg)
+    data = call_json(model, _SYSTEM_PROMPT, user_msg, caller="planner.connect_edges")
     return [Edge.model_validate(e, strict=False) for e in data]

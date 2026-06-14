@@ -108,7 +108,7 @@ Failed steps:
 
 Diagnose the failure and output ONLY valid JSON."""
 
-    raw = call(model_id=model, system=_SYSTEM, messages=[{"role": "user", "content": user_msg}])
+    raw = call(model_id=model, system=_SYSTEM, messages=[{"role": "user", "content": user_msg}], caller="diagnostician")
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]

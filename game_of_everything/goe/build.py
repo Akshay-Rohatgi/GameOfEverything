@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from goe.models.entity import Entity
-    from goe.models.report import EntityResult
+    from goe.models.report import BuildOutcome
 
 
 def build_entity(
@@ -15,7 +15,7 @@ def build_entity(
     incoming_edges: dict | None = None,
     scope: str = "",
     verbose: bool = True,
-) -> "EntityResult":
+) -> "BuildOutcome":
     """Run the full build pipeline for a single entity.
 
     Steps:
@@ -33,12 +33,13 @@ def build_entity(
         verbose: Print progress to stdout.
 
     Returns:
-        EntityResult with PASSED/FAILED status and details.
+        BuildOutcome wrapping the EntityResult plus the final deploy script,
+        procedure, and outgoing edge values (the latter three empty on failure).
     """
     from goe.construction_crew.orchestrator import build as crew_build, CrewResult
     from goe.container.environment import TestEnvironment
     from goe.executor.runner import run as run_procedure
-    from goe.models.report import EntityResult, EntityStatus
+    from goe.models.report import BuildOutcome, EntityResult, EntityStatus
     from goe.retry.diagnostician import diagnose
     from goe.retry.router import retry as retry_crew
     from goe.runtimes.registry import get_registry
@@ -80,24 +81,25 @@ def build_entity(
     log(f"Vulnerability: {crew.plan.vulnerability_placement}")
 
     section("Generated Source Files")
-    import tempfile, os as _os
-    _artifact_dir = tempfile.mkdtemp(prefix=f"goe_{entity.id}_")
     for fname, content in crew.artifact.source_files.items():
         dump(fname, content)
-        _path = _os.path.join(_artifact_dir, fname.replace("/", "_"))
-        open(_path, "w").write(content)
     if crew.artifact.db_setup:
         dump("schema.sql", crew.artifact.db_setup.schema_sql)
         dump("seed.sql", crew.artifact.db_setup.seed_sql)
-    log(f"Full source written to: {_artifact_dir}/")
 
     section("Generated Attack Procedure")
     import yaml as _yaml
     _proc_yaml = _yaml.dump(crew.procedure.model_dump(), default_flow_style=False)
     dump("procedure.yaml", _proc_yaml)
-    _proc_path = _os.path.join(_artifact_dir, "procedure.yaml")
-    open(_proc_path, "w").write(_proc_yaml)
-    log(f"Full procedure written to: {_proc_path}")
+
+    # Persist to run-dir if artifact capture is active
+    from goe.metrics import get_session
+    _session = get_session()
+    _art_run_dir = getattr(_session, "artifact_run_dir", None) if _session else None
+    if _art_run_dir is not None:
+        from goe.artifacts.writer import save_crew_artifacts
+        save_crew_artifacts(entity.id, crew, _art_run_dir)
+        log(f"Artifacts written to: {_art_run_dir}/entities/{entity.id}/")
 
     env = TestEnvironment(runtime=runtime, scope=scope or f"build_{entity.id[:16]}")
     env.setup()
@@ -119,9 +121,6 @@ def build_entity(
             dump("deploy stdout", stdout)
         if stderr.strip() and exit_code != 0:
             dump("deploy stderr", stderr)
-        if exit_code != 0:
-            log(f"Deploy script exited {exit_code} — treating as design_flaw")
-            # Fall through to retry with design_flaw
 
         # Phase 3 — L2 test
         port = None if runtime == "ubuntu" else registry.port_for(runtime)
@@ -134,7 +133,20 @@ def build_entity(
 
         section("PHASE 3: L2 Procedure Execution")
         attempt = 0
-        result = run_procedure(crew.procedure, env, ctx)
+        if exit_code != 0:
+            # A broken/half-deployed container must NEVER yield a PASSED entity.
+            # Skip run_procedure (its assertions could pass against stale state)
+            # and route straight into the retry loop as a forced design_flaw.
+            from goe.executor.runner import ProcedureResult
+            log(f"Deploy script exited {exit_code} — forcing design_flaw retry")
+            result = ProcedureResult(
+                passed=False,
+                error=f"deploy script exited {exit_code}: {stderr.strip() or '(no stderr)'}",
+            )
+            forced_deploy_failure = True
+        else:
+            result = run_procedure(crew.procedure, env, ctx)
+            forced_deploy_failure = False
         log(f"L2 attempt {attempt + 1}: {'PASSED' if result.passed else 'FAILED'}")
         for step in result.steps:
             status = "PASS" if step.passed else "FAIL"
@@ -151,21 +163,42 @@ def build_entity(
 
         while not result.passed:
             attempt += 1
-            log(f"Diagnosing failure (attempt {attempt})...")
-            diagnosis = diagnose(entity, crew.artifact, result, env)
+            if forced_deploy_failure:
+                # Deterministic: a non-zero deploy exit is a design_flaw by
+                # definition — don't ask the LLM to second-guess a broken deploy.
+                from goe.retry.diagnostician import Diagnosis, DiagnosisCategory
+                diagnosis = Diagnosis(
+                    category=DiagnosisCategory.design_flaw,
+                    description="Deploy script exited non-zero — app failed to deploy.",
+                    evidence=result.error or "",
+                )
+                forced_deploy_failure = False
+            else:
+                log(f"Diagnosing failure (attempt {attempt})...")
+                diagnosis = diagnose(entity, crew.artifact, result, env)
             log(f"Diagnosis: {diagnosis.category} — {diagnosis.description}")
 
             new_crew = retry_crew(entity, incoming_edges, crew, diagnosis, attempt)
             if new_crew is None:
                 log("Max retries exceeded.")
-                return EntityResult(
-                    id=entity.id,
-                    status=EntityStatus.FAILED,
-                    attempts=attempt + 1,
-                    failure_reason=f"{diagnosis.category}: {diagnosis.description}",
+                return BuildOutcome(
+                    result=EntityResult(
+                        id=entity.id,
+                        status=EntityStatus.FAILED,
+                        attempts=attempt + 1,
+                        failure_reason=f"{diagnosis.category}: {diagnosis.description}",
+                        failure_category=diagnosis.category.value,
+                    ),
                 )
 
             crew = new_crew
+
+            # Persist retry artifacts (updated app/procedure) and diff vs previous
+            if _art_run_dir is not None:
+                from goe.artifacts.writer import save_attempt_artifacts, write_attempt_diff
+                save_attempt_artifacts(entity.id, attempt, crew, diagnosis, _art_run_dir)
+                write_attempt_diff(entity.id, attempt, _art_run_dir)
+                log(f"Attempt {attempt} artifacts written")
 
             # Always reset the attacker — clears detached background processes
             # (listeners, netcat, etc.) that survived from the previous attempt.
@@ -185,10 +218,15 @@ def build_entity(
             result = run_procedure(crew.procedure, env, ctx)
             log(f"L2 attempt {attempt + 1}: {'PASSED' if result.passed else 'FAILED'}")
 
-        return EntityResult(
-            id=entity.id,
-            status=EntityStatus.PASSED,
-            attempts=attempt + 1,
+        return BuildOutcome(
+            result=EntityResult(
+                id=entity.id,
+                status=EntityStatus.PASSED,
+                attempts=attempt + 1,
+            ),
+            deploy_script=_make_deploy_script(crew.artifact),
+            procedure=crew.procedure,
+            outgoing_values=crew.outgoing_values,
         )
 
     finally:
@@ -201,18 +239,38 @@ def build_entity(
 
 def _main() -> None:
     import argparse
+    import sys
     import yaml
     from goe.models.entity import Entity
+    from goe.artifacts.run import artifact_run
 
     parser = argparse.ArgumentParser(description="Build a single GoE entity")
     parser.add_argument("--spec", required=True, help="Path to entity YAML spec")
     parser.add_argument("--scope", default="", help="Docker scope prefix")
+    artifact_group = parser.add_mutually_exclusive_group()
+    artifact_group.add_argument(
+        "--artifacts",
+        dest="artifacts",
+        action="store_true",
+        default=None,
+        help="Save workflow artifacts (overrides goe.toml [artifacts].enabled)",
+    )
+    artifact_group.add_argument(
+        "--no-artifacts",
+        dest="artifacts",
+        action="store_false",
+        help="Disable artifact saving for this run",
+    )
     args = parser.parse_args()
 
     with open(args.spec) as f:
         entity = Entity.model_validate(yaml.safe_load(f))
 
-    result = build_entity(entity, scope=args.scope, verbose=True)
+    command = " ".join(sys.argv)
+    with artifact_run("build", command, capture=args.artifacts):
+        outcome = build_entity(entity, scope=args.scope, verbose=True)
+
+    result = outcome.result
     print(f"\nResult: {result.status} (attempts: {result.attempts})")
     if result.failure_reason:
         print(f"Failure: {result.failure_reason}")

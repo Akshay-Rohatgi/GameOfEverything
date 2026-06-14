@@ -1,0 +1,16 @@
+# Golden plan for a basic SQL injection scenario
+# This is a simple single-entity scenario with a terminal credential edge
+request: "web app with SQL injection vulnerability leading to credential theft"
+
+expected_systems:
+  - target_system
+
+expected_entities:
+  - description: "Web application with SQL injection"
+    runtime: "apache_php"  # v2 planner typically chooses PHP for SQL injection
+    atoms:
+      - sqli_union
+
+# For a single-entity terminal scenario, we don't expect entity-to-entity edges
+# The planner creates terminal edges (to_entity: null) for credentials
+expected_edges: []

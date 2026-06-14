@@ -21,6 +21,7 @@ dev = [
 ]
 
 [project.scripts]
+goe = "goe.flow.__main__:main"
 kickoff = "game_of_everything.main:kickoff"
 run_crew = "game_of_everything.main:kickoff"
 plot = "game_of_everything.main:plot"
@@ -38,6 +39,7 @@ packages = ["src/game_of_everything", "goe"]
 markers = [
     "docker: tests that require a running Docker daemon",
     "llm: tests that make real LLM API calls (requires AWS credentials in goe.toml)",
+    "eval: evaluation tests (requires docker and llm)",
 ]
 
 [tool.crewai]

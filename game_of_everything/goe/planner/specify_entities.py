@@ -53,7 +53,7 @@ def specify_entities(
         "and vice versa. Invent the edge IDs once and reuse them — do not use different "
         "IDs for the same relationship."
     )
-    data = call_json(model, system_prompt, user_msg)
+    data = call_json(model, system_prompt, user_msg, caller="planner.specify_entities")
 
     # LLM may return a list or a dict with a key
     if isinstance(data, dict):

@@ -1,5 +1,6 @@
 id: express
 description: Node.js 20 + Express on Ubuntu 22.04.
+target_image: goe-target-express:latest
 port: 3000
 default_app_dir: /opt/webapp
 primary_file: app.js
@@ -15,7 +16,8 @@ install_runtime: |
   curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
   apt-get update && apt-get install -y nodejs
-install_deps_cmd: "cd /opt/webapp && if [ -f package.json ]; then npm install; else npm init -y && npm install express; fi"
+# {extra} is replaced with the space-prefixed extra_deps (or "" when none).
+deps_install_template: "cd /opt/webapp && if [ -f package.json ]; then npm install{extra}; else npm init -y && npm install express{extra}; fi"
 attacker_rules: |
   - After starting a background listener, verify the port is bound before proceeding: use an `exec_attacker` step with `nc -z localhost 9999 && echo OK`.
   - For cookie exfil attacks (admin bot), wait at least 20 seconds after triggering — Chromium cold-start + login + page load + JS execution takes time.

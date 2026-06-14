@@ -1,5 +1,6 @@
 id: flask
 description: Python 3 + Flask on Ubuntu 22.04.
+target_image: goe-target-flask:latest
 port: 5000
 default_app_dir: /opt/webapp
 primary_file: app.py
@@ -10,7 +11,8 @@ setup_notes: >
   Use sqlite3 (stdlib) for simple DB needs.
 install_runtime: |
   apt-get install -y python3 python3-pip
-install_deps_cmd: "pip3 install flask"
+# {extra} is replaced with the space-prefixed extra_deps (or "" when none).
+deps_install_template: "pip3 install flask{extra}"
 attacker_rules: |
   - Flask routes commonly return 200 directly — do not assume redirects unless the app source shows redirect().
   - SSTI payloads use Jinja2 syntax: `{{7*7}}` to confirm, `{{config.__class__.__init__.__globals__['os'].popen('id').read()}}` for RCE. URL-encode `{` as `%7B` and `}` as `%7D` in GET parameters.

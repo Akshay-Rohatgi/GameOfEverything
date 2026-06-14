@@ -2,6 +2,205 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+---
+
+## GoE v2 Rewrite (`goe/`)
+
+Active development is on the `goe-rewrite` branch. The `goe/` directory is a complete rewrite of the pipeline — it does not use crewAI or LiteLLM and is independent of the v1 `src/game_of_everything/` code (except `goe/container/environment.py` which wraps v1's `TestEnvironmentTool`).
+
+**Current status: Phases 0–3 complete.** Phase 3 delivered the single-system orchestrator (`goe/flow/`), packaging (`goe/packaging/`), and the `goe run` CLI. Phase 4 (multi-system parallel builds + chain test) is next.
+
+### Commands
+
+```bash
+# All v2 commands must use the venv python
+.venv/bin/python -m pytest tests/                          # full test suite
+.venv/bin/python -m pytest tests/test_build.py -k sqli     # single test by keyword
+.venv/bin/python -m pytest -m "not docker and not llm"     # skip Docker/LLM tests
+.venv/bin/python -m pytest -m docker                       # Docker tests only
+
+# Run the single-entity build pipeline against a fixture
+.venv/bin/python -m goe.build --spec tests/fixtures/entities/sqli_express.yaml
+
+# Run the planner only (Steps 0–3, outputs graph YAML)
+.venv/bin/python -m goe.planner "web app with SQL injection leading to credential theft"
+
+# Run the full single-system flow: plan → build all entities → package
+.venv/bin/python -m goe.flow run "web app with SQL injection that leaks credentials"
+.venv/bin/python -m goe.flow run --verbose "SSH server with weak credentials and SUID privesc"
+.venv/bin/python -m goe.flow run --resume output/.checkpoints/<run_id>/   # resume a killed run
+# Output: output/<run_id>/{deploy.sh, playbook.yaml, README.md}
+
+# Re-test an existing output directory (no LLM calls — deploys and runs the playbook in Docker)
+.venv/bin/python -m goe.flow test output/<run_id>/
+.venv/bin/python -m goe.flow test output/<run_id>/ --runtime express   # override runtime if no checkpoint
+# Containers stay up after the run; press Enter to tear down (useful for manual exploration)
+
+# Run evaluation suite
+.venv/bin/python -m goe.eval --suite build --fixtures tests/fixtures/entities/sqli_express.yaml
+.venv/bin/python -m goe.eval --suite planning --golden sqli_basic --request "web app with SQLi"
+```
+
+### v2 Architecture
+
+The pipeline has two phases:
+
+**Phase 1 — Planning** (`goe/planner/`): natural language → validated `EntityGraph`. Four sequential LLM calls (design_systems → plan_entities → specify_entities → connect_edges), then deterministic resolve + validate. Validator retries connect_edges up to 2×; full re-plan up to 1×.
+
+**Phase 2 — Building** (`goe/build.py` + `goe/construction_crew/`): per-entity pipeline. Three LLM agents in sequence:
+- **Engineer** (`engineer.py`, Opus): entity spec + atoms → `EngineerPlan` (architecture, endpoints, data model, attack entry point)
+- **Developer** (`developer.py`, Sonnet): plan → `BuildArtifact` (source files, DB setup, concrete outgoing edge values). Runs a self-review second turn in the same conversation.
+- **Attacker** (`attacker.py`, Sonnet): artifact + plan → `Procedure` (YAML attack steps). Also runs a self-review second turn. Has `fix_procedure()` for targeted procedure-only retries.
+
+**Phase 3 — Orchestration** (`goe/flow/` + `goe/packaging/`): `goe/flow/orchestrator.py:run()` ties the two phases together for single-system scenarios. It calls `plan()`, drives a `BuildScheduler` (topological build order + concrete edge-value propagation), calls `build_entity()` per entity, and packages the PASSED entities. `build_entity()` returns a `BuildOutcome` (the `EntityResult` plus the final `deploy_script`, `procedure`, and `outgoing_values`). `goe/packaging/packager.py:package()` concatenates per-entity deploy scripts (topo order) through `postprocessor.apply_post_processors` into one `deploy.sh`, plus `playbook.yaml` and `README.md`. Checkpoint/resume lives in `goe/flow/checkpoint.py` (`output/.checkpoints/<run_id>/state.json`) — resuming skips planning and already-built entities. CLI is `goe/flow/__main__.py` (`goe run`).
+
+After crew, `goe/runtimes/registry.py` generates a deterministic bash deploy script from the `BuildArtifact`. `goe/container/environment.py` spins up Docker containers (target + attacker), deploys the script, and runs the procedure executor (`goe/executor/`). On L2 failure: `goe/retry/diagnostician.py` categorises the failure (`procedure_bug` / `implementation_bug` / `design_flaw`), and `goe/retry/router.py` dispatches back into the appropriate crew agents.
+
+### LLM Calls — All Routes Through `goe/bedrock.py`
+
+Every LLM call is a direct `boto3.client("bedrock-runtime").converse()` call. No crewAI, no LiteLLM.
+
+| Location | Role | Model config key | Calls per run |
+|---|---|---|---|
+| `planner/design_systems.py` | design systems | `planner` | 1 |
+| `planner/plan_entities.py` | plan entities | `planner` | 1 |
+| `planner/specify_entities.py` | specify entities (parallel) | `planner` | N (one per entity stub) |
+| `planner/connect_edges.py` | connect edges | `planner` | 1 |
+| `construction_crew/engineer.py` | engineer | `engineer` | 1 (+ 1 on parse fail) |
+| `construction_crew/developer.py` | developer | `developer` | 2 always (generate + self-review in same conversation) |
+| `construction_crew/attacker.py` | attacker | `attacker` | 2 always (generate + self-review); `fix_procedure()` is 1 extra |
+| `retry/diagnostician.py` | diagnostician | `diagnostician` | 1 (fires only on L2 failure) |
+
+Model per role is configured in `goe.toml` under `[models.v2_overrides]`, overridable per-role via `GOE_MODEL_<ROLE>` env vars.
+
+### Key Contracts
+
+**`BuildArtifact`** (`goe/models/artifacts.py`): what the developer produces. `source_files` is a `dict[filename → content]`. `primary_source` is the entry point. For ubuntu runtime, `primary_source` is a bash script and `port` is None. For web runtimes, `app_dir` defaults to `/opt/webapp` and `port` is required.
+
+**`Procedure`** (`goe/models/procedure.py`): what the attacker produces. Steps use `${target_host}`, `${attacker_host}`, `${target_port}` for interpolation, plus `${edge.<id>.<param>}` for resolved edge values and `${steps.<step_id>.<output>}` for captured step outputs.
+
+**`EntityGraph`** (`goe/graph/models.py`): edges have two-phase params — `structural` (plan-time descriptor) and `concrete` (build-time value filled by developer). Static validation operates on structural values only.
+
+**`BuildScheduler`** (`goe/graph/build_scheduler.py`): topological state machine. `next_buildable()` → `(entity, incoming_edges_dict)`. `report_complete(id, outgoing_values)` propagates concrete values. `report_failed(id)` returns the list of transitively skipped entity IDs.
+
+### Runtime Templates
+
+`goe/runtimes/templates/*.yaml` define how to install, start, and healthcheck each runtime. `RuntimeRegistry.deploy()` generates the full bash deploy script deterministically — no LLM. The `developer_rules` and `attacker_rules` fields in each template are injected into the respective agents' prompts. Always use `mariadb-server` (not `mysql-server`) for MySQL in Docker. Source files are written via `base64 -d` to handle arbitrary content safely.
+
+### Test Markers
+
+`docker` — requires a running Docker daemon (slow, ~1-3 min per entity). `llm` — requires AWS credentials in `goe.toml` and makes real Bedrock API calls. `eval` — evaluation tests (requires both docker and llm). Tests in `test_build.py` are both `docker` and `llm`. Run `pytest -m "not docker and not llm"` for fast unit tests only.
+
+### Entity Fixtures
+
+`tests/fixtures/entities/*.yaml` are the primary test inputs for `build_entity()`. Each is a minimal `Entity` YAML with `id`, `description`, `system_id`, `runtime`, `requires`, `provides`, `atoms`. Confirmed passing: `sqli_express`, `cmdi_flask`, `sqli_php`, `xss_stored_php`, `xss_admin_bot_express`.
+
+### Adding a New Web Runtime
+
+A web runtime is fully described by a single template YAML — no Python edits are needed.
+
+1. Add `goe/runtimes/templates/<id>.yaml` with:
+   - `id`, `port`, `start_cmd`, `healthcheck`
+   - `target_image`: Docker image name (e.g. `goe-target-<id>:latest`). `RuntimeRegistry.image_for()` / `goe/container/environment.py:_image_for()` read this; there is no separate image dict.
+   - `install_runtime`: bash to install the runtime (apt packages, NodeSource, etc.)
+   - `deps_install_template` (optional): package-manager install command with an `{extra}` placeholder. `{extra}` expands to the space-prefixed `extra_deps` (or `""` when none), so one template covers the deps and no-deps cases. Omit this field entirely if the runtime installs no per-app packages (e.g. apache_php).
+   - `pre_start` (optional): shell commands emitted verbatim after DB setup and before the service starts (e.g. apache_php's `mkdir`/`chown` for www-data dirs).
+   - `developer_rules`, `attacker_rules`: injected into the respective agent prompts.
+2. Add `docker/target_<id>/Dockerfile` with the pre-installed runtime (image name must match `target_image`).
+
+Non-web base images (`ubuntu`, `preset`) that have no template live in `_BASE_IMAGES` in `goe/container/environment.py`.
+
+### Evaluation & Metrics System
+
+**Location**: `goe/eval/`, `goe/metrics/`
+
+All LLM calls are instrumented transparently through `goe/bedrock.py` to capture per-call efficiency metrics (tokens, latency, model, caller). Metrics are opt-in via `MetricsSession` context vars — no overhead when not evaluating.
+
+**Efficiency metrics** (per LLM call):
+- Input/output tokens from Bedrock Converse API `usage` response
+- Wall-clock latency (ms)
+- Caller identity (e.g., "engineer", "planner.design_systems", "attacker.self_review")
+
+**Quality metrics** (system-level):
+- Planning adherence: compare planner output against golden test cases (`tests/fixtures/golden_plans/*.yaml`)
+- Build pass rates: L2 test success across fixtures
+- Retry counts: mean attempts per entity, failure category breakdown (`DiagnosisCategory`)
+
+**CLI**:
+```bash
+# Build eval
+.venv/bin/python -m goe.eval --suite build --fixtures tests/fixtures/entities/sqli_express.yaml
+
+# Planning eval
+.venv/bin/python -m goe.eval --suite planning --golden sqli_basic --request "web app with SQLi"
+
+# Full eval (both)
+.venv/bin/python -m goe.eval --suite full --fixtures <paths> --golden <name> --request "<text>"
+```
+
+**Output**: `eval_results/<timestamp>/summary.json`, `llm_calls.jsonl`, `entity_results.json`, `plan_adherence.json`
+
+**Programmatic**:
+```python
+from goe.metrics import start_session, end_session
+session = start_session()
+# ... run pipeline ...
+session = end_session()
+summary = session.summary()  # total_calls, total_tokens, calls_by_caller
+```
+
+See `goe/eval/README.md` for details.
+
+### Workflow Artifacts
+
+**Location**: `goe/artifacts/`
+
+Opt-in persistence of LLM conversation history and all generated files (app source, DB schema/seed SQL, attack procedure YAML, engineer plan) for every run. Off by default — zero overhead when disabled.
+
+**Enable**:
+```toml
+# goe.toml
+[artifacts]
+enabled = true
+dir     = "artifacts"   # timestamped subdirs created under this root
+```
+Or per-run: `GOE_SAVE_ARTIFACTS=1` env var, or `--artifacts` / `--no-artifacts` CLI flag on any entry point.
+
+**CLI flags** (work on all entry points):
+```bash
+.venv/bin/python -m goe.build   --spec ... --artifacts
+.venv/bin/python -m goe.planner "..." --artifacts
+.venv/bin/python -m goe.eval    --suite build --fixtures ... --artifacts
+```
+
+**On-disk layout** per run:
+```
+artifacts/2026-06-12T14-30-05/
+├── manifest.json            # run index: entry point, token totals, file list
+├── conversations/
+│   ├── llm_calls.jsonl      # full LLMTranscriptRecord per call (machine)
+│   ├── developer.md         # human-readable: system + turns + responses
+│   ├── attacker.md  engineer.md  planner.md
+├── entities/<id>/
+│   ├── app/<source_files>   # nested paths preserved; path traversal blocked
+│   ├── db/{schema.sql,seed.sql}
+│   ├── artifact.json  procedure.yaml  engineer_plan.json
+│   └── attempts/attempt_<n>/  # retry artifacts + attempt_*_to_*.diff
+├── metrics/llm_calls.jsonl  # token/latency records
+```
+
+For eval runs, artifacts are co-located inside the existing `eval_results/<timestamp>/` dir.
+
+**Conversation de-duplication**: `developer.py`/`attacker.py` grow a single `messages` list across `generate` → `self_review` → `retry` calls. The capture logic stores only the **delta** per call (keyed on the caller root), so `developer.md` shows a clean non-overlapping conversation. `fix_procedure` (fresh list) automatically resets the counter.
+
+**Retry diffs**: On L2 failure, each retry attempt's updated app and procedure are saved under `attempts/attempt_N/`, and a unified diff (`attempt_<prev>_to_<N>.diff`) is written alongside for easy review.
+
+See `goe/artifacts/README.md` for full schema documentation.
+
+---
+
+## v1 System (`src/game_of_everything/`)
+
 ## Project Overview
 
 **Game of Everything (GoE)** is a framework for agentically building vulnerable cybersecurity challenges. It takes natural language requests for vulnerable environments and generates validated deployment scripts that set up those environments on Ubuntu 22.04.

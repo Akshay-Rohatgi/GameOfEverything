@@ -118,14 +118,14 @@ If any check fails, output the corrected JSON. If all checks pass, output the or
 Output ONLY valid JSON."""
 
     messages = [{"role": "user", "content": user_msg}]
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="developer")
     messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": review_msg}]
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="developer.self_review")
 
     try:
         return _parse(raw)
     except Exception as e:
         retry_msg = f"Your previous response failed to parse: {e}\n\nOutput ONLY valid JSON."
         messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": retry_msg}]
-        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages)
+        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="developer.retry")
         return _parse(raw2)

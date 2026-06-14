@@ -28,5 +28,5 @@ def plan_entities(request: str, systems: list[System], model: str) -> list[Entit
         f"## Available Systems\n\n```json\n{systems_json}\n```\n\n"
         "Decompose this scenario into entity stubs."
     )
-    data = call_json(model, _SYSTEM_PROMPT, user_msg)
+    data = call_json(model, _SYSTEM_PROMPT, user_msg, caller="planner.plan_entities")
     return [EntityStub.model_validate(s) for s in data]

@@ -154,9 +154,17 @@ Validator retry strategy: if validation fails after step 5:
 
 ---
 
-## Phase 3: End-to-End Single System
+## Phase 3: End-to-End Single System ✅ (single-system flow complete)
 
 **Goal**: Full pipeline for single-system scenarios. User request → graph → build all entities → all L2 pass → packaged output.
+
+**Status**: Implemented. `goe/flow/orchestrator.py:run()` wires `planner.pipeline.plan` →
+`graph.BuildScheduler` → `build.build_entity` → `packaging.package`. `build_entity()` now
+returns a `BuildOutcome` (result + deploy_script + procedure + outgoing_values) so the
+orchestrator can propagate edge values and package. CLI: `python -m goe.flow run "..."`
+(also the `goe` console script), with `--verbose`, `--resume`, and `--artifacts`.
+Checkpoint/resume via `goe/flow/checkpoint.py` (`output/.checkpoints/<run_id>/state.json`).
+Follow-ups: multi-web-entity port collisions only warn (Phase 4 splits per-system).
 
 ### 3.1 — Orchestrator
 `goe/flow/orchestrator.py` — wires planning pipeline + build scheduler + construction crew + value propagation + failure handling + packaging.
@@ -249,8 +257,8 @@ goe/
     router.py                   ✅
   container/
     environment.py              ✅ reset_attacker, reset_target, exec_in_bg
-  flow/                         🎯 Phase 3 — not started
-  packaging/                    🎯 Phase 3 — not started
+  flow/                         ✅ orchestrator, __main__ (goe run), console, checkpoint
+  packaging/                    ✅ packager (deploy.sh + playbook.yaml + README), postprocessor
 
 docker/
   target_express/Dockerfile     ✅ Node.js 20 + Chromium (xtradeb)

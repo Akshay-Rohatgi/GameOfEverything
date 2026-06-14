@@ -6,21 +6,35 @@ Docker lifecycle code that already works in v1.
 
 from __future__ import annotations
 
-# Runtime image identifiers (mirrors v1 RUNTIME_TARGET_IMAGES)
-_RUNTIME_IMAGES: dict[str, str] = {
+from goe.runtimes.registry import get_registry
+
+# Base images for runtimes that have no web-runtime template (not built from a
+# BuildArtifact). Web-runtime images live in goe/runtimes/templates/*.yaml as
+# `target_image` and are looked up via RuntimeRegistry.image_for().
+_BASE_IMAGES: dict[str, str] = {
     "ubuntu": "ubuntu:22.04",
-    "express": "goe-target-express:latest",
-    "flask": "goe-target-flask:latest",
-    "apache_php": "goe-target-php:latest",
     "preset": "goe-preset-target:latest",
 }
+
+
+def _image_for(runtime: str) -> str:
+    """Resolve the Docker image for a runtime: template-backed first, then base images."""
+    registry = get_registry()
+    if registry.has_runtime(runtime):
+        return registry.image_for(runtime)
+    if runtime in _BASE_IMAGES:
+        return _BASE_IMAGES[runtime]
+    raise ValueError(
+        f"Unknown runtime {runtime!r}: no runtime template and no base image. "
+        f"Templates: {registry.available_runtimes()}; base: {list(_BASE_IMAGES)}"
+    )
 
 
 class TestEnvironment:
     """Wraps v1 TestEnvironmentTool with a clean interface for the v2 executor."""
 
     def __init__(self, runtime: str = "ubuntu", scope: str = "", enable_browser: bool = True):
-        image = _RUNTIME_IMAGES.get(runtime, runtime)
+        image = _image_for(runtime)
         from game_of_everything.tools.test_environment import TestEnvironmentTool
         self._tool = TestEnvironmentTool(
             scope=scope,

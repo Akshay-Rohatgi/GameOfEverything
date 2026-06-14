@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import posixpath
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -65,25 +66,24 @@ class RuntimeRegistry:
             b64 = base64.b64encode(content.encode()).decode()
             dest = f"{app_dir}/{filename}"
             lines.append(f"# Write {filename}")
+            # Ensure the file's parent dir exists — nested paths (e.g. views/index.ejs)
+            # are preserved, and the redirection below fails under `set -e` otherwise.
+            parent = posixpath.dirname(filename)
+            if parent:
+                lines.append(f'mkdir -p "$(dirname {dest})"')
             lines.append(f"echo '{b64}' | base64 -d > {dest}")
         lines.append("")
 
-        # 3. Install extra deps + runtime package manager deps
-        install_deps = t.get("install_deps_cmd", "").strip()
-        if artifact.extra_deps or install_deps:
+        # 3. Install runtime package-manager deps (base packages + extra_deps).
+        # The template supplies a deps_install_template with an `{extra}` placeholder;
+        # `extra` expands to the space-prefixed extra_deps (or "" when there are none),
+        # so the same template covers both the deps and no-deps cases. Runtimes with no
+        # package install (e.g. apache_php) simply omit deps_install_template.
+        deps_template = t.get("deps_install_template", "").strip()
+        if deps_template:
+            extra = ("" if not artifact.extra_deps else " " + " ".join(artifact.extra_deps))
             lines.append(f"cd {app_dir}")
-        if install_deps:
-            if artifact.extra_deps:
-                # Merge extra deps into the install command
-                extra = " ".join(artifact.extra_deps)
-                if runtime_id == "express":
-                    lines.append(f"npm init -y && npm install express {extra}")
-                elif runtime_id == "flask":
-                    lines.append(f"pip3 install flask {extra}")
-                else:
-                    lines.append(install_deps)
-            else:
-                lines.append(install_deps)
+            lines.append(deps_template.format(extra=extra))
             lines.append("")
 
         # 4. DB setup
@@ -105,13 +105,14 @@ class RuntimeRegistry:
                 lines.append("service mariadb start")
                 lines.append(f"echo '{b64_schema}' | base64 -d | mysql")
                 lines.append(f"echo '{b64_seed}' | base64 -d | mysql")
+            else:
+                raise ValueError(f"Unsupported db_type: {db.db_type!r}")
             lines.append("")
 
-        # 5. Runtime-specific pre-start setup
-        if runtime_id == "apache_php":
-            lines.append("# Ensure www-data writable dirs")
-            lines.append("mkdir -p /var/db && chown www-data:www-data /var/db")
-            lines.append("mkdir -p /var/www/html/uploads && chown www-data:www-data /var/www/html/uploads")
+        # 5. Runtime-specific pre-start setup (emitted verbatim from the template).
+        pre_start = t.get("pre_start", "").strip()
+        if pre_start:
+            lines.append(pre_start)
             lines.append("")
 
         # 6. Start the service (nohup — works in Docker without systemd)
@@ -135,6 +136,19 @@ class RuntimeRegistry:
 
     def port_for(self, runtime_id: str) -> int:
         return int(self.get_template(runtime_id)["port"])
+
+    def image_for(self, runtime_id: str) -> str:
+        """Docker image name for a runtime, from the template's `target_image` field."""
+        t = self.get_template(runtime_id)
+        image = t.get("target_image")
+        if not image:
+            raise ValueError(
+                f"Runtime {runtime_id!r} template is missing a `target_image` field."
+            )
+        return image
+
+    def has_runtime(self, runtime_id: str) -> bool:
+        return runtime_id in self._templates
 
     def available_runtimes(self) -> list[str]:
         return list(self._templates)

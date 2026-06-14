@@ -91,7 +91,7 @@ Design an architecture plan for this entity. Use the `runtime` field to determin
 - Ubuntu runtime: plan an OS-level misconfiguration or system vulnerability.
 Output ONLY valid JSON matching the schema in the system prompt."""
 
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}])
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}], caller="engineer")
 
     # Strip markdown fences if the model added them
     raw = raw.strip()
@@ -105,7 +105,7 @@ Output ONLY valid JSON matching the schema in the system prompt."""
     except Exception as e:
         # Retry once with the error
         retry_msg = f"{user_msg}\n\nYour previous response failed to parse: {e}\n\nOutput ONLY valid JSON."
-        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}])
+        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}], caller="engineer.retry")
         raw2 = raw2.strip()
         if raw2.startswith("```"):
             raw2 = raw2.split("\n", 1)[1]

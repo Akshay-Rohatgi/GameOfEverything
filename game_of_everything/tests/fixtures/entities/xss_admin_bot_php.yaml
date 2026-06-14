@@ -1,0 +1,8 @@
+id: xss_admin_bot_php_entity
+description: PHP web application with stored XSS and automated admin bot for cookie theft
+system_id: target_system
+runtime: apache_php
+requires: []
+provides: []
+atoms:
+  - xss_admin_bot

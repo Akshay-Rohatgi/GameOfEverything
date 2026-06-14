@@ -34,11 +34,11 @@ def render_system_prompt(template: str) -> str:
     return template
 
 
-def call_json(model: str, system: str, user_msg: str) -> Any:
+def call_json(model: str, system: str, user_msg: str, caller: str = "") -> Any:
     """Call Bedrock and return parsed JSON, retrying once on parse failure."""
     from goe.bedrock import call
 
-    raw = call(model_id=model, system=system, messages=[{"role": "user", "content": user_msg}])
+    raw = call(model_id=model, system=system, messages=[{"role": "user", "content": user_msg}], caller=caller)
     raw = strip_fences(raw)
     try:
         return json.loads(raw)
@@ -47,6 +47,6 @@ def call_json(model: str, system: str, user_msg: str) -> Any:
             f"{user_msg}\n\nYour previous response could not be parsed as JSON: {e}\n"
             "Output ONLY valid JSON with no surrounding text."
         )
-        raw2 = call(model_id=model, system=system, messages=[{"role": "user", "content": retry}])
+        raw2 = call(model_id=model, system=system, messages=[{"role": "user", "content": retry}], caller=f"{caller}.retry")
         raw2 = strip_fences(raw2)
         return json.loads(raw2)

@@ -12,5 +12,5 @@ _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "design_systems.md").read_
 
 def design_systems(request: str, model: str) -> list[System]:
     user_msg = f"Design the infrastructure systems needed for this attack scenario:\n\n{request}"
-    data = call_json(model, _SYSTEM_PROMPT, user_msg)
+    data = call_json(model, _SYSTEM_PROMPT, user_msg, caller="planner.design_systems")
     return [System.model_validate(s, strict=False) for s in data]
