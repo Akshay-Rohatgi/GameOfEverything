@@ -46,6 +46,9 @@ class RunState(BaseModel):
     # entity_id → failure record. Accepts a bare reason string from older
     # checkpoints (migrated to a FailureSnapshot with category=None on load).
     failed: dict[str, FailureSnapshot] = {}
+    # Chain test result — None until the chain test has run for this run.
+    # Serialized as {"status": "PASSED"|"FAILED", "broken_edge": ..., "reason": ...}
+    chain_test: dict | None = None
 
     @field_validator("failed", mode="before")
     @classmethod

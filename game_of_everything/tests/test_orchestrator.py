@@ -6,10 +6,11 @@ from unittest.mock import patch
 import pytest
 
 from goe.flow import orchestrator
+from goe.flow.chain_test import ChainTestOutcome
 from goe.flow.checkpoint import load_state
 from goe.graph.models import EntityGraph
 from goe.models.procedure import ExecAttackerAction, Procedure, Step
-from goe.models.report import BuildOutcome, EntityResult, EntityStatus
+from goe.models.report import BuildOutcome, ChainTestResult, ChainTestStatus, EntityResult, EntityStatus
 from goe.planner.pipeline import PlanResult
 
 FIXTURES = Path(__file__).parent / "fixtures" / "graphs"
@@ -48,9 +49,14 @@ def test_propagation_and_packaging(output_root):
             return _passed_outcome("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
         return _passed_outcome("ssh_entity", {})
 
+    chain_outcome = ChainTestOutcome(
+        result=ChainTestResult(status=ChainTestStatus.PASSED),
+    )
+
     with patch("goe.planner.pipeline.plan",
                return_value=PlanResult(graph=graph, success=True, attempts=1)), \
-         patch("goe.build.build_entity", side_effect=fake_build):
+         patch("goe.build.build_entity", side_effect=fake_build), \
+         patch("goe.flow.chain_test.run_chain_test", return_value=chain_outcome):
         result = orchestrator.run("sqli to ssh")
 
     assert result.success
@@ -60,6 +66,36 @@ def test_propagation_and_packaging(output_root):
     assert result.output_dir is not None
     assert (result.output_dir / "deploy.sh").exists()
     assert {r.status for r in result.results} == {EntityStatus.PASSED}
+    # Chain test result attached.
+    assert result.chain_test is not None
+    assert result.chain_test.status == ChainTestStatus.PASSED
+
+
+def test_chain_test_failure_gates_success(output_root):
+    """A failed chain test must make RunResult.success=False even if all entities built."""
+    graph = _graph()
+
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False):
+        if entity.id == "sqli_entity":
+            return _passed_outcome("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
+        return _passed_outcome("ssh_entity", {})
+
+    chain_outcome = ChainTestOutcome(
+        result=ChainTestResult(status=ChainTestStatus.FAILED, reason="SSH auth rejected"),
+    )
+
+    with patch("goe.planner.pipeline.plan",
+               return_value=PlanResult(graph=graph, success=True, attempts=1)), \
+         patch("goe.build.build_entity", side_effect=fake_build), \
+         patch("goe.flow.chain_test.run_chain_test", return_value=chain_outcome):
+        result = orchestrator.run("sqli to ssh")
+
+    # Both entities built but chain test failed → overall run fails.
+    assert not result.success
+    assert result.chain_test is not None
+    assert result.chain_test.status == ChainTestStatus.FAILED
+    # Package still written (entities passed individually).
+    assert result.output_dir is not None
 
 
 def test_failed_entity_skips_dependents(output_root):

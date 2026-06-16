@@ -24,4 +24,60 @@ Rules:
 - For single-machine scenarios, use one system with `id: target_system` and `hostname: target`
 - Common OS is `ubuntu_22_04` unless the request specifies otherwise
 
+**Port-to-runtime mapping** (for web apps):
+- Express web apps bind to port **3000**
+- Flask web apps bind to port **5000**
+- PHP/Apache web apps bind to port **80**
+- SSH service uses port **22**
+
+If the scenario involves web vulnerabilities, expose the appropriate web port. If it involves SSH login/pivot, expose port 22.
+
+## Examples
+
+### Example 1: Single web application
+**Request:** "Create a SQL injection challenge where the attacker extracts credentials"
+
+**Output:**
+```json
+[{
+  "id": "target_system",
+  "os": "ubuntu_22_04",
+  "services": ["web", "database"],
+  "network": {
+    "hostname": "target",
+    "exposed_ports": [3000],
+    "internal_ports": [3306]
+  }
+}]
+```
+
+### Example 2: Multi-system lateral movement
+**Request:** "Build a scenario where the attacker compromises a web app on one server and pivots to a database server via SSH"
+
+**Output:**
+```json
+[
+  {
+    "id": "web_system",
+    "os": "ubuntu_22_04",
+    "services": ["web"],
+    "network": {
+      "hostname": "webserver",
+      "exposed_ports": [80],
+      "internal_ports": []
+    }
+  },
+  {
+    "id": "db_system",
+    "os": "ubuntu_22_04",
+    "services": ["ssh", "database"],
+    "network": {
+      "hostname": "dbserver",
+      "exposed_ports": [22],
+      "internal_ports": [3306]
+    }
+  }
+]
+```
+
 Output ONLY valid JSON — no markdown, no explanation, no surrounding text. Output the raw JSON array.

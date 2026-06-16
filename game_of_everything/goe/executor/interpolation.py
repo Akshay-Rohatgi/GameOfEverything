@@ -6,6 +6,8 @@ Supported syntax:
   ${target_port}                    — built-in variable
   ${edge.<edge_id>.<param>}         — concrete value from a resolved edge
   ${steps.<step_id>.<output_name>}  — captured output from a previous step
+  ${system.<system_id>.host}        — hostname of a system in a multi-system topology
+  ${system.<system_id>.port}        — primary port of a system in a multi-system topology
 """
 
 import re
@@ -25,6 +27,8 @@ def interpolate(template: str, ctx: dict) -> str:
             val = ctx.get("edges", {}).get(parts[1], {}).get(parts[2])
         elif parts[0] == "steps" and len(parts) == 3:
             val = ctx.get("steps", {}).get(parts[1], {}).get(parts[2])
+        elif parts[0] == "system" and len(parts) == 3:
+            val = ctx.get("systems", {}).get(parts[1], {}).get(parts[2])
         else:
             val = None
 

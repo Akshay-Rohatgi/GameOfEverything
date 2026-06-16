@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from goe.models.system import System
+from goe.planner._atom_catalog import atom_catalog
 from goe.planner._utils import call_json
 
-_SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "plan_entities.md").read_text()
+_SYSTEM_PROMPT_TEMPLATE = (Path(__file__).parent / "prompts" / "plan_entities.md").read_text()
 
 
 class EntityStub(BaseModel):
@@ -19,14 +20,19 @@ class EntityStub(BaseModel):
     id: str
     description: str
     system_id: str
+    runtime: str = "ubuntu"
+    atoms: list[str] = Field(default_factory=list)
 
 
 def plan_entities(request: str, systems: list[System], model: str) -> list[EntityStub]:
+    # Render atom catalog into the system prompt
+    system_prompt = _SYSTEM_PROMPT_TEMPLATE.replace("{ATOM_CATALOG}", atom_catalog())
+
     systems_json = json.dumps([s.model_dump(mode="json") for s in systems], indent=2)
     user_msg = (
         f"## User Request\n\n{request}\n\n"
         f"## Available Systems\n\n```json\n{systems_json}\n```\n\n"
         "Decompose this scenario into entity stubs."
     )
-    data = call_json(model, _SYSTEM_PROMPT, user_msg, caller="planner.plan_entities")
+    data = call_json(model, system_prompt, user_msg, caller="planner.plan_entities")
     return [EntityStub.model_validate(s) for s in data]

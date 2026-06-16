@@ -8,6 +8,7 @@ from goe.graph.models import EntityGraph, ValidationResult, Violation
 from goe.graph.validator import validate
 from goe.planner.connect_edges import connect_edges
 from goe.planner.design_systems import design_systems
+from goe.planner.grade_stubs import grade_stubs
 from goe.planner.plan_entities import plan_entities
 from goe.planner.resolve import resolve
 from goe.planner.specify_entities import specify_entities
@@ -47,7 +48,11 @@ def plan(request: str, verbose: bool = False) -> PlanResult:
         stubs = plan_entities(request, systems, model=model)
         _log(f"[planner] planned {len(stubs)} entity stub(s)")
 
-        _log(f"[planner] Step 2: specifying entities (parallel)...")
+        _log(f"[planner] Step 1.5: grading stubs...")
+        stubs = grade_stubs(stubs, systems, model=model)
+        _log(f"[planner] graded {len(stubs)} stub(s)")
+
+        _log(f"[planner] Step 2: specifying entities...")
         entities = specify_entities(stubs, systems, request, model=model)
         _log(f"[planner] specified {len(entities)} entities")
 

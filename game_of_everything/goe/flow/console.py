@@ -57,9 +57,23 @@ class RunConsole:
         if skipped:
             self._line(f"  [yellow]skipped {len(skipped)}:[/yellow] {', '.join(skipped)}")
 
-    def summary(self, built: int, total: int, skipped: int, out_dir) -> None:
+    def chain_test_start(self, n_entities: int) -> None:
+        self._line(f"\n[cyan]Chain test:[/cyan] synthesising end-to-end attack for {n_entities} entities…")
+
+    def chain_test_result(self, passed: bool, reason: str | None = None) -> None:
+        if passed:
+            self._line("[green]✓ Chain test PASSED[/green]")
+        else:
+            msg = f": {reason}" if reason else ""
+            self._line(f"[red]✗ Chain test FAILED[/red]{msg}")
+
+    def summary(self, built: int, total: int, skipped: int, out_dir, chain_test=None) -> None:
         self._line(
             f"\n[bold]Summary:[/bold] {built}/{total} entities built · {skipped} skipped"
         )
+        if chain_test is not None:
+            status = chain_test.status.value if hasattr(chain_test, "status") else str(chain_test)
+            colour = "green" if status == "PASSED" else "red"
+            self._line(f"  chain test: [{colour}]{status}[/{colour}]")
         if out_dir is not None:
             self._line(f"  output: {out_dir}")

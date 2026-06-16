@@ -59,6 +59,18 @@ class EntityGraph(BaseModel):
     def edges_from(self, entity_id: str) -> list[Edge]:
         return [e for e in self.edges if e.from_entity == entity_id]
 
+    def entities_by_system(self) -> "dict[str, list[Entity]]":
+        """Return entities grouped by system_id, preserving topological order within each system."""
+        from goe.graph.topology import topological_sort
+
+        order = topological_sort(self)
+        result: dict[str, list[Entity]] = {s.id: [] for s in self.systems}
+        for eid in order:
+            entity = self.entity_by_id(eid)
+            if entity is not None:
+                result.setdefault(entity.system_id, []).append(entity)
+        return result
+
     @classmethod
     def from_yaml(cls, path: Path) -> "EntityGraph":
         data = yaml.safe_load(path.read_text())

@@ -55,6 +55,17 @@ def _resolve_port(graph: "EntityGraph", edge) -> str | None:
     system = graph.system_by_id(entity.system_id)
     if system is None:
         return None
-    if system.network.exposed_ports:
-        return str(system.network.exposed_ports[0])
-    return None
+    if not system.network.exposed_ports:
+        return None
+
+    # If the structural port matches an exposed port, use it
+    structural_port_str = edge.params["port"].structural
+    try:
+        structural_port_int = int(structural_port_str)
+        if structural_port_int in system.network.exposed_ports:
+            return structural_port_str
+    except (ValueError, AttributeError):
+        pass
+
+    # Otherwise fall back to the first exposed port
+    return str(system.network.exposed_ports[0])

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from goe.models.entity import Entity
 from goe.models.system import System
+from goe.planner._atom_catalog import atom_catalog, atom_catalog_for_ids
 from goe.planner._utils import call_json, render_system_prompt
 from goe.planner.search import atom_ids_for_query
 
@@ -26,22 +27,23 @@ def specify_entities(
     systems_json = json.dumps([s.model_dump(mode="json") for s in systems], indent=2)
     all_stubs_json = json.dumps([s.model_dump(mode="json") for s in stubs], indent=2)
 
-    # RAG: retrieve relevant atoms for the full request rather than listing all
+    # RAG: retrieve relevant atoms for the full request
     relevant_atom_ids = atom_ids_for_query(request, n_results=5)
 
-    # Build system prompt: if RAG returned results substitute them for {ATOMS},
-    # otherwise fall back to the full list from _context.
+    # Build system prompt: inject rich atom catalog (with descriptions + runtimes)
+    from goe.planner._context import edge_type_list, runtime_list
+
     if relevant_atom_ids:
-        from goe.planner._context import edge_type_list, runtime_list
-        atom_section = "\n".join(f"- `{a}`" for a in relevant_atom_ids)
-        system_prompt = (
-            _SYSTEM_PROMPT_TEMPLATE
-            .replace("{ATOMS}", atom_section)
-            .replace("{RUNTIMES}", runtime_list())
-            .replace("{EDGE_TYPES}", edge_type_list())
-        )
+        atom_section = atom_catalog_for_ids(relevant_atom_ids)
     else:
-        system_prompt = render_system_prompt(_SYSTEM_PROMPT_TEMPLATE)
+        atom_section = atom_catalog()
+
+    system_prompt = (
+        _SYSTEM_PROMPT_TEMPLATE
+        .replace("{ATOMS}", atom_section)
+        .replace("{RUNTIMES}", runtime_list())
+        .replace("{EDGE_TYPES}", edge_type_list())
+    )
 
     user_msg = (
         f"## User Request\n\n{request}\n\n"

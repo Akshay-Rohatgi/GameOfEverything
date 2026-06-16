@@ -30,6 +30,7 @@ class RunResult:
     success: bool
     failed: dict[str, str] = field(default_factory=dict)
     final_violations: list = field(default_factory=list)
+    chain_test: object = None  # ChainTestResult | None
 
 
 def _slug(text: str, max_len: int = 40) -> str:
@@ -168,19 +169,48 @@ def run(
             if console:
                 console.entity_failed(entity.id, reason, skipped)
 
-    # ---- Phase 3: package --------------------------------------------------
+    # ---- Phase 3: chain test (any run with > 1 entity built) ---------------
+    from goe.models.report import ChainTestResult, ChainTestStatus
+
+    chain_test: ChainTestResult | None = None
+    chain_procedure = None
+    if len(built) > 1:
+        from goe.flow.chain_test import run_chain_test
+
+        if console:
+            console.chain_test_start(len(built))
+
+        outcome = run_chain_test(graph, built, console=console)
+        chain_test = outcome.result
+        chain_procedure = outcome.procedure
+
+        if console:
+            console.chain_test_result(
+                passed=(chain_test.status == ChainTestStatus.PASSED),
+                reason=chain_test.reason,
+            )
+
+        # Persist chain test result into checkpoint
+        state.chain_test = chain_test.model_dump(mode="json")
+        ckpt.save_state(state, OUTPUT_ROOT)
+
+    # ---- Phase 4: package --------------------------------------------------
     output_dir: Path | None = None
     if built:
         output_dir = OUTPUT_ROOT / state.run_id
-        package(graph, built, output_dir, request=request)
+        package(graph, built, output_dir, request=request, chain_procedure=chain_procedure)
 
-    success = bool(built) and not state.failed
+    # Gating: chain test failure makes the overall run fail
+    chain_passed = chain_test is None or chain_test.status == ChainTestStatus.PASSED
+    success = bool(built) and not state.failed and chain_passed
+
     if console:
         console.summary(
             built=len(built),
             total=len(graph.entities),
             skipped=sum(1 for r in results if r.status == EntityStatus.SKIPPED),
             out_dir=output_dir,
+            chain_test=chain_test,
         )
 
     return RunResult(
@@ -189,4 +219,5 @@ def run(
         output_dir=output_dir,
         success=success,
         failed={eid: fail.reason for eid, fail in state.failed.items()},
+        chain_test=chain_test,
     )

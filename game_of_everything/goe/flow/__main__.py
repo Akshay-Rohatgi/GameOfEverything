@@ -84,14 +84,22 @@ def _run(args) -> None:
             console=console,
         )
         if run_dir is not None and result.output_dir is not None:
-            for fname in ("deploy.sh", "playbook.yaml", "README.md"):
-                src = result.output_dir / fname
-                if src.exists():
-                    shutil.copy2(src, run_dir / fname)
+            # Copy all package outputs (deploy.sh, *_deploy.sh, docker-compose.yml,
+            # playbook.yaml, chain_playbook.yaml, README.md)
+            for src in result.output_dir.iterdir():
+                if src.is_file():
+                    shutil.copy2(src, run_dir / src.name)
 
     if not result.success:
         if result.graph is None:
             print("\nRun failed during planning.", file=sys.stderr)
+        elif result.chain_test is not None and hasattr(result.chain_test, "status"):
+            from goe.models.report import ChainTestStatus
+            if result.chain_test.status != ChainTestStatus.PASSED:
+                reason = getattr(result.chain_test, "reason", None) or ""
+                print(f"\nChain test FAILED: {reason}", file=sys.stderr)
+            else:
+                print("\nRun completed with entity build failures.", file=sys.stderr)
         else:
             print("\nRun completed with failures.", file=sys.stderr)
         sys.exit(1)
@@ -99,13 +107,117 @@ def _run(args) -> None:
 
 def _test(args) -> None:
     import yaml
-    from goe.container.environment import TestEnvironment
     from goe.executor.runner import run as run_procedure
     from goe.models.procedure import Procedure
 
     out_dir = Path(args.out_dir).resolve()
-    deploy_sh_path = out_dir / "deploy.sh"
+    chain_playbook_path = out_dir / "chain_playbook.yaml"
     playbook_path = out_dir / "playbook.yaml"
+
+    if chain_playbook_path.exists():
+        _test_chain(args, out_dir, chain_playbook_path)
+    else:
+        _test_single(args, out_dir, playbook_path)
+
+
+def _test_chain(args, out_dir: Path, chain_playbook_path: Path) -> None:
+    """Replay the chain playbook against a full topology environment."""
+    import yaml
+    from goe.container.topology_environment import TopologyEnvironment
+    from goe.executor.runner import run as run_procedure
+    from goe.flow.chain_test import _build_systems_ctx
+    from goe.models.procedure import Procedure
+
+    # Load graph from checkpoint
+    run_id = out_dir.name
+    ckpt_path = out_dir.parent / ".checkpoints" / run_id / "state.json"
+    if not ckpt_path.exists():
+        print(f"error: no checkpoint found at {ckpt_path}", file=sys.stderr)
+        sys.exit(2)
+
+    from goe.flow.checkpoint import load_state
+    state = load_state(ckpt_path)
+    graph = state.graph
+
+    chain_proc_data = yaml.safe_load(chain_playbook_path.read_text(encoding="utf-8"))
+    chain_procedure = Procedure.model_validate(chain_proc_data)
+
+    # Build per-system scripts from output dir
+    per_system_scripts: dict[str, str] = {}
+    deploy_sh = out_dir / "deploy.sh"
+    if deploy_sh.exists():
+        # Single-system deployed to all systems
+        for s in graph.systems:
+            per_system_scripts[s.id] = deploy_sh.read_text(encoding="utf-8")
+    else:
+        for s in graph.systems:
+            p = out_dir / f"{s.id}_deploy.sh"
+            if p.exists():
+                per_system_scripts[s.id] = p.read_text(encoding="utf-8")
+
+    print(f"[chain-test] topology: {len(graph.systems)} system(s), dir={out_dir}")
+    systems_ctx = _build_systems_ctx(graph)
+
+    env = TopologyEnvironment(graph, scope="manual_chain")
+    env.setup()
+    try:
+        for system_id, script in per_system_scripts.items():
+            print(f"[chain-test] Deploying system {system_id}…")
+            ec, _out, err = env.deploy_system(system_id, script)
+            if ec != 0:
+                print(f"[chain-test] Deploy FAILED for {system_id} (exit {ec})")
+                if err.strip():
+                    print(f"--- stderr ---\n{err.strip()[:500]}")
+                sys.exit(1)
+            print(f"[chain-test] Deploy OK: {system_id}")
+
+        ctx: dict = {
+            "target_host": env.get_target_host(),
+            "attacker_host": env.get_attacker_host(),
+            "target_port": "",
+            "systems": systems_ctx,
+            "edges": {
+                edge.id: {p: (pv.concrete or pv.structural) for p, pv in edge.params.items()}
+                for edge in graph.edges
+            },
+        }
+
+        print("\n[chain-test] Running chain procedure…")
+        result = run_procedure(chain_procedure, env, ctx)
+
+        for step in result.steps:
+            status = "PASS" if step.passed else "FAIL"
+            print(f"  [{status}] {step.step_id}: {step.reason}")
+            if not step.passed:
+                if step.raw.stdout:
+                    print(f"         stdout: {step.raw.stdout[:500]}")
+                if step.raw.stderr:
+                    print(f"         stderr: {step.raw.stderr[:300]}")
+                if step.raw.error:
+                    print(f"         error:  {step.raw.error}")
+
+        if result.error:
+            print(f"  [ERROR] {result.error}")
+
+        verdict = "PASSED" if result.passed else "FAILED"
+        print(f"\n[chain-test] {verdict}")
+        print(f"[chain-test] attacker={env.attacker_name}")
+        input("[chain-test] Containers still running — press Enter to tear down...")
+    finally:
+        env.teardown()
+
+    if not result.passed:
+        sys.exit(1)
+
+
+def _test_single(args, out_dir: Path, playbook_path: Path) -> None:
+    """Replay per-entity playbook against a single TestEnvironment (original path)."""
+    import yaml
+    from goe.container.environment import TestEnvironment
+    from goe.executor.runner import run as run_procedure
+    from goe.models.procedure import Procedure
+
+    deploy_sh_path = out_dir / "deploy.sh"
 
     if not deploy_sh_path.exists():
         print(f"error: {deploy_sh_path} not found", file=sys.stderr)
