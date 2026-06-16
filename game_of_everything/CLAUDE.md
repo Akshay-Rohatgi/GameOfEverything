@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Active development is on the `goe-rewrite` branch. The `goe/` directory is a complete rewrite of the pipeline — it does not use crewAI or LiteLLM and is independent of the v1 `src/game_of_everything/` code (except `goe/container/environment.py` which wraps v1's `TestEnvironmentTool`).
 
-**Current status: Phases 0–4 (increment 1) complete.** Phase 3 delivered the single-system orchestrator (`goe/flow/`), packaging (`goe/packaging/`), and the `goe run` CLI. Phase 4 increment 1 delivered multi-entity/multi-system packaging and the L3 chain test. Phase 4 increment 2 (parallel entity builds + output serialization) is next.
+**Current status: Phases 0–4 complete.** Phase 3 delivered the single-system orchestrator (`goe/flow/`), packaging (`goe/packaging/`), and the `goe run` CLI. Phase 4 delivered multi-entity chain tests, multi-system packaging, and planner grounding (atom catalog + few-shot examples). **Phase 5 (Polish and Parity) is next** — atom integration into construction crew, EC2 deploy, cost optimization, preset apps.
 
 ### Commands
 
@@ -45,7 +45,16 @@ Active development is on the `goe-rewrite` branch. The `goe/` directory is a com
 
 The pipeline has two phases:
 
-**Phase 1 — Planning** (`goe/planner/`): natural language → validated `EntityGraph`. Four sequential LLM calls (design_systems → plan_entities → specify_entities → connect_edges), then deterministic resolve + validate. Validator retries connect_edges up to 2×; full re-plan up to 1×.
+**Phase 1 — Planning** (`goe/planner/`): natural language → validated `EntityGraph`. Five sequential LLM calls:
+1. `design_systems` → list[System]
+2. `plan_entities` → list[EntityStub] (includes runtime + atoms, grounded in atom catalog)
+3. `grade_stubs` → list[EntityStub] (validates/corrects runtime-atom compatibility)
+4. `specify_entities` → list[Entity] (adds edges)
+5. `connect_edges` → list[Edge]
+
+Then deterministic `resolve` (fills concrete params) + `validate`. Validator retries connect_edges up to 2×; full re-plan up to 1×.
+
+**Planner grounding**: All prompts include the atom catalog (`goe/planner/_atom_catalog.py`) with descriptions, compatible runtimes, and few-shot examples. The grading step (step 3) prevents wrong runtimes (e.g., `apache_php` for SSH entities) and invented atoms.
 
 **Phase 2 — Building** (`goe/build.py` + `goe/construction_crew/`): per-entity pipeline. Three LLM agents in sequence:
 - **Engineer** (`engineer.py`, Opus): entity spec + atoms → `EngineerPlan` (architecture, endpoints, data model, attack entry point)
@@ -66,11 +75,13 @@ Every LLM call is a direct `boto3.client("bedrock-runtime").converse()` call. No
 |---|---|---|---|
 | `planner/design_systems.py` | design systems | `planner` | 1 |
 | `planner/plan_entities.py` | plan entities | `planner` | 1 |
-| `planner/specify_entities.py` | specify entities (parallel) | `planner` | N (one per entity stub) |
+| `planner/grade_stubs.py` | grade stubs | `planner` | 1 |
+| `planner/specify_entities.py` | specify entities | `planner` | 1 (all entities in one call) |
 | `planner/connect_edges.py` | connect edges | `planner` | 1 |
-| `construction_crew/engineer.py` | engineer | `engineer` | 1 (+ 1 on parse fail) |
-| `construction_crew/developer.py` | developer | `developer` | 2 always (generate + self-review in same conversation) |
-| `construction_crew/attacker.py` | attacker | `attacker` | 2 always (generate + self-review); `fix_procedure()` is 1 extra |
+| `construction_crew/engineer.py` | engineer | `engineer` | 1 per entity (+ 1 on parse fail) |
+| `construction_crew/developer.py` | developer | `developer` | 2 per entity (generate + self-review in same conversation) |
+| `construction_crew/attacker.py` | attacker | `attacker` | 2 per entity (generate + self-review); `fix_procedure()` is 1 extra |
+| `construction_crew/chain_attacker.py` | chain attacker | `chain_attacker` | 1 when len(built) > 1 (+ up to 2 retries) |
 | `retry/diagnostician.py` | diagnostician | `diagnostician` | 1 (fires only on L2 failure) |
 
 Model per role is configured in `goe.toml` under `[models.v2_overrides]`, overridable per-role via `GOE_MODEL_<ROLE>` env vars.
@@ -198,6 +209,28 @@ For eval runs, artifacts are co-located inside the existing `eval_results/<times
 **Retry diffs**: On L2 failure, each retry attempt's updated app and procedure are saved under `attempts/attempt_N/`, and a unified diff (`attempt_<prev>_to_<N>.diff`) is written alongside for easy review.
 
 See `goe/artifacts/README.md` for full schema documentation.
+
+### Phase 5: Next Steps
+
+**Status**: Phase 4 complete. Phase 5 (Polish and Parity) is next.
+
+**Planned Phase 5 work** (from `docs/rewrite/implementation_plan.md`):
+1. **Atom integration into construction crew** — Wire atom markdown into engineer/developer agents so they follow formulaic patterns (currently they freestyle implementations)
+2. **EC2 one-click deploy** — Port v1's `ec2_deploy.py` for automated AWS deployment
+3. **Cost optimization** — Cache engineer plans, short-circuit procedure-only fixes
+4. **Observability** — Structured logging, cost tracking, failure mode statistics
+5. **Preset apps** — WordPress, phpBB deployment (entity model can express them, needs separate flow)
+
+**Current gaps vs v1**:
+- Construction crew doesn't use atom markdown files (v2 atoms only ground the planner; developer/attacker freestyle)
+- No EC2 deploy (v1 has `ec2_deploy.py`)
+- No preset app support (WordPress, phpBB)
+
+**What's working**:
+- Planner produces correct graphs with real atoms and proper runtimes
+- Multi-entity and multi-system builds complete successfully
+- Chain tests validate end-to-end attack chains
+- Evaluation and metrics systems operational
 
 ---
 
