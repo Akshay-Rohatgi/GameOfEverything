@@ -2,9 +2,10 @@ id: nginx
 description: "Nginx reverse proxy and web server"
 apt_packages:
   - nginx
+  - curl
 install: |
   apt-get update -qq 2>&1 | grep -v "^Get:" || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y nginx 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y nginx curl 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
 configure: |
   # Ensure nginx config is valid
   mkdir -p /var/log/nginx

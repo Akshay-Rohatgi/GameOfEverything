@@ -2,9 +2,10 @@ id: apache
 description: "Apache HTTP Server (standalone, not for PHP apps)"
 apt_packages:
   - apache2
+  - curl
 install: |
   apt-get update -qq 2>&1 | grep -v "^Get:" || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y apache2 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y apache2 curl 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
 configure: |
   # Ensure apache directories exist
   mkdir -p /var/www/html /var/log/apache2

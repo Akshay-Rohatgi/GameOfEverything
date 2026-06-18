@@ -2,30 +2,53 @@ id: redis
 description: "Redis in-memory data store"
 apt_packages:
   - redis-server
+  - redis-tools
 install: |
   apt-get update -qq 2>&1 | grep -v "^Get:" || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
 configure: |
   # Bind to all interfaces
   sed -i 's/bind 127.0.0.1/bind 0.0.0.0/' /etc/redis/redis.conf
   sed -i 's/^protected-mode yes/protected-mode no/' /etc/redis/redis.conf
+  # Ensure supervised is set to no (for manual daemonize)
+  sed -i 's/^supervised .*/supervised no/' /etc/redis/redis.conf
 start: |
-  # Start redis-server
-  redis-server /etc/redis/redis.conf --daemonize yes
+  # Get password from config if set
+  REDIS_PASS=$(grep "^requirepass" /etc/redis/redis.conf | awk '{print $2}' || true)
 
-  # Readiness check
+  # Start redis-server (daemonize mode)
+  redis-server /etc/redis/redis.conf --daemonize yes 2>&1 || redis-server --daemonize yes
+
+  # Readiness check (with password if set)
   echo "Waiting for Redis to be ready..."
   for i in $(seq 1 15); do
-    if redis-cli ping 2>/dev/null | grep -q PONG; then
-      echo "Redis is ready after ${i}s"
-      break
+    if [ -n "$REDIS_PASS" ]; then
+      if redis-cli --no-auth-warning -a "$REDIS_PASS" ping 2>&1 | grep -q PONG; then
+        echo "Redis is ready after ${i}s"
+        break
+      fi
+    else
+      if redis-cli ping 2>&1 | grep -q PONG; then
+        echo "Redis is ready after ${i}s"
+        break
+      fi
     fi
     sleep 1
   done
 
-  if ! redis-cli ping 2>/dev/null | grep -q PONG; then
-    echo "FATAL: Redis failed to start after 15s"
-    exit 1
+  # Final healthcheck
+  if [ -n "$REDIS_PASS" ]; then
+    if ! redis-cli --no-auth-warning -a "$REDIS_PASS" ping 2>&1 | grep -q PONG; then
+      echo "FATAL: Redis failed to start after 15s"
+      ps aux | grep redis || true
+      exit 1
+    fi
+  else
+    if ! redis-cli ping 2>&1 | grep -q PONG; then
+      echo "FATAL: Redis failed to start after 15s"
+      ps aux | grep redis || true
+      exit 1
+    fi
   fi
 healthcheck: "redis-cli ping | grep -q PONG"
 stop: "redis-cli shutdown || true"

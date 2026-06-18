@@ -3,9 +3,10 @@ description: "OpenSSH server for password/key-based authentication"
 apt_packages:
   - openssh-server
   - sshpass
+  - netcat
 install: |
   apt-get update -qq 2>&1 | grep -v "^Get:" || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server sshpass 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server sshpass netcat 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
 configure: |
   # Ensure sshd config directory and host keys exist
   mkdir -p /var/run/sshd /root/.ssh
