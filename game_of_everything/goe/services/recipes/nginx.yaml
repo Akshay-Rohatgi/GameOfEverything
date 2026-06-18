@@ -1,0 +1,34 @@
+id: nginx
+description: "Nginx reverse proxy and web server"
+apt_packages:
+  - nginx
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y nginx 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Ensure nginx config is valid
+  mkdir -p /var/log/nginx
+  # Default config is usually fine for basic use
+start: |
+  # Start nginx
+  nginx
+
+  # Readiness check
+  echo "Waiting for Nginx to be ready..."
+  for i in $(seq 1 15); do
+    if curl -sf http://localhost/ >/dev/null 2>&1; then
+      echo "Nginx is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! curl -sf http://localhost/ >/dev/null 2>&1; then
+    echo "FATAL: Nginx failed to start after 15s"
+    exit 1
+  fi
+healthcheck: "curl -sf http://localhost/ >/dev/null"
+stop: "nginx -s stop || true"
+ports: [80, 443]
+restart_after_snapshot: true
+config_vars: {}

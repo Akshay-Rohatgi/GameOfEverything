@@ -1,0 +1,43 @@
+id: postgres
+description: "PostgreSQL 14+ database server"
+apt_packages:
+  - postgresql
+  - postgresql-client
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql postgresql-client 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Allow connections from all interfaces
+  echo "listen_addresses = '*'" >> /etc/postgresql/*/main/postgresql.conf
+  echo "host    all             all             0.0.0.0/0            md5" >> /etc/postgresql/*/main/pg_hba.conf
+  echo "host    all             all             ::/0                 md5" >> /etc/postgresql/*/main/pg_hba.conf
+start: |
+  # Start PostgreSQL as the postgres user
+  su - postgres -c "/usr/lib/postgresql/*/bin/pg_ctl -D /var/lib/postgresql/*/main -l /var/log/postgresql/postgresql.log start" &
+
+  # Readiness check
+  echo "Waiting for PostgreSQL to be ready..."
+  for i in $(seq 1 30); do
+    if su - postgres -c "psql -c 'SELECT 1;' >/dev/null 2>&1"; then
+      echo "PostgreSQL is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! su - postgres -c "psql -c 'SELECT 1;' >/dev/null 2>&1"; then
+    echo "FATAL: PostgreSQL failed to start after 30s"
+    exit 1
+  fi
+healthcheck: "su - postgres -c 'psql -c \"SELECT 1;\" >/dev/null 2>&1'"
+stop: "su - postgres -c '/usr/lib/postgresql/*/bin/pg_ctl -D /var/lib/postgresql/*/main stop' || true"
+ports: [5432]
+restart_after_snapshot: true
+config_vars:
+  postgres_password:
+    default: ""
+    description: "Password for postgres superuser (empty = trust auth)"
+    apply: |
+      if [ -n "{value}" ]; then
+        su - postgres -c "psql -c \"ALTER USER postgres PASSWORD '{value}';\"" 2>/dev/null || true
+      fi

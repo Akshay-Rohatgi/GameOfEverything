@@ -1,0 +1,36 @@
+id: mongodb
+description: "MongoDB NoSQL database server"
+apt_packages:
+  - mongodb
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Bind to all interfaces
+  mkdir -p /var/lib/mongodb /var/log/mongodb
+  chown -R mongodb:mongodb /var/lib/mongodb /var/log/mongodb
+  sed -i 's/bind_ip = 127.0.0.1/bind_ip = 0.0.0.0/' /etc/mongodb.conf 2>/dev/null || true
+start: |
+  # Start MongoDB
+  su - mongodb -s /bin/bash -c "mongod --fork --logpath /var/log/mongodb/mongod.log --dbpath /var/lib/mongodb --bind_ip 0.0.0.0" 2>/dev/null || \
+  mongod --fork --logpath /var/log/mongodb/mongod.log --dbpath /var/lib/mongodb --bind_ip 0.0.0.0
+
+  # Readiness check
+  echo "Waiting for MongoDB to be ready..."
+  for i in $(seq 1 30); do
+    if mongo --eval "db.adminCommand('ping')" >/dev/null 2>&1; then
+      echo "MongoDB is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! mongo --eval "db.adminCommand('ping')" >/dev/null 2>&1; then
+    echo "FATAL: MongoDB failed to start after 30s"
+    exit 1
+  fi
+healthcheck: "mongo --eval 'db.adminCommand(\"ping\")' >/dev/null 2>&1"
+stop: "mongod --shutdown || pkill -f mongod || true"
+ports: [27017]
+restart_after_snapshot: true
+config_vars: {}

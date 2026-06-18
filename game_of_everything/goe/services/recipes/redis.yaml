@@ -1,0 +1,41 @@
+id: redis
+description: "Redis in-memory data store"
+apt_packages:
+  - redis-server
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Bind to all interfaces
+  sed -i 's/bind 127.0.0.1/bind 0.0.0.0/' /etc/redis/redis.conf
+  sed -i 's/^protected-mode yes/protected-mode no/' /etc/redis/redis.conf
+start: |
+  # Start redis-server
+  redis-server /etc/redis/redis.conf --daemonize yes
+
+  # Readiness check
+  echo "Waiting for Redis to be ready..."
+  for i in $(seq 1 15); do
+    if redis-cli ping 2>/dev/null | grep -q PONG; then
+      echo "Redis is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! redis-cli ping 2>/dev/null | grep -q PONG; then
+    echo "FATAL: Redis failed to start after 15s"
+    exit 1
+  fi
+healthcheck: "redis-cli ping | grep -q PONG"
+stop: "redis-cli shutdown || true"
+ports: [6379]
+restart_after_snapshot: true
+config_vars:
+  requirepass:
+    default: ""
+    description: "Redis password (empty = no auth)"
+    apply: |
+      if [ -n "{value}" ]; then
+        echo "requirepass {value}" >> /etc/redis/redis.conf
+      fi
