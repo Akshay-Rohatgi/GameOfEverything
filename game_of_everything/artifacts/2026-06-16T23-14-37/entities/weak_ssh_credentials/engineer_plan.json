@@ -1,0 +1,15 @@
+{
+  "summary": "SSH service configured with a weak default password for a low-privilege user, allowing brute-force or credential-stuffing login",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "A low-privilege user account named 'lowpriv' is created with the weak password 'password123'. The OpenSSH server is installed and configured to allow password authentication (PasswordAuthentication yes) and permit login for this user. The sshd_config is set to allow password-based logins explicitly, and no fail2ban or brute-force protection is installed. The user is given a real login shell (/bin/bash) but has no sudo privileges. The setup script: (1) installs openssh-server, (2) creates user 'lowpriv' with password 'password123', (3) ensures /etc/ssh/sshd_config has 'PasswordAuthentication yes' and 'PermitRootLogin no', (4) restarts sshd.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "hydra -l lowpriv -P /usr/share/wordlists/rockyou.txt ssh://target -t 4 -V\n# or directly: sshpass -p 'password123' ssh lowpriv@target 'id && whoami && hostname'",
+  "success_indicator": "uid=1001(lowpriv) gid=1001(lowpriv) groups=1001(lowpriv)",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should run: apt-get install -y openssh-server sshpass; useradd -m -s /bin/bash lowpriv; echo 'lowpriv:password123' | chpasswd; sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config; service ssh restart. Ensure port 22 is exposed in the container. The password 'password123' appears in rockyou.txt and common credential lists, making it trivially brute-forceable. The attacker container should have hydra or sshpass available."
+}

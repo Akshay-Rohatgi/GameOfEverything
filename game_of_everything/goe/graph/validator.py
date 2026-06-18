@@ -97,14 +97,16 @@ def _check_edge_coverage(graph: "EntityGraph") -> list:
                     entity_id=entity.id,
                     edge_id=req.edge_id,
                 ))
-            elif edge_ids[req.edge_id].to_entity != entity.id:
-                actual_target = edge_ids[req.edge_id].to_entity
-                violations.append(_v(
-                    "edge_coverage",
-                    f"Entity '{entity.id}' requires edge '{req.edge_id}' but that edge targets '{actual_target}'",
-                    entity_id=entity.id,
-                    edge_id=req.edge_id,
-                ))
+            else:
+                edge = edge_ids[req.edge_id]
+                # For fan-out edges (to_entity=None), skip target check
+                if edge.to_entity is not None and edge.to_entity != entity.id:
+                    violations.append(_v(
+                        "edge_coverage",
+                        f"Entity '{entity.id}' requires edge '{req.edge_id}' but that edge targets '{edge.to_entity}'",
+                        entity_id=entity.id,
+                        edge_id=req.edge_id,
+                    ))
 
     return violations
 
@@ -151,9 +153,10 @@ def _check_reachability(graph: "EntityGraph") -> list:
 
 
 def _check_fan_out(graph: "EntityGraph") -> list:
-    """Each edge_id should be required by at most one entity."""
+    """Each edge_id should be required by at most one entity, unless fan_out=True."""
     violations = []
     edge_consumers: dict[str, list[str]] = {}
+    edge_lookup = {e.id: e for e in graph.edges}
 
     for entity in graph.entities:
         for req in entity.requires:
@@ -161,10 +164,13 @@ def _check_fan_out(graph: "EntityGraph") -> list:
 
     for edge_id, consumers in edge_consumers.items():
         if len(consumers) > 1:
+            edge = edge_lookup.get(edge_id)
+            if edge and edge.fan_out:
+                continue  # Explicitly allowed
             violations.append(_v(
                 "fan_out_consistency",
                 f"Edge '{edge_id}' is required by multiple entities: {consumers}. "
-                "Each consumer needs its own edge.",
+                "Each consumer needs its own edge, or set fan_out=true on the edge.",
                 edge_id=edge_id,
             ))
 

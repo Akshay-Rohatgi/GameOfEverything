@@ -1,0 +1,15 @@
+{
+  "summary": "SSH service configured with a weak default password for a low-privilege user, allowing brute-force or credential-stuffing attacks to gain an interactive shell.",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "A low-privilege user account named 'lowpriv' is created with the password 'password123'. The OpenSSH server is installed and enabled on port 22. Password authentication is explicitly enabled in /etc/ssh/sshd_config (PasswordAuthentication yes, PermitRootLogin no). The account has a valid login shell (/bin/bash). No fail2ban or account lockout policy is configured, allowing unlimited login attempts. The weak credential pair (lowpriv / password123) is trivially guessable or discoverable via a small wordlist attack.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "sshpass -p 'password123' ssh -o StrictHostKeyChecking=no lowpriv@<target_ip> 'id && whoami'",
+  "success_indicator": "uid=1001(lowpriv) gid=1001(lowpriv) groups=1001(lowpriv)",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: (1) run 'apt-get install -y openssh-server' to ensure SSH is installed, (2) create user with 'useradd -m -s /bin/bash lowpriv && echo \"lowpriv:password123\" | chpasswd', (3) ensure /etc/ssh/sshd_config has 'PasswordAuthentication yes' and 'PermitRootLogin no', (4) start and enable the SSH service with 'systemctl enable --now ssh', (5) ensure no UFW rules block port 22. The attacker can use hydra or sshpass to authenticate; the success indicator is the output of 'id' showing lowpriv user context."
+}

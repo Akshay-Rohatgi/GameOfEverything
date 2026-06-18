@@ -1,0 +1,11 @@
+--- initial/procedure.yaml
++++ attempt_1/procedure.yaml
+@@ -13,7 +13,7 @@
+       sysadmin@127.0.0.1 -p 22 'id'
+     type: exec_target
+   expect:
+-    stdout_contains: uid=1001(sysadmin)
++    stdout_contains: uid=1000(sysadmin)
+   outputs: {}
+   session: null
+   step_id: exploit_ssh_login

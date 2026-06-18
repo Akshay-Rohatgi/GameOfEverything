@@ -10,6 +10,7 @@ from goe.planner.connect_edges import connect_edges
 from goe.planner.design_systems import design_systems
 from goe.planner.grade_stubs import grade_stubs
 from goe.planner.plan_entities import plan_entities
+from goe.planner.plan_killchain import plan_killchain
 from goe.planner.resolve import resolve
 from goe.planner.specify_entities import specify_entities
 
@@ -41,11 +42,15 @@ def plan(request: str, verbose: bool = False) -> PlanResult:
     systems = design_systems(request, model=model)
     _log(f"[planner] designed {len(systems)} system(s)")
 
+    _log(f"[planner] Step 0.5: planning killchain...")
+    killchain = plan_killchain(request, systems, model=model)
+    _log(f"[planner] killchain:\n{killchain}")
+
     total_attempts = 0
 
     for full_attempt in range(_MAX_FULL_REPLANS + 1):
         _log(f"[planner] Step 1: planning entities (full_attempt={full_attempt})...")
-        stubs = plan_entities(request, systems, model=model)
+        stubs = plan_entities(request, systems, killchain=killchain, model=model)
         _log(f"[planner] planned {len(stubs)} entity stub(s)")
 
         _log(f"[planner] Step 1.5: grading stubs...")

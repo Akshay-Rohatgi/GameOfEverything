@@ -1,0 +1,150 @@
+{
+  "run_id": "2026-06-17T00-33-41",
+  "entry_point": "run",
+  "command": "/opt/GameOfEverything/game_of_everything/goe/flow/__main__.py run Ubuntu with weak SSH and sudo misconfiguration to root --verbose --artifacts",
+  "started_at": "2026-06-17T00:33:41",
+  "ended_at": "2026-06-17T00:41:52",
+  "llm": {
+    "total_calls": 22,
+    "total_input_tokens": 42171,
+    "total_output_tokens": 9077,
+    "total_tokens": 51248,
+    "total_latency_ms": 109052.07943916321,
+    "avg_latency_ms": 4956.912701780146,
+    "calls_by_caller": {
+      "planner.design_systems": {
+        "count": 1,
+        "input_tokens": 775,
+        "output_tokens": 47,
+        "latency_ms": 1569.6601867675781
+      },
+      "planner.plan_killchain": {
+        "count": 1,
+        "input_tokens": 400,
+        "output_tokens": 93,
+        "latency_ms": 4155.167102813721
+      },
+      "planner.plan_entities": {
+        "count": 1,
+        "input_tokens": 1973,
+        "output_tokens": 199,
+        "latency_ms": 3228.1956672668457
+      },
+      "planner.grade_stubs": {
+        "count": 1,
+        "input_tokens": 2060,
+        "output_tokens": 199,
+        "latency_ms": 2083.2810401916504
+      },
+      "planner.specify_entities": {
+        "count": 1,
+        "input_tokens": 2265,
+        "output_tokens": 277,
+        "latency_ms": 3093.702554702759
+      },
+      "planner.connect_edges": {
+        "count": 1,
+        "input_tokens": 2428,
+        "output_tokens": 226,
+        "latency_ms": 2334.1455459594727
+      },
+      "engineer": {
+        "count": 2,
+        "input_tokens": 2196,
+        "output_tokens": 1140,
+        "latency_ms": 20604.748487472534
+      },
+      "developer": {
+        "count": 2,
+        "input_tokens": 3241,
+        "output_tokens": 1038,
+        "latency_ms": 13339.194774627686
+      },
+      "developer.self_review": {
+        "count": 2,
+        "input_tokens": 4639,
+        "output_tokens": 1071,
+        "latency_ms": 9155.591011047363
+      },
+      "attacker": {
+        "count": 2,
+        "input_tokens": 4033,
+        "output_tokens": 686,
+        "latency_ms": 7956.304550170898
+      },
+      "attacker.self_review": {
+        "count": 2,
+        "input_tokens": 5299,
+        "output_tokens": 607,
+        "latency_ms": 6080.150127410889
+      },
+      "diagnostician": {
+        "count": 1,
+        "input_tokens": 1415,
+        "output_tokens": 150,
+        "latency_ms": 3453.6595344543457
+      },
+      "attacker.fix_procedure": {
+        "count": 1,
+        "input_tokens": 1676,
+        "output_tokens": 406,
+        "latency_ms": 3595.834493637085
+      },
+      "chain_attacker": {
+        "count": 1,
+        "input_tokens": 2352,
+        "output_tokens": 959,
+        "latency_ms": 12110.585689544678
+      },
+      "chain_attacker.self_review": {
+        "count": 1,
+        "input_tokens": 3537,
+        "output_tokens": 645,
+        "latency_ms": 5224.594354629517
+      },
+      "chain_attacker.fix_chain": {
+        "count": 2,
+        "input_tokens": 3882,
+        "output_tokens": 1334,
+        "latency_ms": 11067.264318466187
+      }
+    }
+  },
+  "conversations": [
+    "attacker",
+    "chain_attacker",
+    "developer",
+    "diagnostician",
+    "engineer",
+    "planner"
+  ],
+  "entities": [],
+  "files": [
+    "README.md",
+    "chain_playbook.yaml",
+    "conversations/attacker.md",
+    "conversations/chain_attacker.md",
+    "conversations/developer.md",
+    "conversations/diagnostician.md",
+    "conversations/engineer.md",
+    "conversations/llm_calls.jsonl",
+    "conversations/planner.md",
+    "deploy.sh",
+    "entities/ssh_weak_credentials/app/setup.sh",
+    "entities/ssh_weak_credentials/artifact.json",
+    "entities/ssh_weak_credentials/attempts/attempt_1/app/setup.sh",
+    "entities/ssh_weak_credentials/attempts/attempt_1/artifact.json",
+    "entities/ssh_weak_credentials/attempts/attempt_1/diagnosis.json",
+    "entities/ssh_weak_credentials/attempts/attempt_1/engineer_plan.json",
+    "entities/ssh_weak_credentials/attempts/attempt_1/procedure.yaml",
+    "entities/ssh_weak_credentials/attempts/attempt_initial_to_1.diff",
+    "entities/ssh_weak_credentials/engineer_plan.json",
+    "entities/ssh_weak_credentials/procedure.yaml",
+    "entities/sudo_privesc_root/app/setup.sh",
+    "entities/sudo_privesc_root/artifact.json",
+    "entities/sudo_privesc_root/engineer_plan.json",
+    "entities/sudo_privesc_root/procedure.yaml",
+    "metrics/llm_calls.jsonl",
+    "playbook.yaml"
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "category": "procedure_bug",
+  "description": "The assertion checks for 'uid=1001(lowpriv)' but the actual UID assigned to the lowpriv user is 1000. The useradd command assigned UID 1000 to lowpriv (likely the first available UID in this container environment). The SSH login itself succeeded correctly \u2014 the exploit worked \u2014 but the expected UID in the assertion is wrong.",
+  "evidence": "stdout contains 'uid=1000(lowpriv) gid=1000(lowpriv) groups=1000(lowpriv)' but the step asserts for 'uid=1001(lowpriv)'. The SSH connection succeeded (warning about known hosts added, and the whoami output 'lowpriv' and 'target' hostname are present), confirming the weak credentials exploit worked. Only the UID number differs from the expected value."
+}

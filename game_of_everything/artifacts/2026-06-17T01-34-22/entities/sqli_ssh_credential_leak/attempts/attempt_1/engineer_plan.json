@@ -1,0 +1,51 @@
+{
+  "summary": "Express app with a UNION-based SQL injection in a product search endpoint that leaks SSH credentials from a users table.",
+  "runtime": "express",
+  "app_description": "A simple product catalog web application that lets users search for items by name. The search endpoint constructs a raw SQL query via string concatenation, making it vulnerable to UNION-based SQL injection. An attacker can pivot the query to extract plaintext SSH credentials stored in a separate users table.",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/search",
+      "description": "Searches the products table by name and returns matching rows as JSON. The search parameter is concatenated directly into the SQL query without sanitization.",
+      "vulnerable": true,
+      "vulnerability_notes": "The query is built as: `SELECT name, description FROM products WHERE name LIKE '%${req.query.q}%'`. No parameterized queries are used. An attacker can inject `' UNION SELECT username, password FROM users-- -` to extract credentials from the users table."
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "description": "Returns a simple HTML landing page with a search form pointing to /search.",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    }
+  ],
+  "vulnerability_placement": "In the GET /search handler, the query parameter `q` is interpolated directly into the SQL string: `const query = \"SELECT name, description FROM products WHERE name LIKE '%\" + req.query.q + \"%'\";`. The result rows are returned as a JSON array: `res.json(rows)`. Because the UNION result is reflected verbatim in the JSON response, an attacker can inject `' UNION SELECT username, password FROM users-- -` and the users table row will appear as an additional object in the JSON array with the username and plaintext SSH password.",
+  "data_model": {
+    "tables": [
+      {
+        "name": "products",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "name VARCHAR(255)",
+          "description VARCHAR(255)"
+        ],
+        "seed_data": "INSERT INTO products (name, description) VALUES ('Widget A', 'A standard widget'), ('Widget B', 'A premium widget'), ('Gadget X', 'A useful gadget');"
+      },
+      {
+        "name": "users",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "username VARCHAR(64)",
+          "password VARCHAR(128)"
+        ],
+        "seed_data": "INSERT INTO users (username, password) VALUES ('sysadmin', 'Sup3rS3cr3tSSH!');"
+      }
+    ]
+  },
+  "attack_entry_point": "GET http://target:3000/search?q=x%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--+-",
+  "success_indicator": "The JSON response contains an object with the fields {\"name\":\"sysadmin\",\"description\":\"Sup3rS3cr3tSSH!\"} (or equivalent key names), revealing the SSH credential.",
+  "extra_npm_packages": [
+    "mysql2"
+  ],
+  "extra_pip_packages": [],
+  "notes": "The MySQL database must have a `sysadmin` OS-level user whose password matches the seeded value so that the leaked credential is actually usable for SSH. The app should connect to MySQL on port 3306 using a low-privilege DB user. The `users` table must not be accessible via any authenticated route \u2014 it is only reachable through the injection. Ensure the Express app listens on port 3000. The response must use the same column alias names as the products table (`name`, `description`) so the UNION columns align naturally and the injected row blends with product rows in the JSON output."
+}

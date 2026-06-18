@@ -11,8 +11,9 @@ from pydantic import BaseModel, ConfigDict
 if TYPE_CHECKING:
     from goe.models.entity import Entity
 
+from goe.construction_crew.atoms import load_atom
+
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "engineer_system.md").read_text()
-_ATOMS_DIR = Path(__file__).resolve().parent.parent.parent / "atoms"
 
 
 class EndpointSpec(BaseModel):
@@ -51,13 +52,6 @@ class EngineerPlan(BaseModel):
     notes: str = ""
 
 
-def _load_atom(atom_id: str) -> str:
-    """Read atom markdown content by ID."""
-    for path in _ATOMS_DIR.rglob(f"{atom_id}.md"):
-        return path.read_text()
-    return f"(atom {atom_id!r} not found)"
-
-
 def plan(entity: "Entity", incoming_edges: dict) -> EngineerPlan:
     """Call the Engineer LLM to produce an architecture plan for the entity."""
     from goe.bedrock import call
@@ -67,7 +61,7 @@ def plan(entity: "Entity", incoming_edges: dict) -> EngineerPlan:
     model = cfg.model_for("engineer")
 
     atom_content = "\n\n".join(
-        f"## Atom: {a}\n{_load_atom(a)}" for a in (entity.atoms or [])
+        f"## Atom: {a}\n{load_atom(a)}" for a in (entity.atoms or [])
     )
 
     user_msg = f"""## Entity Spec

@@ -1,0 +1,15 @@
+{
+  "summary": "SSH service configured with a weak, easily guessable username and password combination allowing brute-force login as a low-privilege user",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "A low-privilege user account named 'guest' is created with the password 'guest123'. The OpenSSH server is installed and enabled on port 22. PasswordAuthentication is explicitly set to 'yes' in /etc/ssh/sshd_config, and PermitRootLogin is set to 'no'. The account has no sudo privileges. The weak credential pair (guest:guest123) is trivially guessable or discoverable via a short brute-force wordlist. No rate limiting, fail2ban, or other lockout mechanisms are configured.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "hydra -l guest -P /usr/share/wordlists/rockyou.txt ssh://TARGET_IP -t 4 -f   OR manually: ssh guest@TARGET_IP  (password: guest123)",
+  "success_indicator": "Successful SSH authentication yields a shell prompt such as 'guest@target:~$' and running 'id' returns 'uid=1001(guest) gid=1001(guest) groups=1001(guest)'",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: (1) run 'apt-get install -y openssh-server', (2) create user with 'useradd -m -s /bin/bash guest && echo guest:guest123 | chpasswd', (3) configure /etc/ssh/sshd_config to set PasswordAuthentication yes and PermitRootLogin no, (4) start/enable ssh service with 'service ssh start'. Ensure the container or VM exposes port 22. The wordlist rockyou.txt or a custom short list containing 'guest123' should be available on the attacker machine for demonstration of brute-force. For a CTF-style flag, place a flag.txt in /home/guest/ readable only by the guest user."
+}

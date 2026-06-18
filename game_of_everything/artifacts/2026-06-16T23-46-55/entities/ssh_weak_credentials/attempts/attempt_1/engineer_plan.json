@@ -1,0 +1,15 @@
+{
+  "summary": "SSH service configured with a weak, easily guessable password for a low-privilege user account",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "A low-privilege user account named 'lowpriv' is created with the password 'password123'. The SSH service (openssh-server) is installed and configured to allow password authentication (PasswordAuthentication yes) on port 22. The account has no sudo privileges and belongs only to standard user groups. The weak password makes the account trivially brute-forceable or guessable. The SSH configuration explicitly enables PermitRootLogin no to keep the target realistic (attacker gets a low-priv shell, not root). The /etc/ssh/sshd_config is modified to ensure: PasswordAuthentication yes, ChallengeResponseAuthentication no, UsePAM yes. The user 'lowpriv' is created with useradd and given the weak password via chpasswd.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "hydra -l lowpriv -P /usr/share/wordlists/rockyou.txt ssh://TARGET_IP -t 4 -f   OR manually: ssh lowpriv@TARGET_IP  (password: password123)",
+  "success_indicator": "uid=1001(lowpriv) gid=1001(lowpriv) groups=1001(lowpriv)   (output of 'id' command after successful SSH login)",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: (1) apt-get install -y openssh-server, (2) useradd -m -s /bin/bash lowpriv, (3) echo 'lowpriv:password123' | chpasswd, (4) sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config, (5) echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config, (6) service ssh restart or systemctl enable --now ssh. Ensure the container or VM exposes port 22. The password 'password123' appears in common wordlists like rockyou.txt, making brute-force trivially successful."
+}

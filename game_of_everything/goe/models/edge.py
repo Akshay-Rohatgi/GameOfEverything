@@ -30,3 +30,4 @@ class Edge(BaseModel):
     to_entity: str | None  # None = terminal edge
     type: EdgeType
     params: dict[str, ParamValue]
+    fan_out: bool = False  # When True, multiple entities may require this edge

@@ -15,22 +15,25 @@ def build_entity(
     incoming_edges: dict | None = None,
     scope: str = "",
     verbose: bool = True,
+    env=None,  # TestEnvironment | ProgressiveEnvironment | None
 ) -> "BuildOutcome":
     """Run the full build pipeline for a single entity.
 
     Steps:
       1. Construction crew: Engineer → Developer → Attacker
       2. Runtime template → deploy script
-      3. Spin up TestEnvironment, deploy app
+      3. Spin up TestEnvironment (or use provided env), deploy app
       4. Run L2 procedure executor
       5. On failure: diagnose → retry (escalation ladder)
-      6. Teardown environment
+      6. Teardown environment (if we own it)
 
     Args:
         entity: The entity spec to build.
         incoming_edges: Concrete values for incoming edges.
         scope: Docker container name prefix (avoid collisions during parallel builds).
         verbose: Print progress to stdout.
+        env: Optional pre-created environment (ProgressiveEnvironment or TestEnvironment).
+            If provided, build_entity will not call setup() or teardown().
 
     Returns:
         BuildOutcome wrapping the EntityResult plus the final deploy script,
@@ -101,8 +104,10 @@ def build_entity(
         save_crew_artifacts(entity.id, crew, _art_run_dir)
         log(f"Artifacts written to: {_art_run_dir}/entities/{entity.id}/")
 
-    env = TestEnvironment(runtime=runtime, scope=scope or f"build_{entity.id[:16]}")
-    env.setup()
+    _owns_env = env is None
+    if _owns_env:
+        env = TestEnvironment(runtime=runtime, scope=scope or f"build_{entity.id[:16]}")
+        env.setup()
 
     def _make_deploy_script(artifact) -> str:
         if runtime == "ubuntu":
@@ -230,7 +235,8 @@ def build_entity(
         )
 
     finally:
-        env.teardown()
+        if _owns_env:
+            env.teardown()
 
 
 # ---------------------------------------------------------------------------

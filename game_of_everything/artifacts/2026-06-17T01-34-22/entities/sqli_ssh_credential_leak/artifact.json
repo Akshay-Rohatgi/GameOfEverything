@@ -1,0 +1,14 @@
+{
+  "primary_source": "app.js",
+  "port": 3000,
+  "app_dir": "/opt/webapp",
+  "db_setup": {
+    "db_type": "mysql",
+    "schema_sql": "CREATE DATABASE IF NOT EXISTS appdb; CREATE USER IF NOT EXISTS 'appuser'@'localhost' IDENTIFIED BY 'apppassword'; GRANT ALL PRIVILEGES ON appdb.* TO 'appuser'@'localhost'; FLUSH PRIVILEGES; USE appdb; CREATE TABLE IF NOT EXISTS products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), description VARCHAR(255)); CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(64), password VARCHAR(128));",
+    "seed_sql": "USE appdb; INSERT INTO products (name, description) VALUES ('Widget Alpha', 'A sturdy aluminum widget'), ('Widget Beta', 'A lightweight plastic widget'), ('Gadget Pro', 'Professional grade gadget'), ('Gadget Lite', 'Entry level gadget'); INSERT INTO users (username, password) VALUES ('sysadmin', 'Sup3rS3cr3tSSH!');"
+  },
+  "extra_deps": [
+    "mysql2"
+  ],
+  "system_deps": []
+}

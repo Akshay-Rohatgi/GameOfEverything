@@ -1,0 +1,14 @@
+{
+  "primary_source": "app.js",
+  "port": 3000,
+  "app_dir": "/opt/webapp",
+  "db_setup": {
+    "db_type": "mysql",
+    "schema_sql": "CREATE DATABASE IF NOT EXISTS catalog; USE catalog; CREATE TABLE IF NOT EXISTS products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), description VARCHAR(255)); CREATE TABLE IF NOT EXISTS ssh_credentials (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(255), password VARCHAR(255)); CREATE USER IF NOT EXISTS 'appuser'@'%' IDENTIFIED BY 'apppass'; GRANT SELECT ON catalog.* TO 'appuser'@'%'; FLUSH PRIVILEGES;",
+    "seed_sql": "USE catalog; INSERT INTO products (name, description) VALUES ('Widget A', 'A standard widget for everyday use'), ('Widget B', 'An advanced widget with extra features'), ('Gadget Pro', 'Professional grade gadget'), ('Tool Kit', 'Complete toolkit for all jobs'); INSERT INTO ssh_credentials (username, password) VALUES ('admin', 'Sup3rS3cr3tSSH!'), ('deploy', 'deploy@pass123');"
+  },
+  "extra_deps": [
+    "mysql2"
+  ],
+  "system_deps": []
+}

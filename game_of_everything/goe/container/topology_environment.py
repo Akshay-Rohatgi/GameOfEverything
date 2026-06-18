@@ -31,11 +31,9 @@ _ATTACKER_CONTAINER_PREFIX = "goe_chain_attacker"
 
 # Bootstrap installed into each target before the deploy script runs.
 # Matches the subset that v1's chain test installed.
-_BOOTSTRAP_CMD = (
-    "apt-get update -qq && "
-    "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
-    "curl wget ca-certificates gnupg lsb-release"
-)
+# Bootstrap command imported from central registry
+from goe.container.bootstrap import get_bootstrap_command
+_BOOTSTRAP_CMD = get_bootstrap_command("ubuntu")
 
 
 class TopologyEnvironment:

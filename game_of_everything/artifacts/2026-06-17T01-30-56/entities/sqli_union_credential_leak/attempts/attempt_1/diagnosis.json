@@ -1,0 +1,5 @@
+{
+  "category": "design_flaw",
+  "description": "The application cannot connect to MySQL because the database server is not running or not accessible at 127.0.0.1:3306. The app is stuck in a retry loop and never starts listening on port 3000. There is no MySQL process running and no port 3306 open \u2014 only the Docker DNS resolver port 36715 is listening.",
+  "evidence": "App log shows repeated 'DB init error: connect ECONNREFUSED 127.0.0.1:3306'. Listening ports output shows only 127.0.0.11:36715, with no port 3000 or 3306 present. Running processes show no mysqld process, only node app.js which has not started the HTTP server."
+}

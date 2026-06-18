@@ -1,0 +1,15 @@
+{
+  "summary": "Database server with OS-level credential reuse vulnerability allowing SSH access via web_server pivot using credentials discovered through SQLi",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "The db_server has a local OS user named 'admin' with password 'adminpass123' (matching the MySQL/SQLi-discovered credentials). The MySQL service runs as the 'admin' OS user. SSH is enabled on port 22 but bound only to the internal network interface, making it reachable from web_server but not directly from the attacker. The 'admin' OS user has a weak password identical to the database credentials, and password authentication is enabled in sshd_config. Additionally, the 'admin' user has sudo privileges for mysql commands, and the /etc/passwd and /etc/shadow files contain the admin user. The setup script creates the admin user, sets the password, enables SSH password auth, installs and configures MySQL with the same credentials, and ensures the SSH service is running. A flag file is placed at /root/flag.txt and /home/admin/flag.txt to confirm successful access.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "ssh admin@<db_server_internal_ip> -p 22  # run from web_server after pivoting; password: adminpass123. Or via SSH tunnel: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null admin@db_server, then 'id' and 'cat /home/admin/flag.txt'",
+  "success_indicator": "uid=1001(admin) gid=1001(admin) groups=1001(admin) and/or contents of /home/admin/flag.txt displaying 'FLAG{ssh_pivot_credential_reuse_success}'",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: (1) useradd -m -s /bin/bash admin && echo 'admin:adminpass123' | chpasswd, (2) install openssh-server and ensure it is running, (3) set PasswordAuthentication yes and PubkeyAuthentication yes in /etc/sshd_config, (4) install mysql-server, create database 'appdb' with user 'admin'@'localhost' IDENTIFIED BY 'adminpass123' with full privileges, (5) echo 'FLAG{ssh_pivot_credential_reuse_success}' > /home/admin/flag.txt && chown admin:admin /home/admin/flag.txt, (6) optionally add admin to sudoers for mysql only: echo 'admin ALL=(ALL) NOPASSWD: /usr/bin/mysql' >> /etc/sudoers.d/admin, (7) ensure sshd listens on 0.0.0.0 or the internal interface. The container should NOT expose port 22 externally in docker-compose, only on the internal docker network so it is only reachable via pivot through web_server. The attacker workflow is: exploit SQLi on web_server app to discover credentials 'admin:adminpass123', pivot to db_server via web_server shell or SSH tunnel, then SSH into db_server as admin with the same password."
+}

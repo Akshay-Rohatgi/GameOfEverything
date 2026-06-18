@@ -1,0 +1,11 @@
+--- initial/procedure.yaml
++++ attempt_1/procedure.yaml
+@@ -22,7 +22,7 @@
+       -p 22 sysadmin@${target_host} 'id'
+     type: exec_attacker
+   expect:
+-    stdout_contains: uid=1001(sysadmin) gid=1001(sysadmin) groups=1001(sysadmin)
++    stdout_contains: uid=1000(sysadmin) gid=1000(sysadmin) groups=1000(sysadmin)
+   outputs: {}
+   session: null
+   step_id: authenticate_ssh_and_verify

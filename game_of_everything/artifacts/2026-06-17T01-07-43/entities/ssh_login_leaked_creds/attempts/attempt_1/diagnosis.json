@@ -1,0 +1,5 @@
+{
+  "category": "procedure_bug",
+  "description": "The assertion checks for 'uid=1001(sysadmin)' but the actual UID assigned to the sysadmin user is 1000, not 1001. The SSH login itself succeeded correctly (the user authenticated and ran id), but the expected UID in the assertion is wrong.",
+  "evidence": "stdout: uid=1000(sysadmin) gid=1000(sysadmin) groups=1000(sysadmin) \u2014 the command executed successfully but the assertion expected uid=1001 when the actual uid is 1000"
+}

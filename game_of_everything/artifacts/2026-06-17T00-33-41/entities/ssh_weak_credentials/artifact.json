@@ -1,0 +1,8 @@
+{
+  "primary_source": "setup.sh",
+  "port": null,
+  "app_dir": "/opt",
+  "db_setup": null,
+  "extra_deps": [],
+  "system_deps": []
+}

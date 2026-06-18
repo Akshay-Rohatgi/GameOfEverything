@@ -1,0 +1,63 @@
+{
+  "summary": "Apache/PHP login and product search app with UNION-based SQL injection in the search parameter allowing credential extraction from the users table.",
+  "runtime": "apache_php",
+  "app_description": "A simple storefront application where users can browse products via a search form and log in with their credentials. The product search endpoint concatenates user input directly into a SQL query and reflects both columns of each result row in an HTML table, enabling UNION-based injection. A users table holds plaintext credentials that can be extracted via the injection.",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/index.php",
+      "description": "Landing page with a product search form and a link to the login page.",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    },
+    {
+      "method": "GET",
+      "path": "/search.php",
+      "description": "Product search endpoint that accepts a 'search' GET parameter and renders matching product name/description pairs in an HTML table. The query is built via string concatenation with no sanitization.",
+      "vulnerable": true,
+      "vulnerability_notes": "The query is built as: SELECT name, description FROM products WHERE name LIKE '%{$_GET['search']}%'. Both columns are rendered in the HTML table, so a UNION SELECT username,password FROM users-- - payload causes credentials to appear as extra rows in the response."
+    },
+    {
+      "method": "GET",
+      "path": "/login.php",
+      "description": "Renders an HTML login form (GET shows the form, POST processes credentials).",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    },
+    {
+      "method": "POST",
+      "path": "/login.php",
+      "description": "Processes username and password fields against the users table and returns a success or failure message.",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    }
+  ],
+  "vulnerability_placement": "In search.php, the PHP code reads $_GET['search'] and interpolates it directly into a MySQLi query string: $query = \"SELECT name, description FROM products WHERE name LIKE '%\" . $_GET['search'] . \"%'\"; The result set is iterated and each row's two columns (name, description) are printed inside <td> elements in an HTML table. No escaping, filtering, or prepared statements are used. An attacker appends ' UNION SELECT username,password FROM users-- - to make the database return users table rows, which then appear verbatim in the HTML table alongside (or instead of) product rows.",
+  "data_model": {
+    "tables": [
+      {
+        "name": "products",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "name VARCHAR(128)",
+          "description VARCHAR(256)"
+        ],
+        "seed_data": "INSERT INTO products (name, description) VALUES ('Widget A', 'A sturdy metal widget'), ('Widget B', 'A lightweight plastic widget'), ('Gadget X', 'An electronic gadget with many features'), ('Gadget Y', 'A compact portable gadget');"
+      },
+      {
+        "name": "users",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "username VARCHAR(64)",
+          "password VARCHAR(128)"
+        ],
+        "seed_data": "INSERT INTO users (username, password) VALUES ('admin', 'S3cr3tP@ss!'), ('alice', 'password123'), ('bob', 'letmein');"
+      }
+    ]
+  },
+  "attack_entry_point": "GET /search.php?search=x%27+UNION+SELECT+username%2Cpassword+FROM+users--+-",
+  "success_indicator": "The HTTP response body contains an HTML table row with the value 'admin' in one cell and 'S3cr3tP@ss!' in the adjacent cell (and additional rows for alice/bob), returned as product search results.",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "The application should use mysqli_query (not PDO or prepared statements) with a MySQLi connection. mysqli_multi_query is not required \u2014 the UNION approach works with a single query. Ensure the MySQL/MariaDB user has SELECT privileges on both the products and users tables. The login form at login.php should use a safe parameterized query so the only injection surface is search.php, keeping the vulnerability scoped. The database name should be 'shopdb' or similar and must be created in the container init script along with both tables and seed data."
+}

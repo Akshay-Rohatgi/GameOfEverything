@@ -1,0 +1,5 @@
+{
+  "category": "design_flaw",
+  "description": "Deploy script exited non-zero \u2014 app failed to deploy.",
+  "evidence": "deploy script exited 100: debconf: delaying package configuration, since apt-utils is not installed\nE: Conflicting values set for option Signed-By regarding source https://deb.nodesource.com/node_20.x/ nodistro: /etc/apt/keyrings/nodesource.gpg != /usr/share/keyrings/nodesource.gpg\nE: The list of sources could not be read.\nE: Conflicting values set for option Signed-By regarding source https://deb.nodesource.com/node_20.x/ nodistro: /etc/apt/keyrings/nodesource.gpg != /usr/share/keyrings/nodesource.gpg\nE: The list of sources could not be read."
+}

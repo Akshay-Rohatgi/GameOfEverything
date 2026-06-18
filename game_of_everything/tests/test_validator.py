@@ -84,7 +84,7 @@ def test_orphan_entity_violation_names_entity():
 # --- Check 4: Fan-out consistency ---
 
 def test_fan_out_duplicate_edge_fails():
-    """Build a minimal graph where two entities require the same edge_id."""
+    """Build a minimal graph where two entities require the same edge_id (without fan_out flag)."""
     from goe.graph.models import EntityGraph
     from goe.models.entity import Entity, Requirement
     from goe.models.edge import Edge, EdgeType, ParamValue
@@ -105,6 +105,7 @@ def test_fan_out_duplicate_edge_fails():
             "host": ParamValue(structural="target"),
             "port": ParamValue(structural="3000"),
         },
+        fan_out=False,  # Explicit default — fan-out not allowed
     )
     entity_a = Entity(
         id="entity_a",
@@ -125,6 +126,49 @@ def test_fan_out_duplicate_edge_fails():
     assert not result.valid
     checks = {v.check for v in result.violations}
     assert "fan_out_consistency" in checks
+
+
+def test_fan_out_with_flag_passes():
+    """When fan_out=True on an edge, multiple entities can require it."""
+    from goe.graph.models import EntityGraph
+    from goe.models.entity import Entity, Requirement
+    from goe.models.edge import Edge, EdgeType, ParamValue
+    from goe.models.system import System, NetworkConfig
+
+    system = System(
+        id="s",
+        os="ubuntu_22_04",
+        services=["web"],
+        network=NetworkConfig(hostname="target", exposed_ports=[3000], internal_ports=[]),
+    )
+    shared_edge = Edge(
+        id="op_to_both",
+        from_entity="operator",
+        to_entity=None,  # Fan-out edges have to_entity=None (multiple consumers)
+        type=EdgeType.network_reach,
+        params={
+            "host": ParamValue(structural="target"),
+            "port": ParamValue(structural="3000"),
+        },
+        fan_out=True,  # Explicitly allow multiple consumers
+    )
+    entity_a = Entity(
+        id="entity_a",
+        description="a",
+        system_id="s",
+        requires=[Requirement(edge_id="op_to_both")],
+        provides=[],
+    )
+    entity_b = Entity(
+        id="entity_b",
+        description="b",
+        system_id="s",
+        requires=[Requirement(edge_id="op_to_both")],  # same edge_id as entity_a
+        provides=[],
+    )
+    graph = EntityGraph(systems=[system], entities=[entity_a, entity_b], edges=[shared_edge])
+    result = validate(graph)
+    assert result.valid, [v.message for v in result.violations]
 
 
 # --- Check 5: System reference validity ---

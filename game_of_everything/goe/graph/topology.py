@@ -51,17 +51,39 @@ def topological_sort(graph: "EntityGraph") -> list[str]:
 
 def reachable_from_operator(graph: "EntityGraph") -> set[str]:
     """BFS from 'operator' following edge directions. Returns set of reachable entity IDs."""
+    from goe.models.entity import Entity
+
     reachable: set[str] = set()
-    frontier = [e.to_entity for e in graph.edges if e.from_entity == "operator" and e.to_entity]
+    entity_map = {e.id: e for e in graph.entities}
+
+    # Initial frontier: entities with edges from operator
+    frontier = []
+    for edge in graph.edges:
+        if edge.from_entity == "operator":
+            if edge.to_entity:
+                frontier.append(edge.to_entity)
+            elif edge.fan_out:
+                # Fan-out edge from operator: all entities requiring it are reachable
+                for entity in graph.entities:
+                    if any(req.edge_id == edge.id for req in entity.requires):
+                        frontier.append(entity.id)
 
     while frontier:
         eid = frontier.pop(0)
         if eid in reachable:
             continue
         reachable.add(eid)
+
+        # Find outgoing edges from this entity
         for edge in graph.edges:
-            if edge.from_entity == eid and edge.to_entity and edge.to_entity not in reachable:
-                frontier.append(edge.to_entity)
+            if edge.from_entity == eid:
+                if edge.to_entity and edge.to_entity not in reachable:
+                    frontier.append(edge.to_entity)
+                elif edge.fan_out:
+                    # Fan-out edge: all entities requiring it become reachable
+                    for entity in graph.entities:
+                        if any(req.edge_id == edge.id for req in entity.requires) and entity.id not in reachable:
+                            frontier.append(entity.id)
 
     return reachable
 

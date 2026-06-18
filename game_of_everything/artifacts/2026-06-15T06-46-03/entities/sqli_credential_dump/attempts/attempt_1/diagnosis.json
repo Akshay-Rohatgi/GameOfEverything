@@ -1,0 +1,5 @@
+{
+  "category": "design_flaw",
+  "description": "Deploy script exited non-zero \u2014 app failed to deploy.",
+  "evidence": "deploy script exited 100: debconf: delaying package configuration, since apt-utils is not installed\nE: Sub-process /usr/bin/dpkg returned an error code (1)"
+}

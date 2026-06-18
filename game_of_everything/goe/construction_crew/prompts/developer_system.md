@@ -51,6 +51,34 @@ Your job: given an architecture plan, implement the complete source code exactly
 `port` must be `null` for ubuntu entities — there is no web server.
 `outgoing_edge_values` maps each outgoing edge ID to its concrete value.
 
+## Incoming Edge Values — CRITICAL FOR ENTITY CHAINING
+
+You will receive:
+1. **Entity Spec** with `requires` — lists edge IDs and their types (e.g., `shell_as`, `creds_for`)
+2. **Incoming Edge Values** — a dict `{edge_id: concrete_value_string}`
+
+**How edges work:**
+- `shell_as` edge params: `{user: "username", host: "hostname"}` → the concrete value is the username
+- `creds_for` edge params: `{user: "username", cred_type: "password", host: "hostname"}` → the concrete value is the password
+- `db_session` edge params: `{db_type: "mysql", user: "dbuser", host: "hostname"}` → the concrete value is the connection string or username
+
+**CRITICAL RULE: If your entity requires a `shell_as` edge, the concrete value is the USERNAME from the upstream entity. Use that EXACT username — DO NOT create a new user.**
+
+**Example scenario:**
+- Entity 1 (SSH): creates user `guest`, provides edge `ssh_shell` with `user: "guest"`
+- Entity 2 (sudo): requires edge `ssh_shell`, receives `incoming_edges: {"ssh_shell": "guest"}`
+- Entity 2 MUST use `guest` as the username for sudo config — NOT create a new user like `lowpriv`
+
+**For `shell_as` edges specifically:**
+- The concrete value IS the username
+- **DO NOT run `useradd` or `chpasswd` for this user** — they already exist with a password
+- Only configure your vulnerability (sudo rule, SUID binary, etc.) for THIS existing user
+- Example: If you receive `{"ssh_shell": "sysadmin"}`, just add the sudo rule for sysadmin — don't create the user or change their password
+
+**If incoming_edges is empty:** You're the first entity — create users as needed and populate `outgoing_edge_values` with the username/credentials you created.
+
+**If incoming_edges is NOT empty:** Extract the username/credentials from it and reuse them. Check the edge type in `entity.requires` to understand what the value represents.
+
 ## Runtime-Specific Rules
 
 The Runtime Spec you receive may include a `developer_rules` field. These are mandatory constraints for that specific runtime — follow them exactly.
@@ -67,3 +95,8 @@ The Runtime Spec you receive may include a `developer_rules` field. These are ma
 - **Choose ONE seeding approach** — either seed inline at app startup (using `:memory:` or a file DB opened at startup) OR provide `db_setup` with schema/seed SQL, never both. If you seed inline in the app code, set `db_setup` to null/omit it entirely.
 - Keep it to a single source file
 - Do not add any input validation or sanitization near the vulnerability
+- **For ubuntu entities:** Always install required packages at the start of setup.sh:
+  - Sudo config? → `apt-get install -y sudo`
+  - SSH config? → `apt-get install -y openssh-server`
+  - Samba config? → `apt-get install -y samba`
+  - Never assume packages are pre-installed

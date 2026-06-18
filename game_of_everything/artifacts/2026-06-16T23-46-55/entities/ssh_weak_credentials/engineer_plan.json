@@ -1,0 +1,15 @@
+{
+  "summary": "SSH service configured with a weak, easily guessable password for a low-privilege user account",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "A low-privilege user account named 'lowuser' is created on the system with the weak password 'password123'. The OpenSSH server is installed and configured to allow password authentication (PasswordAuthentication yes), permit root login is disabled to keep it low-privilege, and the SSH service listens on port 22. The account has a real login shell (/bin/bash) and a home directory. No account lockout policies or fail2ban protections are in place. PAM is configured to allow simple passwords by disabling complexity requirements. The weak password makes the account trivially brute-forceable or guessable.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "hydra -l lowuser -P /usr/share/wordlists/rockyou.txt ssh://TARGET_IP -t 4 -f && ssh lowuser@TARGET_IP",
+  "success_indicator": "uid=1001(lowuser) gid=1001(lowuser) groups=1001(lowuser)",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup bash script should: (1) apt-get install -y openssh-server; (2) useradd -m -s /bin/bash lowuser; echo 'lowuser:password123' | chpasswd; (3) Edit /etc/ssh/sshd_config to set PasswordAuthentication yes, PermitRootLogin no, MaxAuthTries 10; (4) Remove or disable any fail2ban or pam_tally2 lockout modules; (5) Optionally install and configure libpam-cracklib to not enforce password complexity; (6) systemctl enable ssh && systemctl restart ssh. The password 'password123' appears in rockyou.txt and common wordlists, making it trivially brute-forceable. After gaining SSH access, the attacker has an interactive shell as lowuser."
+}

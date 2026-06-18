@@ -1,0 +1,1 @@
+USE appdb; INSERT INTO products (name, description) VALUES ('Widget Alpha', 'A sturdy aluminum widget'), ('Widget Beta', 'A lightweight plastic widget'), ('Gadget Pro', 'Professional grade gadget'), ('Gadget Lite', 'Entry level gadget'); INSERT INTO users (username, password) VALUES ('sysadmin', 'Sup3rS3cr3tSSH!');

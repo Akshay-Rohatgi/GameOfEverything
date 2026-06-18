@@ -1,0 +1,100 @@
+{
+  "run_id": "2026-06-13T20-25-34",
+  "entry_point": "run",
+  "command": "/opt/GameOfEverything/game_of_everything/goe/flow/__main__.py run web app with SQL injection that leaks credentials --verbose --artifacts",
+  "started_at": "2026-06-13T20:25:34",
+  "ended_at": "2026-06-13T20:50:43",
+  "llm": {
+    "total_calls": 15,
+    "total_input_tokens": 35744,
+    "total_output_tokens": 10387,
+    "total_tokens": 46131,
+    "total_latency_ms": 111700.08134841919,
+    "avg_latency_ms": 7446.672089894612,
+    "calls_by_caller": {
+      "planner.design_systems": {
+        "count": 1,
+        "input_tokens": 364,
+        "output_tokens": 89,
+        "latency_ms": 1715.5287265777588
+      },
+      "planner.plan_entities": {
+        "count": 1,
+        "input_tokens": 581,
+        "output_tokens": 154,
+        "latency_ms": 3347.4345207214355
+      },
+      "planner.specify_entities": {
+        "count": 1,
+        "input_tokens": 1153,
+        "output_tokens": 280,
+        "latency_ms": 3043.694496154785
+      },
+      "planner.connect_edges": {
+        "count": 1,
+        "input_tokens": 1168,
+        "output_tokens": 221,
+        "latency_ms": 2544.0938472747803
+      },
+      "engineer": {
+        "count": 2,
+        "input_tokens": 2984,
+        "output_tokens": 1554,
+        "latency_ms": 24803.443670272827
+      },
+      "developer": {
+        "count": 2,
+        "input_tokens": 4114,
+        "output_tokens": 2704,
+        "latency_ms": 28412.044763565063
+      },
+      "developer.self_review": {
+        "count": 2,
+        "input_tokens": 7178,
+        "output_tokens": 2787,
+        "latency_ms": 23922.937870025635
+      },
+      "developer.retry": {
+        "count": 1,
+        "input_tokens": 7000,
+        "output_tokens": 1659,
+        "latency_ms": 12686.893224716187
+      },
+      "attacker": {
+        "count": 2,
+        "input_tokens": 5104,
+        "output_tokens": 472,
+        "latency_ms": 6249.531030654907
+      },
+      "attacker.self_review": {
+        "count": 2,
+        "input_tokens": 6098,
+        "output_tokens": 467,
+        "latency_ms": 4974.479198455811
+      }
+    }
+  },
+  "conversations": [
+    "attacker",
+    "developer",
+    "engineer",
+    "planner"
+  ],
+  "entities": [],
+  "files": [
+    "conversations/attacker.md",
+    "conversations/developer.md",
+    "conversations/engineer.md",
+    "conversations/llm_calls.jsonl",
+    "conversations/planner.md",
+    "entities/sqli_login/app/index.php",
+    "entities/sqli_login/artifact.json",
+    "entities/sqli_login/engineer_plan.json",
+    "entities/sqli_login/procedure.yaml",
+    "entities/ssh_access/app/setup.sh",
+    "entities/ssh_access/artifact.json",
+    "entities/ssh_access/engineer_plan.json",
+    "entities/ssh_access/procedure.yaml",
+    "metrics/llm_calls.jsonl"
+  ]
+}

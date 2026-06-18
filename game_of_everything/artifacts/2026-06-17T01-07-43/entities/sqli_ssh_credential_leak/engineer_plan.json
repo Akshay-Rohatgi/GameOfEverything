@@ -1,0 +1,59 @@
+{
+  "summary": "Express app with a UNION-based SQL injection in the product search endpoint that leaks SSH credentials stored in the users table",
+  "runtime": "express",
+  "app_description": "A simple product catalog web application where users can search for items by name. The search endpoint queries a MySQL database for matching products and returns results as JSON. An internal users table stores SSH credentials in plaintext, which can be extracted via UNION-based SQL injection.",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/",
+      "description": "Returns a simple HTML page describing the product catalog with a search form",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    },
+    {
+      "method": "GET",
+      "path": "/search",
+      "description": "Searches products by name using a query parameter and returns matching rows as JSON. The search parameter is directly concatenated into the SQL query without sanitization.",
+      "vulnerable": true,
+      "vulnerability_notes": "The 'q' query parameter is directly interpolated into a template string: SELECT name, description FROM products WHERE name LIKE '%${req.query.q}%'. An attacker can inject ' UNION SELECT username, password FROM users-- - to extract credentials from the users table, which appear in the JSON response alongside normal product rows."
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "description": "Simple health check endpoint returning {status: ok}",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    }
+  ],
+  "vulnerability_placement": "In the GET /search handler, the user-supplied query parameter 'q' is directly concatenated into a MySQL query string: `const sql = \"SELECT name, description FROM products WHERE name LIKE '%\" + req.query.q + \"%'\";`. This is then executed via the mysql2 package using conn.query(sql, callback). The result rows are serialized directly to JSON and returned as the response body. Because the query returns exactly two columns (name, description), a UNION SELECT with two columns will be accepted by MySQL and the injected rows will appear in the JSON array response. The users table contains SSH username and plaintext password, both of which will be reflected in the 'name' and 'description' fields of the injected result row.",
+  "data_model": {
+    "tables": [
+      {
+        "name": "products",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "name VARCHAR(255)",
+          "description VARCHAR(255)"
+        ],
+        "seed_data": "INSERT INTO products (name, description) VALUES ('Widget A', 'A basic widget for general use'), ('Widget B', 'An advanced widget with extra features'), ('Gadget X', 'A compact gadget for everyday tasks'), ('Gadget Y', 'A premium gadget with extended warranty');"
+      },
+      {
+        "name": "users",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "username VARCHAR(255)",
+          "password VARCHAR(255)",
+          "role VARCHAR(64)"
+        ],
+        "seed_data": "INSERT INTO users (username, password, role) VALUES ('sysadmin', 'Sup3rS3cur3SSH!', 'admin'), ('deploy', 'deploy_pass_2024', 'service');"
+      }
+    ]
+  },
+  "attack_entry_point": "GET http://target:3000/search?q=x%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--+-",
+  "success_indicator": "The JSON response contains an object with 'name' set to 'sysadmin' and 'description' set to 'Sup3rS3cur3SSH!' (the plaintext SSH credentials extracted from the users table)",
+  "extra_npm_packages": [
+    "mysql2"
+  ],
+  "extra_pip_packages": [],
+  "notes": "The MySQL database must have both 'products' and 'users' tables in the same schema/database so the UNION SELECT can reach the users table. The app should connect with a user that has SELECT privileges on both tables. Ensure NO_BACKSLASH_ESCAPES and STRICT mode are off so injection strings pass through cleanly. The app should use mysql2 (not mysql2/promise) with the callback API for simplicity. Do not use any input validation, escaping, or prepared statements in the /search handler. The JSON response should directly return the rows array from the query result so injected rows appear naturally alongside real product rows."
+}

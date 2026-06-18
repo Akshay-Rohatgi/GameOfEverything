@@ -1,0 +1,10 @@
+{
+  "primary_source": "app.js",
+  "port": 3000,
+  "app_dir": "/opt/webapp",
+  "db_setup": null,
+  "extra_deps": [
+    "better-sqlite3"
+  ],
+  "system_deps": []
+}

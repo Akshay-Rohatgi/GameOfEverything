@@ -24,6 +24,7 @@ You are a penetration testing scenario architect. Given a set of fully-specified
     "from_entity": "operator",
     "to_entity": "webapp_entity",
     "type": "network_reach",
+    "fan_out": false,
     "params": {
       "host": {"structural": "target", "concrete": null},
       "port": {"structural": "3000", "concrete": null}
@@ -32,13 +33,46 @@ You are a penetration testing scenario architect. Given a set of fully-specified
 ]
 ```
 
+## Fan-out Edges
+
+By default, each edge can only be consumed (required) by ONE entity. If you need multiple entities to consume the same edge (e.g., an initial SSH shell that feeds both a sudo privesc AND a SUID check in parallel), set `"fan_out": true` on that edge **and set `"to_entity": null`**.
+
+When `fan_out: true`:
+- Set `"to_entity": null` (the edge serves multiple consumers, not just one)
+- Multiple entities may list this edge_id in their `requires`
+- The edge will be validated based on which entities require it, not by a fixed target
+
+Use `fan_out: true` ONLY when:
+- Multiple entities legitimately need the same upstream capability simultaneously
+- The scenario explicitly calls for parallel attack paths from a single access point
+
+Do NOT use fan_out for linear chains — prefer separate edges for separate consumers.
+
+**Fan-out edge example:**
+```json
+{
+  "id": "ssh_shell_lowpriv",
+  "from_entity": "ssh_weak_creds",
+  "to_entity": null,
+  "type": "shell_as",
+  "fan_out": true,
+  "params": {
+    "host": {"structural": "target", "concrete": null},
+    "user": {"structural": "lowpriv_user", "concrete": null}
+  }
+}
+```
+This edge can be required by multiple entities (e.g., both `sudo_privesc` and `suid_privesc`).
+
 ## Rules
 
 - Create EXACTLY ONE edge for each unique edge_id referenced in any entity's `requires` or `provides` list
 - Use `"from_entity": "operator"` for all initial access edges (network_reach from outside)
 - `from_entity` for non-operator edges = the entity ID that has this edge_id in its `provides`
-- `to_entity` = the entity ID that has this edge_id in its `requires`
-- Terminal edges (in `provides` with no downstream consumer) have `"to_entity": null`
+- `to_entity` rules:
+  - Normal edge: the entity ID that has this edge_id in its `requires`
+  - Fan-out edge (`fan_out: true`): set to `null` (multiple entities require it)
+  - Terminal edge (in `provides` with no downstream consumer): set to `null`
 - `params` keys must exactly match the required params for the edge type (see Available Edge Types above)
 
 ## Parameter Values (Structural)
@@ -74,6 +108,7 @@ Use STRUCTURAL values in params (descriptive identifiers, not concrete values):
     "from_entity": "operator",
     "to_entity": "sqli_leak",
     "type": "network_reach",
+    "fan_out": false,
     "params": {
       "host": {"structural": "target", "concrete": null},
       "port": {"structural": "3000", "concrete": null}
@@ -84,6 +119,7 @@ Use STRUCTURAL values in params (descriptive identifiers, not concrete values):
     "from_entity": "sqli_leak",
     "to_entity": "ssh_pivot",
     "type": "creds_for",
+    "fan_out": false,
     "params": {
       "user": {"structural": "db_user", "concrete": null},
       "host": {"structural": "target", "concrete": null},
@@ -95,6 +131,7 @@ Use STRUCTURAL values in params (descriptive identifiers, not concrete values):
     "from_entity": "operator",
     "to_entity": "ssh_pivot",
     "type": "network_reach",
+    "fan_out": false,
     "params": {
       "host": {"structural": "target", "concrete": null},
       "port": {"structural": "22", "concrete": null}
@@ -120,6 +157,7 @@ Use STRUCTURAL values in params (descriptive identifiers, not concrete values):
     "from_entity": "operator",
     "to_entity": "xss_admin",
     "type": "network_reach",
+    "fan_out": false,
     "params": {
       "host": {"structural": "target", "concrete": null},
       "port": {"structural": "3000", "concrete": null}

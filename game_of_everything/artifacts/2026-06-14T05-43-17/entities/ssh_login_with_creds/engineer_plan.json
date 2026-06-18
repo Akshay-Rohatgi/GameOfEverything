@@ -1,0 +1,15 @@
+{
+  "summary": "SSH service with a user account whose password was obtained via SQL injection from another service",
+  "runtime": "ubuntu",
+  "app_description": "",
+  "endpoints": [],
+  "vulnerability_placement": "A standard Linux user account named 'dbuser' is created on the system with the password 'SuperSecret123'. The OpenSSH server is installed and configured to allow password authentication. The user's password matches the credential leaked via SQL injection from the upstream database service, enabling an attacker who has performed that SQL injection to pivot and authenticate via SSH on port 22.",
+  "data_model": {
+    "tables": []
+  },
+  "attack_entry_point": "sshpass -p 'SuperSecret123' ssh -o StrictHostKeyChecking=no dbuser@<target_ip> whoami",
+  "success_indicator": "dbuser",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "Setup script should: (1) install openssh-server, (2) ensure PasswordAuthentication yes is set in /etc/ssh/sshd_config, (3) create user 'dbuser' with password 'SuperSecret123' via useradd and chpasswd, (4) start and enable the ssh service. The user should have a valid login shell (e.g. /bin/bash). Optionally place a flag file in /home/dbuser/flag.txt to provide a concrete success artifact. Make sure PAM and SSH config do not block password logins."
+}

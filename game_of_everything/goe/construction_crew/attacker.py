@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from goe.models.artifacts import BuildArtifact
     from goe.construction_crew.engineer import EngineerPlan
 
+from goe.construction_crew.atoms import load_logic_requirements, load_testing_guidance
+
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "attacker_system.md").read_text()
 _RUNTIMES_DIR = Path(__file__).resolve().parent.parent / "runtimes" / "templates"
 
@@ -61,6 +63,20 @@ def attack(
         runtime_note = "The app listens on port ${target_port} on host ${target_host}."
         source_header = "## Application Source Code"
 
+    # Inject Logic Requirements as constraints (before generation)
+    logic_reqs = "\n\n".join(
+        f"### Atom: {a}\n{load_logic_requirements(a)}"
+        for a in (entity.atoms or [])
+        if load_logic_requirements(a).strip()
+    )
+    constraints_section = f"""\n## Attack Constraints
+
+These constraints define how exploitation must work:
+
+{logic_reqs}
+
+""" if logic_reqs else ""
+
     user_msg = f"""## Entity Spec
 
 Description: {entity.description}
@@ -82,7 +98,7 @@ Description: {entity.description}
 ## Runtime
 
 {runtime_note}
-{rules_section}
+{rules_section}{constraints_section}
 Write a YAML procedure that exploits the vulnerability and verifies success.
 Output ONLY valid YAML (no markdown fences)."""
 
@@ -94,12 +110,27 @@ Output ONLY valid YAML (no markdown fences)."""
         data = yaml.safe_load(raw)
         return Procedure.model_validate(data)
 
-    review_msg = """Review your procedure against these correctness checks before finalising:
+    # Inject Testing Guidance as verification (during self-review)
+    testing_guidance = "\n\n".join(
+        f"### Atom: {a}\n{load_testing_guidance(a)}"
+        for a in (entity.atoms or [])
+        if load_testing_guidance(a).strip()
+    )
+    guidance_section = f"""\n## Verify Against Atom Testing Guidance
+
+Compare your procedure against the proven testing patterns below:
+
+{testing_guidance}
+
+""" if testing_guidance else ""
+
+    review_msg = f"""{guidance_section}Review your procedure against these correctness checks before finalising:
 
 1. **Payload characters**: Do any payloads contain characters (e.g. single quotes `'`) that would break the app's storage layer (raw SQL concatenation)? If so, rewrite the payload to avoid them — use `<script>alert(1)</script>` not `<script>alert('xss')</script>`.
 2. **POST status codes**: If a POST step submits a form, does the app source show a redirect after success? If yes, assert `status: 302`. If the app returns 200 directly, assert `status: 200`. Check the source — don't assume.
 3. **Final assertion**: Does the last step assert that the attack actually succeeded (credentials visible, command output present, payload reflected)? A procedure that only checks status codes is not sufficient.
 4. **Background listeners**: Are background listener processes started with `exec_attacker_bg` (not `exec_attacker`)?
+5. **Atom guidance**: Does your procedure align with the atom testing guidance above (if provided)? Fix any mismatches.
 
 If any check fails, output the corrected YAML. If all checks pass, output the original YAML unchanged.
 Output ONLY valid YAML (no markdown fences)."""

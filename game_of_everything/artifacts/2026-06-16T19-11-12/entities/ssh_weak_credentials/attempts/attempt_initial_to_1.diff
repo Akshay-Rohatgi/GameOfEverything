@@ -1,0 +1,20 @@
+--- initial/procedure.yaml
++++ attempt_1/procedure.yaml
+@@ -13,7 +13,7 @@
+       lowpriv@${target_host} 'id && whoami'
+     type: exec_attacker
+   expect:
+-    stdout_contains: uid=1001(lowpriv)
++    stdout_contains: uid=1000(lowpriv)
+   outputs: {}
+   session: null
+   step_id: exploit_weak_credentials
+@@ -23,7 +23,7 @@
+       lowpriv@${target_host} 'id'
+     type: exec_attacker
+   expect:
+-    stdout_regex: uid=1001\(lowpriv\) gid=1001\(lowpriv\) groups=1001\(lowpriv\)
++    stdout_regex: uid=1000\(lowpriv\) gid=1000\(lowpriv\) groups=1000\(lowpriv\)
+   outputs: {}
+   session: null
+   step_id: verify_success

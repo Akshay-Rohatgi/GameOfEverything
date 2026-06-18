@@ -1,0 +1,51 @@
+{
+  "summary": "A PHP product search application with a UNION-based SQL injection vulnerability that exposes database credentials from both the application users table and MySQL system tables.",
+  "runtime": "apache_php",
+  "app_description": "A simple product catalog web application that allows users to search for products by name. The search functionality passes user input directly into a SQL query without sanitization, enabling UNION-based SQL injection. An attacker can extract credentials from the application's users table or from MySQL's internal credential stores.",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/",
+      "description": "Homepage that displays the product search form and renders search results in an HTML table when the 'search' parameter is provided.",
+      "vulnerable": true,
+      "vulnerability_notes": "The 'search' GET parameter is concatenated directly into a SQL LIKE query without sanitization or prepared statements. The query returns two columns (name, description) which are rendered in the response, making UNION SELECT payloads with two columns viable. The raw query results including injected rows are reflected in the HTML table."
+    },
+    {
+      "method": "GET",
+      "path": "/index.php",
+      "description": "Same as / \u2014 the main application file handling search and display.",
+      "vulnerable": true,
+      "vulnerability_notes": "Direct alias to the root handler. Same injection point via the 'search' GET parameter."
+    }
+  ],
+  "vulnerability_placement": "In index.php, the search parameter is taken from $_GET['search'] and inserted directly into a MySQLi query string: \"SELECT name, description FROM products WHERE name LIKE '%\" . $_GET['search'] . \"%'\". The result rows are looped over and each row's 'name' and 'description' values are echoed into an HTML table. There are no prepared statements, no mysqli_real_escape_string, and no input validation. When a UNION payload is injected, the extra row returned by the injected SELECT is rendered in the same table as normal product rows, revealing the exfiltrated data directly in the response body.",
+  "data_model": {
+    "tables": [
+      {
+        "name": "products",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "name VARCHAR(255)",
+          "description VARCHAR(255)"
+        ],
+        "seed_data": "INSERT INTO products (name, description) VALUES ('Laptop Pro 15', 'High-performance laptop with 16GB RAM'), ('Wireless Mouse', 'Ergonomic wireless mouse with long battery life'), ('USB-C Hub', '7-in-1 USB-C hub with HDMI and power delivery'), ('Mechanical Keyboard', 'Tactile mechanical keyboard with RGB lighting'), ('4K Monitor', '27-inch 4K IPS display with USB-C connectivity');"
+      },
+      {
+        "name": "users",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "username VARCHAR(100)",
+          "password VARCHAR(255)",
+          "email VARCHAR(255)",
+          "role VARCHAR(50)"
+        ],
+        "seed_data": "INSERT INTO users (username, password, email, role) VALUES ('admin', 'Summer2024!', 'admin@shoplocal.internal', 'administrator'), ('dbuser', 'Str0ngDBPass#99', 'dbuser@shoplocal.internal', 'db_operator'), ('alice', 'alice_pass_123', 'alice@shoplocal.internal', 'user'), ('bob', 'hunter2', 'bob@shoplocal.internal', 'user');"
+      }
+    ]
+  },
+  "attack_entry_point": "GET http://target:80/index.php?search=x%27+UNION+SELECT+username%2Cpassword+FROM+users--+-",
+  "success_indicator": "The HTTP response body contains an HTML table row with the value 'admin' in the first cell and 'Summer2024!' in the second cell, alongside other user credentials from the users table.",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "The PHP application must connect to MySQL using a standard mysqli connection. The database name should be 'shopdb'. The MySQL user for the app connection should be 'appuser' with sufficient privileges to SELECT from products and users tables. To enable the information_schema and mysql.user extraction vector, the app DB user should also have SELECT on information_schema (granted by default in MySQL). The index.php file should display a search form at the top and an HTML table of results below it. Each result row should render both columns (name and description) visibly in the table cells so injected data is clearly reflected. Disable PHP display_errors in production mode but keep error reporting off so SQL errors don't hint at the backend \u2014 the UNION injection should work cleanly without needing error-based enumeration. The application should run on port 80 via Apache with mod_php. A secondary attack payload for mysql.user extraction: ?search=x'+UNION+SELECT+user,authentication_string+FROM+mysql.user--+- (requires app DB user to have SELECT on mysql.user, so grant that privilege as well to make the full credential dump scenario work)."
+}

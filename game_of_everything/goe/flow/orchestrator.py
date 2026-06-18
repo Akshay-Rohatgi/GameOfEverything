@@ -112,6 +112,20 @@ def run(
     built: dict[str, object] = {}  # entity_id → BuildOutcome
     results: list = []
 
+    # Set up progressive environments for multi-ubuntu systems
+    from goe.models.entity import Runtime
+    from goe.container.progressive import ProgressiveEnvironment
+
+    progressive_envs: dict[str, ProgressiveEnvironment] = {}  # system_id → env
+
+    for system in graph.systems:
+        system_entities = [e for e in graph.entities if e.system_id == system.id]
+        all_ubuntu = all(e.runtime == Runtime.ubuntu for e in system_entities)
+        if all_ubuntu and len(system_entities) > 1:
+            penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}")
+            penv.setup()
+            progressive_envs[system.id] = penv
+
     # Replay terminal entities from checkpoint (restores value propagation).
     for eid, snap in state.completed.items():
         sched.report_complete(eid, snap.outgoing_values)
@@ -130,44 +144,84 @@ def run(
                 skip_reason=f"upstream {eid} failed",
             ))
 
-    while not sched.is_complete():
-        nxt = sched.next_buildable()
-        if nxt is None:
-            break  # defensive — nothing buildable but not complete
-        entity, incoming = nxt
+    try:
+        while not sched.is_complete():
+            nxt = sched.next_buildable()
+            if nxt is None:
+                break  # defensive — nothing buildable but not complete
+            entity, incoming = nxt
 
-        if console:
-            console.entity_start(entity.id)
-        outcome = build_entity(
-            entity,
-            incoming_edges=incoming,
-            scope=f"run_{entity.id[:12]}",
-            verbose=verbose,
-        )
+            import sys
+            print(f"[ORCH] Building entity {entity.id} on system {entity.system_id}", file=sys.stderr)
 
-        if outcome.result.status == EntityStatus.PASSED:
-            sched.report_complete(entity.id, outcome.outgoing_values)
-            built[entity.id] = outcome
-            results.append(outcome.result)
-            state.completed[entity.id] = _snapshot(outcome)
-            ckpt.save_state(state, OUTPUT_ROOT)
             if console:
-                console.entity_done(entity.id, outcome.result.attempts)
-        else:
-            skipped = sched.report_failed(entity.id)
-            reason = outcome.result.failure_reason or "build failed"
-            results.append(outcome.result)
-            for sid in skipped:
-                results.append(EntityResult(
-                    id=sid, status=EntityStatus.SKIPPED,
-                    skip_reason=f"upstream {entity.id} failed",
-                ))
-            state.failed[entity.id] = ckpt.FailureSnapshot(
-                reason=reason, category=outcome.result.failure_category,
-            )
-            ckpt.save_state(state, OUTPUT_ROOT)
-            if console:
-                console.entity_failed(entity.id, reason, skipped)
+                console.entity_start(entity.id)
+
+            # Use progressive environment if available for this system
+            penv = progressive_envs.get(entity.system_id)
+            if penv is not None:
+                # Handle fan-out: restore to correct parent snapshot
+                parent_id = _same_system_parent(graph, entity)
+                if parent_id and penv.current_snapshot != parent_id:
+                    penv.restore(parent_id)
+
+                outcome = build_entity(
+                    entity,
+                    incoming_edges=incoming,
+                    scope=f"run_{entity.id[:12]}",
+                    verbose=verbose,
+                    env=penv,
+                )
+            else:
+                # Web apps or single-entity systems: use per-entity isolation
+                outcome = build_entity(
+                    entity,
+                    incoming_edges=incoming,
+                    scope=f"run_{entity.id[:12]}",
+                    verbose=verbose,
+                )
+
+            if outcome.result.status == EntityStatus.PASSED:
+                sched.report_complete(entity.id, outcome.outgoing_values)
+                built[entity.id] = outcome
+                results.append(outcome.result)
+                state.completed[entity.id] = _snapshot(outcome)
+                ckpt.save_state(state, OUTPUT_ROOT)
+
+                # Snapshot progressive environment after successful entity
+                if penv is not None:
+                    penv.snapshot(entity.id, outcome.deploy_script or "")
+
+                if console:
+                    console.entity_done(entity.id, outcome.result.attempts)
+            else:
+                skipped = sched.report_failed(entity.id)
+                reason = outcome.result.failure_reason or "build failed"
+                results.append(outcome.result)
+                for sid in skipped:
+                    results.append(EntityResult(
+                        id=sid, status=EntityStatus.SKIPPED,
+                        skip_reason=f"upstream {entity.id} failed",
+                    ))
+                state.failed[entity.id] = ckpt.FailureSnapshot(
+                    reason=reason, category=outcome.result.failure_category,
+                )
+                ckpt.save_state(state, OUTPUT_ROOT)
+                if console:
+                    console.entity_failed(entity.id, reason, skipped)
+
+    except Exception as e:
+        import sys
+        print(f"[ORCH] Exception in build loop: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        # Teardown progressive environments
+        import sys
+        print(f"[ORCH] Tearing down {len(progressive_envs)} progressive environment(s)", file=sys.stderr)
+        for penv in progressive_envs.values():
+            penv.teardown()
 
     # ---- Phase 3: chain test (any run with > 1 entity built) ---------------
     from goe.models.report import ChainTestResult, ChainTestStatus
@@ -221,3 +275,19 @@ def run(
         failed={eid: fail.reason for eid, fail in state.failed.items()},
         chain_test=chain_test,
     )
+
+
+def _same_system_parent(graph: "EntityGraph", entity: "Entity") -> str | None:
+    """Find the immediate upstream entity on the same system (via edge dependencies).
+
+    Used for fan-out handling: when building entity B that requires an edge from entity A,
+    and both are on the same system, return A's ID so the progressive environment can
+    restore to A's snapshot before building B.
+    """
+    for req in entity.requires:
+        edge = graph.edge_by_id(req.edge_id)
+        if edge and edge.from_entity != "operator":
+            parent = graph.entity_by_id(edge.from_entity)
+            if parent and parent.system_id == entity.system_id:
+                return parent.id
+    return None

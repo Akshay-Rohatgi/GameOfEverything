@@ -1,0 +1,1 @@
+CREATE DATABASE IF NOT EXISTS catalog; CREATE USER IF NOT EXISTS 'appuser'@'localhost' IDENTIFIED BY 'apppassword'; GRANT ALL PRIVILEGES ON catalog.* TO 'appuser'@'localhost'; FLUSH PRIVILEGES;

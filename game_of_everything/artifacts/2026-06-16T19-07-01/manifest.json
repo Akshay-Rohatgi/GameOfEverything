@@ -1,0 +1,68 @@
+{
+  "run_id": "2026-06-16T19-07-01",
+  "entry_point": "run",
+  "command": "/opt/GameOfEverything/game_of_everything/goe/flow/__main__.py run Ubuntu with weak SSH, sudo misconfiguration, and SUID binary for root --artifacts --verbose",
+  "started_at": "2026-06-16T19:07:01",
+  "ended_at": "2026-06-16T19:08:35",
+  "llm": {
+    "total_calls": 19,
+    "total_input_tokens": 40439,
+    "total_output_tokens": 6682,
+    "total_tokens": 47121,
+    "total_latency_ms": 92424.00574684143,
+    "avg_latency_ms": 4864.421355096917,
+    "calls_by_caller": {
+      "planner.design_systems": {
+        "count": 1,
+        "input_tokens": 781,
+        "output_tokens": 77,
+        "latency_ms": 1621.7520236968994
+      },
+      "planner.plan_killchain": {
+        "count": 1,
+        "input_tokens": 406,
+        "output_tokens": 149,
+        "latency_ms": 3824.78404045105
+      },
+      "planner.plan_entities": {
+        "count": 2,
+        "input_tokens": 4070,
+        "output_tokens": 582,
+        "latency_ms": 9997.102975845337
+      },
+      "planner.grade_stubs": {
+        "count": 2,
+        "input_tokens": 4304,
+        "output_tokens": 582,
+        "latency_ms": 5968.528270721436
+      },
+      "planner.specify_entities": {
+        "count": 2,
+        "input_tokens": 4722,
+        "output_tokens": 810,
+        "latency_ms": 8319.65970993042
+      },
+      "planner.connect_edges": {
+        "count": 6,
+        "input_tokens": 14163,
+        "output_tokens": 3265,
+        "latency_ms": 39070.36805152893
+      },
+      "planner.connect_edges.retry": {
+        "count": 5,
+        "input_tokens": 11993,
+        "output_tokens": 1217,
+        "latency_ms": 23621.81067466736
+      }
+    }
+  },
+  "conversations": [
+    "planner"
+  ],
+  "entities": [],
+  "files": [
+    "conversations/llm_calls.jsonl",
+    "conversations/planner.md",
+    "metrics/llm_calls.jsonl"
+  ]
+}

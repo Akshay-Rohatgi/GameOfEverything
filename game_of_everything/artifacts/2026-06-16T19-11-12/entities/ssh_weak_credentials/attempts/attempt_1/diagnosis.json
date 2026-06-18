@@ -1,0 +1,5 @@
+{
+  "category": "procedure_bug",
+  "description": "The assertion expects uid=1001(lowpriv) but the actual uid of the lowpriv user is 1000. The user was created with uid 1000 (as shown in the stdout: uid=1000(lowpriv)), but the test asserts for uid=1001. The SSH login itself succeeded correctly \u2014 the vulnerability is working as intended \u2014 but the expected string in the assertion is wrong.",
+  "evidence": "stdout: uid=1000(lowpriv) gid=1000(lowpriv) groups=1000(lowpriv) \u2014 login succeeded with correct credentials, but the assertion checks for 'uid=1001(lowpriv)' instead of 'uid=1000(lowpriv)'"
+}

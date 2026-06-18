@@ -1,0 +1,173 @@
+--- initial/app/setup.sh
++++ attempt_1/app/setup.sh
+@@ -1,81 +1,46 @@
+ #!/bin/bash
+ set -e
+ 
+-# Update package lists
++# Update package list
+ apt-get update -y
+ 
+-# Install OpenSSH server
++# Install openssh-server
+ apt-get install -y openssh-server
+ 
+-# Create low-privilege user with weak password (idempotent)
+-if ! id lowuser &>/dev/null; then
+-    useradd -m -s /bin/bash lowuser
+-fi
+-echo 'lowuser:password123' | chpasswd
++# Create low-privilege user (ignore error if already exists)
++useradd -m -s /bin/bash lowpriv || true
++
++# Set weak password
++echo 'lowpriv:password123' | chpasswd
+ 
+ # Configure SSH to allow password authentication
+-mkdir -p /etc/ssh
++# Remove any existing PasswordAuthentication lines and add a clean one
++sed -i '/^PasswordAuthentication/d' /etc/ssh/sshd_config
++sed -i '/^#PasswordAuthentication/d' /etc/ssh/sshd_config
++echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
+ 
+-# Write sshd_config with weak settings
+-cat > /etc/ssh/sshd_config << 'EOF'
+-Port 22
+-ListenAddress 0.0.0.0
+-Protocol 2
+-HostKey /etc/ssh/ssh_host_rsa_key
+-HostKey /etc/ssh/ssh_host_ecdsa_key
+-HostKey /etc/ssh/ssh_host_ed25519_key
+-SyslogFacility AUTH
+-LogLevel INFO
+-LoginGraceTime 2m
+-PermitRootLogin no
+-StrictModes yes
+-MaxAuthTries 10
+-MaxSessions 10
+-PubkeyAuthentication yes
+-PasswordAuthentication yes
+-PermitEmptyPasswords no
+-ChallengeResponseAuthentication no
+-UsePAM yes
+-X11Forwarding yes
+-PrintMotd no
+-AcceptEnv LANG LC_*
+-Subsystem sftp /usr/lib/openssh/sftp-server
+-EOF
++# Disable root login to keep it realistic
++sed -i '/^PermitRootLogin/d' /etc/ssh/sshd_config
++sed -i '/^#PermitRootLogin/d' /etc/ssh/sshd_config
++echo 'PermitRootLogin no' >> /etc/ssh/sshd_config
+ 
+-# Generate SSH host keys if they don't exist
++# Disable challenge-response authentication
++sed -i '/^ChallengeResponseAuthentication/d' /etc/ssh/sshd_config
++sed -i '/^#ChallengeResponseAuthentication/d' /etc/ssh/sshd_config
++echo 'ChallengeResponseAuthentication no' >> /etc/ssh/sshd_config
++
++# Ensure KbdInteractiveAuthentication is also set for newer OpenSSH
++sed -i '/^KbdInteractiveAuthentication/d' /etc/ssh/sshd_config
++echo 'KbdInteractiveAuthentication no' >> /etc/ssh/sshd_config
++
++# Ensure UsePAM is enabled
++sed -i '/^UsePAM/d' /etc/ssh/sshd_config
++sed -i '/^#UsePAM/d' /etc/ssh/sshd_config
++echo 'UsePAM yes' >> /etc/ssh/sshd_config
++
++# Create SSH host keys if they don't exist
++mkdir -p /var/run/sshd
+ ssh-keygen -A
+ 
+-# Remove fail2ban if installed
+-apt-get remove -y fail2ban 2>/dev/null || true
+-
+-# Disable PAM password complexity modules
+-if [ -f /etc/pam.d/common-password ]; then
+-    sed -i 's/.*pam_pwquality.*//g' /etc/pam.d/common-password
+-    sed -i 's/.*pam_cracklib.*//g' /etc/pam.d/common-password
+-fi
+-
+-# Disable pam_tally2 and pam_faillock if present
+-if [ -f /etc/pam.d/common-auth ]; then
+-    sed -i 's/.*pam_tally2.*//g' /etc/pam.d/common-auth
+-    sed -i 's/.*pam_faillock.*//g' /etc/pam.d/common-auth
+-fi
+-
+-# Remove libpam-cracklib if installed
+-apt-get remove -y libpam-cracklib 2>/dev/null || true
+-
+-# Ensure /var/run/sshd exists
+-mkdir -p /var/run/sshd
+-
+-# Start sshd - handle both systemd and non-systemd (Docker) environments
+-if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null 2>&1; then
+-    systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true
+-    systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+-else
+-    # Kill any existing sshd process first (idempotent)
+-    pkill -f '/usr/sbin/sshd' 2>/dev/null || true
+-    sleep 1
+-    /usr/sbin/sshd
+-fi
+-
+-echo "SSH setup complete. User 'lowuser' created with password 'password123'"
+-echo "SSH is listening on port 22 with PasswordAuthentication enabled"
++# Start SSH service in foreground
++exec /usr/sbin/sshd -D
+--- initial/procedure.yaml
++++ attempt_1/procedure.yaml
+@@ -3,38 +3,28 @@
+     command: ss -tlnp | grep ':22'
+     type: exec_target
+   expect:
+-    stdout_contains: :22
++    exit_code: 0
+   outputs: {}
+   session: null
+-  step_id: verify_ssh_listening
++  step_id: verify_ssh_running
+   timeout: 10
+ - action:
+-    command: apt-get install -y sshpass 2>/dev/null || true; which sshpass
++    command: id lowpriv
++    type: exec_target
++  expect:
++    stdout_contains: lowpriv
++  outputs: {}
++  session: null
++  step_id: verify_user_exists
++  timeout: 10
++- action:
++    command: sshpass -p password123 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
++      lowpriv@${target_host} id
+     type: exec_attacker
+   expect:
+-    stdout_contains: sshpass
++    stdout_regex: uid=1001\(lowpriv\) gid=1001\(lowpriv\) groups=1001\(lowpriv\)
+   outputs: {}
+   session: null
+-  step_id: install_sshpass
+-  timeout: 30
+-- action:
+-    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+-      lowuser@${target_host} 'id'
+-    type: exec_attacker
+-  expect:
+-    stdout_contains: uid=1001(lowuser)
+-  outputs: {}
+-  session: null
+-  step_id: brute_force_ssh
+-  timeout: 30
+-- action:
+-    command: sshpass -p 'password123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+-      lowuser@${target_host} 'id && whoami && groups'
+-    type: exec_attacker
+-  expect:
+-    stdout_regex: uid=1001\(lowuser\) gid=1001\(lowuser\) groups=1001\(lowuser\)
+-  outputs: {}
+-  session: null
+-  step_id: verify_low_privilege_shell
++  step_id: attempt_ssh_login
+   timeout: 30
+ sessions: []

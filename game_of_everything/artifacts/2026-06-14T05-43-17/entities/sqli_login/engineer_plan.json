@@ -1,0 +1,57 @@
+{
+  "summary": "A PHP/Apache login form with a UNION-based SQL injection vulnerability in the username parameter that allows credential extraction from the users table.",
+  "runtime": "apache_php",
+  "app_description": "A simple product search web application with a login form. Users can browse products via a search field and log in with credentials. The login form passes the username directly into a SQL query without sanitization, enabling UNION-based injection to extract data from the users table.",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/index.php",
+      "description": "Landing page showing a product search form and a link to the login page",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    },
+    {
+      "method": "GET",
+      "path": "/search.php",
+      "description": "Product search endpoint that queries the products table and renders results in an HTML table",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    },
+    {
+      "method": "GET|POST",
+      "path": "/login.php",
+      "description": "Login form that accepts username and password; constructs a raw SQL query using the username parameter via string concatenation and renders the matching username and role in the page on success",
+      "vulnerable": true,
+      "vulnerability_notes": "The username POST parameter is concatenated directly into the SQL query: SELECT username, role FROM users WHERE username='$_POST[username]' AND password='$_POST[password]'. The query result (username and role columns) is reflected in the HTML response. An attacker can inject into the username field to append a UNION SELECT and extract arbitrary data from the users table. The two-column result set matches the UNION payload structure."
+    }
+  ],
+  "vulnerability_placement": "In login.php, the SQL query is built as: $query = \"SELECT username, role FROM users WHERE username='\" . $_POST['username'] . \"' AND password='\" . $_POST['password'] . \"'\"; The result of the first row is fetched and both username and role columns are echoed into the HTML response body. There are no prepared statements, no mysqli_real_escape_string calls, and no input validation. An attacker supplies a username like ' UNION SELECT username, password FROM users-- - with any password value, causing the injected UNION row to be returned and reflected in the page.",
+  "data_model": {
+    "tables": [
+      {
+        "name": "users",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "username VARCHAR(64) NOT NULL",
+          "password VARCHAR(128) NOT NULL",
+          "role VARCHAR(32) NOT NULL DEFAULT 'user'"
+        ],
+        "seed_data": "INSERT INTO users (username, password, role) VALUES ('admin', 'SuperSecret123', 'administrator'), ('alice', 'password1', 'user'), ('bob', 'letmein', 'user');"
+      },
+      {
+        "name": "products",
+        "columns": [
+          "id INT AUTO_INCREMENT PRIMARY KEY",
+          "name VARCHAR(128) NOT NULL",
+          "description TEXT"
+        ],
+        "seed_data": "INSERT INTO products (name, description) VALUES ('Widget A', 'A standard widget'), ('Widget B', 'An improved widget'), ('Gadget X', 'A fancy gadget'), ('Gadget Y', 'An advanced gadget');"
+      }
+    ]
+  },
+  "attack_entry_point": "POST /login.php with body: username=%27+UNION+SELECT+username%2Cpassword+FROM+users--+-&password=anything",
+  "success_indicator": "The HTTP response body contains 'admin' and 'SuperSecret123' rendered in the page HTML as the reflected username and role fields.",
+  "extra_npm_packages": [],
+  "extra_pip_packages": [],
+  "notes": "The login.php page should echo the fetched row's first column as 'Welcome, <username>' and the second column as 'Role: <role>' so that both UNION columns are clearly reflected in the response body. The MySQL user for the PHP connection must have SELECT privileges on both the users and products tables. Ensure mysqli is enabled in the PHP installation. The database name should be 'appdb'. The login form should use method POST but the vulnerability is also exploitable if the developer wishes to add a GET fallback; POST is sufficient per the spec."
+}

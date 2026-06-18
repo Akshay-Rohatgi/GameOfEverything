@@ -1,0 +1,11 @@
+--- initial/procedure.yaml
++++ attempt_1/procedure.yaml
+@@ -13,7 +13,7 @@
+       appuser@${target_host} 'id && whoami && cat /etc/passwd'
+     type: exec_attacker
+   expect:
+-    stdout_contains: uid=1001(appuser) gid=1001(appuser) groups=1001(appuser)
++    stdout_contains: uid=1000(appuser) gid=1000(appuser) groups=1000(appuser)
+   outputs: {}
+   session: null
+   step_id: exploit_weak_credentials

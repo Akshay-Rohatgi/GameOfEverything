@@ -1,0 +1,5 @@
+{
+  "category": "procedure_bug",
+  "description": "The assertion checks for 'uid=1001(admin)' but the actual admin user was created with uid=1000. The useradd command assigned uid=1000 to the admin user, not 1001. The SSH login itself succeeded correctly (the warning about known hosts and the actual uid output confirm authentication worked), but the expected uid in the assertion is wrong.",
+  "evidence": "stdout shows 'uid=1000(admin) gid=1000(admin) groups=1000(admin)' but the assertion expects 'uid=1001(admin)'. The SSH connection succeeded (Warning: Permanently added 'localhost' to known hosts, and id command ran successfully), confirming the vulnerability was exploited correctly. Only the uid number in the assertion is incorrect."
+}

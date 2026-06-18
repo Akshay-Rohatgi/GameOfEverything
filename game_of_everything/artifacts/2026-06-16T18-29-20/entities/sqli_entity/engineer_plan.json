@@ -1,0 +1,50 @@
+{
+  "summary": "Express app with a product search endpoint vulnerable to UNION-based SQL injection, allowing extraction of credentials from the users table.",
+  "runtime": "express",
+  "app_description": "A simple product catalog application where users can search for items by name. The search endpoint queries a SQLite database for matching products and returns results as JSON. The query is built via unsafe string concatenation, enabling UNION-based SQL injection.",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/search",
+      "description": "Searches the products table by name and returns matching rows with name and description columns as JSON.",
+      "vulnerable": true,
+      "vulnerability_notes": "The 'search' query parameter is concatenated directly into the SQL string without sanitization or parameterization. An attacker can inject a UNION SELECT to pivot to the users table and extract username and password."
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "description": "Returns a simple HTML page describing the product catalog and the search functionality.",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    }
+  ],
+  "vulnerability_placement": "In the GET /search handler, the query is constructed as: `SELECT name, description FROM products WHERE name LIKE '%${req.query.search}%'`. The value of req.query.search is inserted directly into the SQL string with no escaping or prepared statements. The result rows are serialized to JSON and sent in the response body. Because the SELECT returns exactly two columns (name, description), a payload of `' UNION SELECT username, password FROM users-- -` will append a row containing the credentials from the users table, which will appear in the JSON array returned to the attacker.",
+  "data_model": {
+    "tables": [
+      {
+        "name": "products",
+        "columns": [
+          "name TEXT",
+          "description TEXT"
+        ],
+        "seed_data": "INSERT INTO products (name, description) VALUES ('Widget A', 'A standard widget'), ('Widget B', 'An advanced widget'), ('Gadget X', 'A useful gadget');"
+      },
+      {
+        "name": "users",
+        "columns": [
+          "id INTEGER PRIMARY KEY AUTOINCREMENT",
+          "username TEXT",
+          "password TEXT"
+        ],
+        "seed_data": "INSERT INTO users (username, password) VALUES ('admin', 'supersecret123');"
+      }
+    ]
+  },
+  "attack_entry_point": "GET /search?search=x' UNION SELECT username,password FROM users-- -",
+  "success_indicator": "JSON response array contains an object with 'name' equal to 'admin' and 'description' equal to 'supersecret123'",
+  "extra_npm_packages": [
+    "better-sqlite3"
+  ],
+  "extra_pip_packages": [],
+  "notes": "Use better-sqlite3 for synchronous query execution to keep the implementation simple and single-file. Initialize the database in-memory or from a file on startup, creating and seeding both tables if they do not exist. The / route should return a minimal HTML page with a search form pointing to /search?search=. Ensure the JSON response for /search always returns an array of objects with 'name' and 'description' keys so the UNION injection result maps cleanly into the response."
+}

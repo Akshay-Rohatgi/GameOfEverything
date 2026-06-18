@@ -1,0 +1,55 @@
+systems:
+- id: target_system
+  os: ubuntu_22_04
+  services:
+  - web
+  - database
+  - ssh
+  network:
+    hostname: target
+    exposed_ports:
+    - 80
+    - 22
+    internal_ports:
+    - 3306
+entities:
+- id: sqli_login
+  description: SQL injection vulnerability in the web application login endpoint on
+    port 80; attacker bypasses authentication or dumps credentials from the database,
+    gaining authenticated access or valid user credentials
+  system_id: target_system
+  runtime: apache_php
+  requires:
+  - edge_id: op_to_webapp
+    optional: false
+  provides:
+  - sqli_to_creds
+  atoms:
+  - sqli_union
+edges:
+- id: op_to_webapp
+  from_entity: operator
+  to_entity: sqli_login
+  type: network_reach
+  params:
+    host:
+      structural: target
+      concrete: target
+    port:
+      structural: '80'
+      concrete: '80'
+- id: sqli_to_creds
+  from_entity: sqli_login
+  to_entity: null
+  type: creds_for
+  params:
+    cred_type:
+      structural: password
+      concrete: null
+    host:
+      structural: target
+      concrete: null
+    user:
+      structural: app_user
+      concrete: null
+

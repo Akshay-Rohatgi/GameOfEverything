@@ -1,0 +1,50 @@
+{
+  "summary": "Express app with a product search endpoint vulnerable to UNION-based SQL injection, allowing extraction of credentials from the users table.",
+  "runtime": "express",
+  "app_description": "A simple product catalog application where users can search for items by name. The search functionality queries a SQLite database and returns matching product names and descriptions. The search parameter is concatenated directly into the SQL query without sanitization, enabling UNION-based injection.",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/search",
+      "description": "Searches products by name and returns matching rows as JSON. The 'search' query parameter is injected directly into the SQL query.",
+      "vulnerable": true,
+      "vulnerability_notes": "The search parameter is concatenated into: SELECT name, desc FROM items WHERE name LIKE '%{search}%' \u2014 no parameterization, results returned as JSON array, enabling UNION SELECT to pivot to the users table."
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "description": "Returns a simple HTML page describing the product catalog and providing a search form.",
+      "vulnerable": false,
+      "vulnerability_notes": ""
+    }
+  ],
+  "vulnerability_placement": "In the GET /search handler, the express route builds the SQL query as a template literal: `SELECT name, desc FROM items WHERE name LIKE '%${req.query.search}%'`. This string is passed directly to the better-sqlite3 db.prepare().all() or db.query() call. The result rows are serialized to JSON and returned in the response body. Because the original SELECT returns exactly two columns (name, desc), a UNION SELECT with two columns will match and the injected row will appear in the JSON array alongside legitimate results.",
+  "data_model": {
+    "tables": [
+      {
+        "name": "items",
+        "columns": [
+          "name TEXT",
+          "desc TEXT"
+        ],
+        "seed_data": "INSERT INTO items (name, desc) VALUES ('Widget A', 'A standard widget'), ('Widget B', 'An improved widget'), ('Gadget X', 'A useful gadget'), ('Gadget Y', 'A premium gadget');"
+      },
+      {
+        "name": "users",
+        "columns": [
+          "id INTEGER PRIMARY KEY AUTOINCREMENT",
+          "username TEXT",
+          "password TEXT"
+        ],
+        "seed_data": "INSERT INTO users (username, password) VALUES ('admin', 'supersecret123'), ('alice', 'password1');"
+      }
+    ]
+  },
+  "attack_entry_point": "GET /search?search=x' UNION SELECT username,password FROM users-- -",
+  "success_indicator": "The JSON response contains an object with \"name\":\"admin\" and \"desc\":\"supersecret123\" (the credentials from the users table appear as product name/desc fields).",
+  "extra_npm_packages": [
+    "better-sqlite3"
+  ],
+  "extra_pip_packages": [],
+  "notes": "Use better-sqlite3 for synchronous query execution simplicity. Initialize the SQLite database file (e.g., db.sqlite) at app startup if it does not exist, create both tables, and seed the data. The /search endpoint should return res.json(rows) where rows is the raw array from db.prepare(query).all(). Ensure the column aliases in the SELECT match exactly two columns so the UNION works cleanly. Do not use parameterized queries for the vulnerable endpoint."
+}
