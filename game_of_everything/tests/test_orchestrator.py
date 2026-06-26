@@ -1,7 +1,7 @@
 """Unit tests for goe/flow orchestrator — plan + build_entity mocked (no Docker/LLM)."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -39,11 +39,18 @@ def output_root(tmp_path, monkeypatch):
     return tmp_path / "output"
 
 
+def _mock_progressive_env_patch():
+    """Patch ProgressiveEnvironment so multi-entity graphs don't touch real Docker."""
+    mock_penv = MagicMock()
+    mock_penv.current_snapshot = None
+    return patch("goe.container.progressive.ProgressiveEnvironment", return_value=mock_penv)
+
+
 def test_propagation_and_packaging(output_root):
     graph = _graph()
     seen_incoming: dict[str, dict] = {}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None):
         seen_incoming[entity.id] = dict(incoming_edges or {})
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
@@ -56,7 +63,8 @@ def test_propagation_and_packaging(output_root):
     with patch("goe.planner.pipeline.plan",
                return_value=PlanResult(graph=graph, success=True, attempts=1)), \
          patch("goe.build.build_entity", side_effect=fake_build), \
-         patch("goe.flow.chain_test.run_chain_test", return_value=chain_outcome):
+         patch("goe.flow.chain_test.run_chain_test", return_value=chain_outcome), \
+         _mock_progressive_env_patch():
         result = orchestrator.run("sqli to ssh")
 
     assert result.success
@@ -75,7 +83,7 @@ def test_chain_test_failure_gates_success(output_root):
     """A failed chain test must make RunResult.success=False even if all entities built."""
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None):
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
         return _passed_outcome("ssh_entity", {})
@@ -87,7 +95,8 @@ def test_chain_test_failure_gates_success(output_root):
     with patch("goe.planner.pipeline.plan",
                return_value=PlanResult(graph=graph, success=True, attempts=1)), \
          patch("goe.build.build_entity", side_effect=fake_build), \
-         patch("goe.flow.chain_test.run_chain_test", return_value=chain_outcome):
+         patch("goe.flow.chain_test.run_chain_test", return_value=chain_outcome), \
+         _mock_progressive_env_patch():
         result = orchestrator.run("sqli to ssh")
 
     # Both entities built but chain test failed → overall run fails.
@@ -101,7 +110,7 @@ def test_chain_test_failure_gates_success(output_root):
 def test_failed_entity_skips_dependents(output_root):
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None):
         if entity.id == "sqli_entity":
             return BuildOutcome(
                 result=EntityResult(
@@ -113,7 +122,8 @@ def test_failed_entity_skips_dependents(output_root):
 
     with patch("goe.planner.pipeline.plan",
                return_value=PlanResult(graph=graph, success=True, attempts=1)), \
-         patch("goe.build.build_entity", side_effect=fake_build):
+         patch("goe.build.build_entity", side_effect=fake_build), \
+         _mock_progressive_env_patch():
         result = orchestrator.run("sqli to ssh")
 
     assert not result.success
@@ -136,7 +146,7 @@ def test_checkpoint_resume_skips_completed(output_root):
     graph = _graph()
     call_count = {"n": 0}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None):
         call_count["n"] += 1
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
@@ -151,7 +161,8 @@ def test_checkpoint_resume_skips_completed(output_root):
     # First run: sqli passes (checkpointed), ssh fails.
     with patch("goe.planner.pipeline.plan",
                return_value=PlanResult(graph=graph, success=True, attempts=1)), \
-         patch("goe.build.build_entity", side_effect=fake_build):
+         patch("goe.build.build_entity", side_effect=fake_build), \
+         _mock_progressive_env_patch():
         first = orchestrator.run("sqli to ssh")
 
     assert not first.success
@@ -166,7 +177,8 @@ def test_checkpoint_resume_skips_completed(output_root):
     # but it is terminal/failed in the checkpoint, so nothing rebuilds).
     calls_before = call_count["n"]
     with patch("goe.planner.pipeline.plan") as mock_plan, \
-         patch("goe.build.build_entity", side_effect=fake_build):
+         patch("goe.build.build_entity", side_effect=fake_build), \
+         _mock_progressive_env_patch():
         resumed = orchestrator.run(resume_dir=ckpt_dir / run_id)
         mock_plan.assert_not_called()
 

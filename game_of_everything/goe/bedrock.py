@@ -3,6 +3,18 @@
 from __future__ import annotations
 
 import boto3
+from botocore.config import Config
+
+# Connect/read timeouts (seconds) and retry policy for every Bedrock call.
+# Without an explicit read timeout, botocore blocks indefinitely when Bedrock
+# stalls or throttles — that is what made the grader call hang forever. A
+# bounded read timeout plus adaptive retries turns a stall into a raised
+# BedrockError instead of a permanent hang.
+_BEDROCK_CONFIG = Config(
+    connect_timeout=10,
+    read_timeout=120,
+    retries={"max_attempts": 3, "mode": "adaptive"},
+)
 
 # Process-wide cache of bedrock-runtime clients, keyed by
 # (region, access_key_id, secret_access_key). boto3 clients are thread-safe
@@ -35,6 +47,7 @@ def _get_client(region, akid, secret):
             region_name=region,
             aws_access_key_id=akid,
             aws_secret_access_key=secret,
+            config=_BEDROCK_CONFIG,
         )
         _CLIENT_CACHE[key] = client
     return client

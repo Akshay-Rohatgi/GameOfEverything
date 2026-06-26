@@ -33,6 +33,48 @@ class RunResult:
     chain_test: object = None  # ChainTestResult | None
 
 
+def _populate_edge_concrete(graph: EntityGraph, entity_id: str, outgoing_values: dict[str, str]) -> None:
+    """Write build-time concrete values back onto graph edge params.
+
+    The developer outputs one flat string per outgoing edge. We store it based on
+    edge type semantics so the chain attacker can reference individual params:
+      - shell_as: flat value = username → written to 'user' param
+      - creds_for: flat value = password → written to 'password' param (created if missing)
+      - network_reach: flat value = host or port (less common)
+      - any edge: flat value also stored as 'value' param (universal fallback)
+    """
+    from goe.models.edge import EdgeType, ParamValue
+
+    for edge in graph.edges:
+        if edge.id not in outgoing_values:
+            continue
+        val = outgoing_values[edge.id]
+
+        # Store under semantically appropriate param
+        if edge.type == EdgeType.shell_as:
+            if "user" in edge.params:
+                edge.params["user"].concrete = val
+            # Backfill: if there's an upstream creds_for edge targeting the same
+            # entity, its 'user' param is the same username
+            for other in graph.edges:
+                if other.type == EdgeType.creds_for and other.to_entity == edge.from_entity:
+                    if "user" in other.params and other.params["user"].concrete is None:
+                        other.params["user"].concrete = val
+        elif edge.type == EdgeType.creds_for:
+            if "password" not in edge.params:
+                edge.params["password"] = ParamValue(structural="password", concrete=val)
+            else:
+                edge.params["password"].concrete = val
+        elif edge.type == EdgeType.network_reach:
+            pass  # network_reach edges usually have concrete from planning
+
+        # Universal fallback: always store as 'value' so ${edge.<id>.value} works
+        if "value" not in edge.params:
+            edge.params["value"] = ParamValue(structural="credential_or_artifact", concrete=val)
+        else:
+            edge.params["value"].concrete = val
+
+
 def _slug(text: str, max_len: int = 40) -> str:
     s = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
     return (s[:max_len].rstrip("_")) or "run"
@@ -112,19 +154,13 @@ def run(
     built: dict[str, object] = {}  # entity_id → BuildOutcome
     results: list = []
 
-    # Set up progressive environments for multi-ubuntu systems
+    # Set up progressive environments. ProgressiveEnvironment runs an ubuntu:22.04
+    # target and never installs a web runtime, so it only applies to all-ubuntu
+    # systems. Web/mixed systems keep per-entity TestEnvironment isolation.
     from goe.models.entity import Runtime
     from goe.container.progressive import ProgressiveEnvironment
 
     progressive_envs: dict[str, ProgressiveEnvironment] = {}  # system_id → env
-
-    for system in graph.systems:
-        system_entities = [e for e in graph.entities if e.system_id == system.id]
-        all_ubuntu = all(e.runtime == Runtime.ubuntu for e in system_entities)
-        if all_ubuntu and len(system_entities) > 1:
-            penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}")
-            penv.setup()
-            progressive_envs[system.id] = penv
 
     # Replay terminal entities from checkpoint (restores value propagation).
     for eid, snap in state.completed.items():
@@ -145,6 +181,17 @@ def run(
             ))
 
     try:
+        for system in graph.systems:
+            system_entities = [e for e in graph.entities if e.system_id == system.id]
+            all_ubuntu = all(e.runtime == Runtime.ubuntu for e in system_entities)
+            if all_ubuntu and (len(system_entities) > 1 or system.services):
+                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}")
+                penv.setup()
+                # Register before provision() so the finally tears it down even
+                # if service provisioning fails partway through.
+                progressive_envs[system.id] = penv
+                penv.provision(system)
+
         while not sched.is_complete():
             nxt = sched.next_buildable()
             if nxt is None:
@@ -183,6 +230,7 @@ def run(
 
             if outcome.result.status == EntityStatus.PASSED:
                 sched.report_complete(entity.id, outcome.outgoing_values)
+                _populate_edge_concrete(graph, entity.id, outcome.outgoing_values)
                 built[entity.id] = outcome
                 results.append(outcome.result)
                 state.completed[entity.id] = _snapshot(outcome)

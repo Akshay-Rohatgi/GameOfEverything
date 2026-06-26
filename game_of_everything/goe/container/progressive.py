@@ -38,6 +38,9 @@ class ProgressiveEnvironment:
         self._snapshots: dict[str, int] = {}  # entity_id → index in _deploy_scripts
         self._current_snapshot: str | None = None  # last successfully snapshotted entity_id
 
+        # Service management
+        self._service_restart_script: str | None = None  # generated once during provision()
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -89,6 +92,42 @@ class ProgressiveEnvironment:
         )
         logger.info(f"[ProgressiveEnvironment] Started attacker {attacker_name}")
 
+    def provision(self, system: "System") -> None:
+        """Deploy system services (MySQL, SSH, etc.) and snapshot as base state.
+
+        Must be called after setup() and before any entity deployments.
+        Services are deployed with readiness gates; processes that die on docker commit
+        are marked with restart_after_snapshot=true and will be restarted on restore().
+        """
+        from goe.services import get_registry
+
+        if not system.services:
+            logger.info(f"[ProgressiveEnvironment] No services to provision for system {system.id}")
+            return
+
+        logger.info(f"[ProgressiveEnvironment] Provisioning {len(system.services)} service(s) for system {system.id}")
+
+        registry = get_registry()
+
+        # Generate and execute service deployment script
+        deploy_script = registry.deploy_all(system.services)
+        exit_code, stdout, stderr = self._exec_in_target(deploy_script)
+
+        if exit_code != 0:
+            logger.error(f"[ProgressiveEnvironment] Service deployment failed:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
+            raise RuntimeError(f"Failed to provision services for system {system.id}")
+
+        logger.info(f"[ProgressiveEnvironment] Services deployed successfully")
+
+        # Generate restart script (for services that need to restart after snapshot)
+        self._service_restart_script = registry.restart_all(system.services)
+
+        # Snapshot as base state
+        base_tag = f"{self._scope}_base"
+        logger.info(f"[ProgressiveEnvironment] Snapshotting base state as goe_prog:{base_tag}")
+        self._target_container.commit(repository="goe_prog", tag=base_tag)
+        self._current_snapshot = "_base"
+
     def teardown(self) -> None:
         """Stop and remove all containers and network. Optionally clean snapshot images."""
         if self._target_container:
@@ -136,12 +175,17 @@ class ProgressiveEnvironment:
         self._current_snapshot = entity_id
 
     def restore(self, entity_id: str) -> None:
-        """Restore target to a prior snapshot (stop+remove, create from image, replay scripts)."""
-        if entity_id not in self._snapshots:
+        """Restore target to a prior snapshot (stop+remove, create from image, replay scripts).
+
+        entity_id may be the special sentinel "_base" to restore to the post-provision,
+        pre-entity state (services deployed, no entities built yet).
+        """
+        is_base = entity_id == "_base"
+        if not is_base and entity_id not in self._snapshots:
             raise ValueError(f"No snapshot found for entity '{entity_id}'")
 
-        idx = self._snapshots[entity_id]
-        tag = f"goe_prog:{self._scope}_{entity_id}"
+        idx = self._snapshots[entity_id] if not is_base else -1
+        tag = f"goe_prog:{self._scope}_base" if is_base else f"goe_prog:{self._scope}_{entity_id}"
         logger.info(f"[ProgressiveEnvironment] Restoring target from {tag}")
 
         # Stop and remove current target
@@ -161,11 +205,24 @@ class ProgressiveEnvironment:
             remove=False,
         )
 
-        # Replay all scripts up to and including this snapshot to restart services
-        logger.info(f"[ProgressiveEnvironment] Replaying {idx + 1} deploy script(s) to restart services...")
-        for i, (eid, script) in enumerate(self._deploy_scripts[: idx + 1]):
-            logger.debug(f"  [{i+1}/{idx+1}] Replaying {eid}")
-            self._exec_in_target(script)
+        # Restart services first (processes die on docker commit)
+        if self._service_restart_script:
+            logger.info("[ProgressiveEnvironment] Restarting system services after snapshot restore...")
+            exit_code, stdout, stderr = self._exec_in_target(self._service_restart_script)
+            if exit_code != 0:
+                logger.warning(f"[ProgressiveEnvironment] Service restart had errors:\n{stderr}")
+
+        # Replay all scripts up to and including this snapshot to restart app services
+        if idx >= 0:
+            logger.info(f"[ProgressiveEnvironment] Replaying {idx + 1} deploy script(s) to restart app services...")
+            for i, (eid, script) in enumerate(self._deploy_scripts[: idx + 1]):
+                logger.debug(f"  [{i+1}/{idx+1}] Replaying {eid}")
+                exit_code, _, stderr = self._exec_in_target(script)
+                if exit_code != 0:
+                    logger.warning(
+                        f"[ProgressiveEnvironment] Replay of '{eid}' exited {exit_code} during "
+                        f"restore of '{entity_id}'; target may be in a degraded state:\n{stderr}"
+                    )
 
         self._current_snapshot = entity_id
 
@@ -375,8 +432,10 @@ class ProgressiveEnvironment:
         """Remove all snapshot images created during this run."""
         if not self._client:
             return
-        for entity_id in self._snapshots:
-            tag = f"goe_prog:{self._scope}_{entity_id}"
+        tags = [f"goe_prog:{self._scope}_base"] + [
+            f"goe_prog:{self._scope}_{entity_id}" for entity_id in self._snapshots
+        ]
+        for tag in tags:
             try:
                 self._client.images.remove(tag, force=True)
             except Exception as e:

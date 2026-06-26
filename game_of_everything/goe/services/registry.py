@@ -79,15 +79,12 @@ class ServiceRegistry:
                 lines.append(configure_script)
                 lines.append("")
 
-            # Apply config_vars if provided
+            # Apply config_vars. Vars with after_start=false (the default) edit
+            # config files that the start block reads, so they run before start.
+            # Vars with after_start=true (e.g. mysql root_password, which issues
+            # `mysql -e ...` against the live server) run after the readiness gate.
             config_vars = recipe.get("config_vars", {})
-            for var_name, var_def in config_vars.items():
-                if var_name in spec.config:
-                    value = spec.config[var_name]
-                    apply_script = var_def["apply"].replace("{value}", value)
-                    lines.append(f"# Apply config: {var_name}")
-                    lines.append(apply_script)
-                    lines.append("")
+            self._emit_config_vars(lines, spec, config_vars, after_start=False)
 
             # Start (includes readiness gate)
             start_script = recipe.get("start", "").strip()
@@ -96,8 +93,30 @@ class ServiceRegistry:
                 lines.append(start_script)
                 lines.append("")
 
+            self._emit_config_vars(lines, spec, config_vars, after_start=True)
+
         lines.append("echo 'All services deployed successfully'")
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _emit_config_vars(
+        lines: list[str],
+        spec: ServiceSpec,
+        config_vars: dict,
+        *,
+        after_start: bool,
+    ) -> None:
+        """Append apply scripts for the config_vars whose timing matches after_start."""
+        for var_name, var_def in config_vars.items():
+            if var_name not in spec.config:
+                continue
+            if bool(var_def.get("after_start", False)) != after_start:
+                continue
+            value = spec.config[var_name]
+            apply_script = var_def["apply"].replace("{value}", value)
+            lines.append(f"# Apply config: {var_name}")
+            lines.append(apply_script)
+            lines.append("")
 
     def restart_all(self, specs: list[ServiceSpec]) -> str:
         """Generate a script to restart services after snapshot restore.

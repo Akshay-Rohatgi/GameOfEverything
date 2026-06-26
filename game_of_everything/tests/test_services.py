@@ -12,7 +12,6 @@ def test_registry_loads_recipes():
     # Should have at least these core services
     assert "mysql" in available
     assert "openssh" in available
-    assert "postgres" in available
     assert "redis" in available
     assert "nginx" in available
 

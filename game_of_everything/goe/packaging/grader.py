@@ -16,6 +16,47 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def assemble_deploy_script(sections: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    """Concatenate ordered (entity_id, section) deploy scripts into one final script.
+
+    This is the single entry point every assembly path uses (single-system packaging,
+    multi-system packaging, and the chain test) so the script that gets tested is
+    byte-identical to the script that gets packaged.
+
+    Steps:
+      1. Concatenate sections with ``# --- <entity_id> ---`` headers.
+      2. When there is more than one section, run the LLM grader to resolve
+         cross-entity conflicts (duplicate ``useradd``, password overwrites). A single
+         section has no cross-entity conflicts, so the grader is skipped.
+      3. Post-process (shebang, ``set -e``, blank-line normalisation).
+
+    Args:
+        sections: Ordered ``(entity_id, deploy_script_section)`` pairs. Order matters —
+            the grader keeps the FIRST occurrence on conflict, so the credential-providing
+            entity must come first (callers pass topo build order).
+
+    Returns:
+        ``(final_script, warnings)`` where ``warnings`` lists conflicts the grader fixed.
+    """
+    from goe.packaging.postprocessor import apply_post_processors
+
+    entity_sections: dict[str, str] = {}
+    blocks: list[str] = []
+    for eid, script in sections:
+        stripped = (script or "").strip()
+        entity_sections[eid] = stripped
+        blocks.append(f"# --- {eid} ---\n{stripped}\n")
+
+    combined = "\n".join(blocks)
+    warnings: list[str] = []
+
+    # Conflicts only arise when multiple entities are stitched onto one system.
+    if len(sections) > 1:
+        combined, warnings = grade_and_fix_script(combined, entity_sections, verbose=False)
+
+    return apply_post_processors(combined) + "\n", warnings
+
+
 def grade_and_fix_script(
     concatenated_script: str,
     entity_sections: dict[str, str],

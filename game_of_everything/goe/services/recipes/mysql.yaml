@@ -39,6 +39,8 @@ config_vars:
   root_password:
     default: ""
     description: "Root user password (empty = no password, passwordless root)"
+    # Runs `mysql -e ...` against the live server, so it must run after start.
+    after_start: true
     apply: |
       if [ -n "{value}" ]; then
         mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '{value}'; FLUSH PRIVILEGES;" 2>/dev/null || true

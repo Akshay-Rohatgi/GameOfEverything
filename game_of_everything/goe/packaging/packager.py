@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING
 import yaml
 
 from goe.graph.topology import topological_sort
-from goe.packaging.postprocessor import apply_post_processors
 
 if TYPE_CHECKING:
     from goe.graph.models import EntityGraph
@@ -116,27 +115,15 @@ def _build_docker_compose(graph: "EntityGraph", per_system_scripts: dict[str, st
 
 
 def _build_deploy_sh(graph: "EntityGraph", built: dict[str, "BuildOutcome"], order: list[str]) -> str:
-    sections: list[str] = []
-    entity_sections: dict[str, str] = {}  # For grader context
+    from goe.packaging.grader import assemble_deploy_script
 
-    for eid in order:
-        script = built[eid].deploy_script or ""
-        script_stripped = script.strip()
-        sections.append(f"# --- {eid} ---\n{script_stripped}\n")
-        entity_sections[eid] = script_stripped
-
-    combined = "\n".join(sections)
-
-    # Grade for conflicts if multiple entities on same system
-    if len(order) > 1:
-        from goe.packaging.grader import grade_and_fix_script
-        combined, warnings = grade_and_fix_script(combined, entity_sections, verbose=False)
-        if warnings:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Deploy script grader fixed {len(warnings)} conflict(s): {warnings}")
-
-    return apply_post_processors(combined) + "\n"
+    sections = [(eid, built[eid].deploy_script or "") for eid in order]
+    combined, warnings = assemble_deploy_script(sections)
+    if warnings:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Deploy script grader fixed {len(warnings)} conflict(s): {warnings}")
+    return combined
 
 
 def _build_playbook(built: dict[str, "BuildOutcome"], order: list[str]) -> str:
@@ -266,13 +253,20 @@ def package(
             built_entities = [e for e in entities if e.id in built]
             if not built_entities:
                 continue
-            sections: list[str] = []
-            for entity in built_entities:
-                script = built[entity.id].deploy_script or ""
-                if script.strip():
-                    sections.append(f"# --- {entity.id} ---\n{script.strip()}\n")
+            sections = [
+                (entity.id, built[entity.id].deploy_script or "")
+                for entity in built_entities
+                if (built[entity.id].deploy_script or "").strip()
+            ]
             if sections:
-                combined = apply_post_processors("\n".join(sections)) + "\n"
+                from goe.packaging.grader import assemble_deploy_script
+                combined, warnings = assemble_deploy_script(sections)
+                if warnings:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Deploy script grader fixed {len(warnings)} conflict(s) on system "
+                        f"'{sid}': {warnings}"
+                    )
                 deploy_path = out_dir / f"{sid}_deploy.sh"
                 deploy_path.write_text(combined, encoding="utf-8")
                 deploy_path.chmod(0o755)

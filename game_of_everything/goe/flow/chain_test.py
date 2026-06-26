@@ -50,23 +50,31 @@ def _build_per_system_scripts(
 ) -> dict[str, str]:
     """Concatenate deploy scripts for built entities, grouped by system_id.
 
+    Runs each system's sections through ``assemble_deploy_script`` (the same grader the
+    packager uses) so the chain test deploys the exact conflict-resolved script that gets
+    packaged — not an ungraded concatenation where duplicate users / password overwrites
+    silently break the attack chain.
+
     Returns ``{system_id: combined_deploy_script}``.
     """
-    from goe.packaging.postprocessor import apply_post_processors
+    from goe.packaging.grader import assemble_deploy_script
 
     grouped = graph.entities_by_system()
     per_system: dict[str, str] = {}
     for sid, entities in grouped.items():
-        sections: list[str] = []
-        for entity in entities:
-            if entity.id not in built:
-                continue
-            script = built[entity.id].deploy_script or ""
-            if script.strip():
-                sections.append(f"# --- {entity.id} ---\n{script.strip()}\n")
+        sections = [
+            (entity.id, built[entity.id].deploy_script or "")
+            for entity in entities
+            if entity.id in built and (built[entity.id].deploy_script or "").strip()
+        ]
         if sections:
-            combined = "\n".join(sections)
-            per_system[sid] = apply_post_processors(combined) + "\n"
+            combined, warnings = assemble_deploy_script(sections)
+            if warnings:
+                logger.warning(
+                    f"ChainTest: grader fixed {len(warnings)} conflict(s) on system "
+                    f"'{sid}': {warnings}"
+                )
+            per_system[sid] = combined
     return per_system
 
 

@@ -71,7 +71,21 @@ command: "sshpass -p '${edge.webapp_to_db_creds.password}' ssh -o StrictHostKeyC
 Use edge values for credentials and other stolen artefacts:
 ```yaml
 ${edge.<edge_id>.<param>}   # e.g. ${edge.webapp_to_db_creds.user}
+${edge.<edge_id>.value}     # fallback: the primary credential/artifact for this edge
 ```
+
+**CRITICAL**: Use EXACT edge IDs from the graph summary. Do NOT abbreviate or rename them.
+
+For `creds_for` edges, available params include:
+- `${edge.<id>.user}` — the username (if set)
+- `${edge.<id>.password}` — the password/credential
+- `${edge.<id>.value}` — same as password (universal fallback)
+- `${edge.<id>.host}` — the target host
+
+For `shell_as` edges:
+- `${edge.<id>.user}` — the username with shell access
+- `${edge.<id>.value}` — same as user (universal fallback)
+- `${edge.<id>.host}` — the target host
 
 ### Output Capture (optional)
 
