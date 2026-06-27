@@ -176,7 +176,7 @@ TOOL_TO_INSTALL_CMD: Dict[str, str] = {
 class TestEnvironmentTool:
     """Manages Docker network + container lifecycle for snippet testing."""
 
-    def __init__(self, scope: str = "", hostname: str = "", target_image: str = "", enable_browser: bool = False):
+    def __init__(self, scope: str = "", hostname: str = "", target_image: str = "", enable_browser: bool = False, expose_ports: dict[int, int] | None = None):
         """Args:
             scope: Optional prefix for container and network names.
                    Empty string → default names (goe_target, goe_attacker, goe_test_net).
@@ -193,11 +193,15 @@ class TestEnvironmentTool:
             enable_browser: Whether to start a browser sidecar container for browser-based attacks.
                             When enabled, a headless Chromium container is started and its Chrome
                             DevTools Protocol (CDP) endpoint is exposed via browser_cdp_url.
+            expose_ports: Mapping of {container_port: host_port} to publish to the host.
+                          When set, the target container is started with these ports mapped so the
+                          user can interact with services directly from the host.
         """
         self._scope = scope
         self._hostname = hostname or "target"
         self._target_image = target_image or TARGET_IMAGE
         self._enable_browser = enable_browser
+        self._expose_ports = expose_ports or {}
         self._client: Optional[docker.DockerClient] = None
         self.network = None
         self.target_container = None
@@ -276,12 +280,14 @@ class TestEnvironmentTool:
                 logger.info(f"Built target image: {self._target_image}")
 
         # Start target container
+        port_bindings = {f"{cp}/tcp": hp for cp, hp in self._expose_ports.items()} if self._expose_ports else None
         self.target_container = self.client.containers.run(
             self._target_image,
             command="sleep infinity",
             name=self.target_name,
             network=self.network_name,
             hostname=self._hostname,
+            ports=port_bindings,
             detach=True,
             remove=False,
         )

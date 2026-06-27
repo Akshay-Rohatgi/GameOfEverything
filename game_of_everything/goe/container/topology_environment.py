@@ -47,13 +47,16 @@ class TopologyEnvironment:
             result = run(chain_procedure, env, ctx)
     """
 
-    def __init__(self, graph: "EntityGraph", scope: str = "") -> None:
+    def __init__(self, graph: "EntityGraph", scope: str = "", expose_ports: bool | dict[int, int] = False) -> None:
         self._graph = graph
         self._scope = scope or "chain"
+        self._expose_ports = expose_ports
         self._client = None
         self._network = None
         # Maps "attacker" → container object, system_id → container object
         self._containers: dict[str, object] = {}
+        # system_id → {container_port: host_port} (populated during setup when expose_ports=True)
+        self.port_map: dict[str, dict[int, int]] = {}
 
     # ------------------------------------------------------------------
     # Lazy Docker client
@@ -85,6 +88,9 @@ class TopologyEnvironment:
         self._net_name = net_name
         logger.info(f"TopologyEnvironment: created network {net_name}")
 
+        # Track host ports already claimed to avoid collisions across systems
+        claimed_host_ports: set[int] = set()
+
         for system in self._graph.systems:
             cname = f"goe_chain_{self._scope}_{system.id}"
             hostname = system.network.hostname
@@ -93,12 +99,40 @@ class TopologyEnvironment:
             # Create container directly on the chain network instead of "none" then
             # connect, as Docker doesn't allow connecting containers from private
             # (none) mode networks. Set hostname and create with alias for DNS.
+            port_bindings = None
+            if self._expose_ports:
+                if isinstance(self._expose_ports, dict):
+                    # Explicit mapping provided — use as-is for each system,
+                    # but offset host ports to avoid collisions across systems.
+                    port_bindings = {}
+                    system_port_map: dict[int, int] = {}
+                    for cp, hp in self._expose_ports.items():
+                        while hp in claimed_host_ports:
+                            hp += 1
+                        port_bindings[f"{cp}/tcp"] = hp
+                        system_port_map[cp] = hp
+                        claimed_host_ports.add(hp)
+                    self.port_map[system.id] = system_port_map
+                elif system.network.exposed_ports:
+                    port_bindings = {}
+                    system_port_map: dict[int, int] = {}
+                    for p in system.network.exposed_ports:
+                        host_port = p
+                        while host_port in claimed_host_ports:
+                            host_port += 1
+                        port_bindings[f"{p}/tcp"] = host_port
+                        system_port_map[p] = host_port
+                        claimed_host_ports.add(host_port)
+                    self.port_map[system.id] = system_port_map
+                if port_bindings:
+                    logger.info(f"  port mappings: {port_bindings}")
             container = self._docker.containers.run(
                 _BASE_TARGET_IMAGE,
                 command="sleep infinity",
                 name=cname,
                 hostname=hostname,
                 network=net_name,
+                ports=port_bindings,
                 detach=True,
                 remove=False,
             )
@@ -259,8 +293,11 @@ class TopologyEnvironment:
         for cname in system_names + [attacker_name]:
             try:
                 c = self._docker.containers.get(cname)
-                c.stop(timeout=5)
-                c.remove(force=True)
+                # force=True SIGKILLs + removes in one call. Do NOT call stop()
+                # first: these containers run `sleep infinity` as PID 1, which
+                # ignores SIGTERM, so a graceful stop just blocks for the full
+                # timeout (up to client_timeout + t seconds) per container.
+                c.remove(force=True, v=True)
                 logger.info(f"TopologyEnvironment: removed container {cname}")
             except NotFound:
                 pass
@@ -270,6 +307,14 @@ class TopologyEnvironment:
         net_name = getattr(self, "_net_name", f"{_CHAIN_NETWORK_NAME}_{self._scope}")
         try:
             net = self._docker.networks.get(net_name)
+            # Force-disconnect any lingering endpoints first; otherwise net.remove()
+            # fails (or stalls on some daemons) with "network has active endpoints".
+            net.reload()
+            for endpoint in net.containers:
+                try:
+                    net.disconnect(endpoint, force=True)
+                except APIError:
+                    pass
             net.remove()
             logger.info(f"TopologyEnvironment: removed network {net_name}")
         except NotFound:

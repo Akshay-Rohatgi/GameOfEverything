@@ -28,17 +28,19 @@ class BuildScheduler:
     Entities that transitively depend on a failed entity are marked skipped.
 
     next_buildable() returns (entity, incoming_edges_dict) where incoming_edges_dict
-    is the {edge_id: concrete_value} dict expected by construction_crew.orchestrator.build().
+    is the {edge_id: {param: concrete_value}} dict expected by
+    construction_crew.orchestrator.build().
     """
 
     def __init__(self, graph: "EntityGraph"):
         self._graph = graph
         self._order = topological_sort(graph)
         self._states: dict[str, EntityState] = {eid: EntityState.pending for eid in self._order}
-        self._concrete_values: dict[str, str] = {}  # edge_id → concrete value string
+        # edge_id → {param_name: concrete value string}
+        self._concrete_values: dict[str, dict[str, str]] = {}
         self._refresh_buildable()
 
-    def next_buildable(self) -> tuple["Entity", dict[str, str]] | None:
+    def next_buildable(self) -> tuple["Entity", dict[str, dict[str, str]]] | None:
         """Return next entity ready to build with its resolved incoming edge values, or None."""
         for eid in self._order:
             if self._states[eid] == EntityState.buildable:
@@ -48,8 +50,8 @@ class BuildScheduler:
                 return entity, incoming
         return None
 
-    def report_complete(self, entity_id: str, outgoing_values: dict[str, str]) -> None:
-        """Mark entity complete and propagate concrete values to outgoing edges."""
+    def report_complete(self, entity_id: str, outgoing_values: dict[str, dict[str, str]]) -> None:
+        """Mark entity complete and propagate concrete param values to outgoing edges."""
         self._states[entity_id] = EntityState.complete
         self._concrete_values.update(outgoing_values)
         self._refresh_buildable()
@@ -79,9 +81,9 @@ class BuildScheduler:
             if all(self._states.get(p) == EntityState.complete for p in providers):
                 self._states[eid] = EntityState.buildable
 
-    def _gather_incoming(self, entity_id: str) -> dict[str, str]:
+    def _gather_incoming(self, entity_id: str) -> dict[str, dict[str, str]]:
         entity = self._graph.entity_by_id(entity_id)
-        incoming = {}
+        incoming: dict[str, dict[str, str]] = {}
         for req in entity.requires:
             if req.edge_id in self._concrete_values:
                 incoming[req.edge_id] = self._concrete_values[req.edge_id]

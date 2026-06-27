@@ -31,6 +31,12 @@ def main() -> None:
         "--verbose", "-v", action="store_true",
         help="Stream per-entity build_entity logs",
     )
+    run_p.add_argument(
+        "--expose-ports", nargs="*", default=None,
+        help="Deploy with ports exposed on host for manual testing. "
+             "Specify as host:container (e.g. --expose-ports 8080:3000 2222:22) "
+             "or just port for 1:1 mapping. Auto-detects if none given.",
+    )
     artifact_group = run_p.add_mutually_exclusive_group()
     artifact_group.add_argument(
         "--artifacts", dest="artifacts", action="store_true", default=None,
@@ -53,6 +59,12 @@ def main() -> None:
         "--runtime", default=None,
         help="Docker target runtime (ubuntu/flask/express/apache_php). "
              "Auto-detected from checkpoint when omitted.",
+    )
+    test_p.add_argument(
+        "--expose-ports", nargs="*", default=None,
+        help="Publish target container ports to the host for manual testing. "
+             "Specify as host:container (e.g. --expose-ports 8080:3000 2222:22) "
+             "or just port for 1:1 mapping. Auto-detects if none given.",
     )
 
     args = parser.parse_args()
@@ -102,7 +114,60 @@ def _run(args) -> None:
                 print("\nRun completed with entity build failures.", file=sys.stderr)
         else:
             print("\nRun completed with failures.", file=sys.stderr)
-        sys.exit(1)
+        if args.expose_ports is None:
+            sys.exit(1)
+
+    if args.expose_ports is not None and result.output_dir is not None:
+        _deploy_with_exposed_ports(result, args.expose_ports)
+
+
+def _deploy_with_exposed_ports(result, port_specs: list[str]) -> None:
+    """After a run completes, redeploy the output with ports exposed for manual testing."""
+    from goe.container.environment import TestEnvironment
+
+    out_dir = result.output_dir
+    deploy_sh_path = out_dir / "deploy.sh"
+    if not deploy_sh_path.exists():
+        print("[expose-ports] No deploy.sh found, skipping.", file=sys.stderr)
+        return
+
+    # Detect runtime from graph
+    runtime = "ubuntu"
+    if result.graph:
+        runtimes = {e.runtime.value for e in result.graph.entities}
+        if len(runtimes) == 1:
+            runtime = runtimes.pop()
+
+    if port_specs:
+        expose_ports = _parse_port_specs(port_specs)
+    else:
+        port: int | None = None
+        if runtime != "ubuntu":
+            from goe.runtimes.registry import get_registry
+            try:
+                port = get_registry().port_for(runtime)
+            except Exception:
+                pass
+        expose_ports = _detect_ports(out_dir, port)
+
+    pairs = ", ".join(f"{hp}→:{cp}" for cp, hp in expose_ports.items())
+    print(f"\n[expose-ports] Deploying with ports: {pairs}")
+
+    deploy_sh = deploy_sh_path.read_text(encoding="utf-8")
+    env = TestEnvironment(runtime=runtime, scope="manual_run", expose_ports=expose_ports)
+    env.setup()
+    try:
+        exit_code, stdout, stderr = env.deploy(deploy_sh)
+        if exit_code != 0:
+            print(f"[expose-ports] Deploy FAILED (exit {exit_code})")
+            if stderr.strip():
+                print(f"--- stderr ---\n{stderr.strip()[:500]}")
+        else:
+            print(f"[expose-ports] Deploy OK — target={env.target_name}")
+            print(f"[expose-ports] Ports on host: {pairs}")
+        input("[expose-ports] Containers running — press Enter to tear down...")
+    finally:
+        env.teardown()
 
 
 def _test(args) -> None:
@@ -118,6 +183,60 @@ def _test(args) -> None:
         _test_chain(args, out_dir, chain_playbook_path)
     else:
         _test_single(args, out_dir, playbook_path)
+
+
+def _parse_port_specs(specs: list[str]) -> dict[int, int]:
+    """Parse port specs like '8080:3000' or '22' into {container_port: host_port}."""
+    mapping: dict[int, int] = {}
+    for spec in specs:
+        if ":" in spec:
+            host_s, container_s = spec.split(":", 1)
+            mapping[int(container_s)] = int(host_s)
+        else:
+            p = int(spec)
+            mapping[p] = p
+    return mapping
+
+
+def _collect_ports_from_playbook(playbook_path: Path) -> set[int]:
+    """Extract literal port numbers from a playbook YAML (URLs and commands)."""
+    import re
+
+    if not playbook_path.exists():
+        return set()
+
+    text = playbook_path.read_text(encoding="utf-8")
+    ports: set[int] = set()
+
+    # Literal ports in URLs: http://host:PORT/
+    for m in re.finditer(r"https?://[^/:]+:(\d+)", text):
+        ports.add(int(m.group(1)))
+
+    # SSH -p PORT
+    for m in re.finditer(r"-p\s+(\d+)", text):
+        ports.add(int(m.group(1)))
+
+    # nc/ncat host PORT
+    for m in re.finditer(r"(?:nc|ncat)\s+\S+\s+(\d+)", text):
+        ports.add(int(m.group(1)))
+
+    return ports
+
+
+def _detect_ports(out_dir: Path, runtime_port: int | None) -> dict[int, int]:
+    """Auto-detect ports from playbook. Returns {container_port: host_port} (1:1)."""
+    ports: set[int] = set()
+
+    for name in ("playbook.yaml", "chain_playbook.yaml"):
+        ports.update(_collect_ports_from_playbook(out_dir / name))
+
+    if runtime_port:
+        ports.add(runtime_port)
+
+    if not ports:
+        ports.add(22)
+
+    return {p: p for p in sorted(ports)}
 
 
 def _test_chain(args, out_dir: Path, chain_playbook_path: Path) -> None:
@@ -158,9 +277,15 @@ def _test_chain(args, out_dir: Path, chain_playbook_path: Path) -> None:
     print(f"[chain-test] topology: {len(graph.systems)} system(s), dir={out_dir}")
     systems_ctx = _build_systems_ctx(graph)
 
-    env = TopologyEnvironment(graph, scope="manual_chain")
+    expose: bool | dict[int, int] = _parse_port_specs(args.expose_ports) if args.expose_ports else (args.expose_ports is not None)
+    env = TopologyEnvironment(graph, scope="manual_chain", expose_ports=expose)
     env.setup()
     try:
+        if args.expose_ports is not None and env.port_map:
+            for sys_id, mapping in env.port_map.items():
+                pairs = ", ".join(f"{hp}→:{cp}" for cp, hp in mapping.items())
+                print(f"[chain-test] {sys_id} ports on host: {pairs}")
+
         for system_id, script in per_system_scripts.items():
             print(f"[chain-test] Deploying system {system_id}…")
             ec, _out, err = env.deploy_system(system_id, script)
@@ -252,9 +377,17 @@ def _test_single(args, out_dir: Path, playbook_path: Path) -> None:
 
     print(f"[test] runtime={runtime}  port={port or 'n/a'}  dir={out_dir}")
 
-    env = TestEnvironment(runtime=runtime, scope="manual_test")
+    expose_ports: dict[int, int] | None = None
+    if args.expose_ports is not None:
+        expose_ports = _parse_port_specs(args.expose_ports) if args.expose_ports else _detect_ports(out_dir, port)
+
+    env = TestEnvironment(runtime=runtime, scope="manual_test", expose_ports=expose_ports)
     env.setup()
     try:
+        if expose_ports:
+            pairs = ", ".join(f"{hp}→:{cp}" for cp, hp in expose_ports.items())
+            print(f"[test] Ports exposed on host: {pairs}")
+
         print("[test] Deploying...")
         exit_code, stdout, stderr = env.deploy(deploy_sh)
         if exit_code != 0:

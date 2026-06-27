@@ -33,13 +33,14 @@ def _image_for(runtime: str) -> str:
 class TestEnvironment:
     """Wraps v1 TestEnvironmentTool with a clean interface for the v2 executor."""
 
-    def __init__(self, runtime: str = "ubuntu", scope: str = "", enable_browser: bool = True):
+    def __init__(self, runtime: str = "ubuntu", scope: str = "", enable_browser: bool = True, expose_ports: dict[int, int] | None = None):
         image = _image_for(runtime)
         from game_of_everything.tools.test_environment import TestEnvironmentTool
         self._tool = TestEnvironmentTool(
             scope=scope,
             target_image=image,
             enable_browser=enable_browser,
+            expose_ports=expose_ports,
         )
         self._setup_done = False
 

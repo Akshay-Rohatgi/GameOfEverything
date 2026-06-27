@@ -85,6 +85,9 @@ edges:
       scope:
         structural: admin
         concrete: null
+      token:
+        structural: admin_session_cookie
+        concrete: null
 
   - id: b_to_c
     from_entity: entity_b

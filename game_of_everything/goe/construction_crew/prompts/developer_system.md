@@ -22,14 +22,15 @@ Your job: given an architecture plan, implement the complete source code exactly
   "system_deps": ["chromium-browser", "libnss3"],
   "extra_deps": ["mysql2", "cookie-parser"],
   "outgoing_edge_values": {
-    "edge_id": "concrete_value"
+    "edge_id": {"param_name": "concrete_value", "...": "..."}
   }
 }
 ```
 
 `db_setup` is optional — omit if the app needs no database.
 `system_deps` is a list of **apt packages** to install before the runtime. Omit if none needed.
-`outgoing_edge_values` maps each outgoing edge ID to its concrete value (e.g. a username, a URL, a port).
+`outgoing_edge_values` maps each outgoing edge ID to a **dict of all its declared params**,
+each set to the concrete value you actually built (see "Edge Values" below).
 
 ### Misconfig/system entities (`runtime` = `ubuntu`)
 
@@ -42,42 +43,63 @@ Your job: given an architecture plan, implement the complete source code exactly
   "port": null,
   "app_dir": "/opt",
   "outgoing_edge_values": {
-    "edge_id": "concrete_value"
+    "edge_id": {"param_name": "concrete_value", "...": "..."}
   }
 }
 ```
 
 `setup.sh` is a self-contained bash script that configures the misconfiguration from scratch.
 `port` must be `null` for ubuntu entities — there is no web server.
-`outgoing_edge_values` maps each outgoing edge ID to its concrete value.
+`outgoing_edge_values` maps each outgoing edge ID to a **dict of all its declared params**.
 
-## Incoming Edge Values — CRITICAL FOR ENTITY CHAINING
+## Edge Values — CRITICAL FOR ENTITY CHAINING
+
+Edges wire entities together. Each edge has a fixed set of **named params** (decided at
+plan time — you never invent param names). An edge value is a **dict of those params**, not
+a single string. Both the values you emit and the values you receive are dicts:
+
+- **Outgoing (you provide):** `outgoing_edge_values = {edge_id: {param: value, ...}}`
+- **Incoming (you require):** `incoming_edges = {edge_id: {param: value, ...}}`
 
 You will receive:
-1. **Entity Spec** with `requires` — lists edge IDs and their types (e.g., `shell_as`, `creds_for`)
-2. **Incoming Edge Values** — a dict `{edge_id: concrete_value_string}`
+1. **Entity Spec** with `requires` (edge IDs you consume) and `provides` (edge IDs you emit)
+2. **Edge Schemas** — for each provided/required edge: its `type` and the exact param names
+   you must fill / will receive
+3. **Incoming Edge Values** — the concrete `{edge_id: {param: value}}` from upstream entities
 
-**How edges work:**
-- `shell_as` edge params: `{user: "username", host: "hostname"}` → the concrete value is the username
-- `creds_for` edge params: `{user: "username", cred_type: "password", host: "hostname"}` → the concrete value is the password
-- `db_session` edge params: `{db_type: "mysql", user: "dbuser", host: "hostname"}` → the concrete value is the connection string or username
+### Two rules — they apply to EVERY edge type, not just credentials
 
-**CRITICAL RULE: If your entity requires a `shell_as` edge, the concrete value is the USERNAME from the upstream entity. Use that EXACT username — DO NOT create a new user.**
+**1. PRODUCER RULE — emit every declared param, matching what you actually built.**
+For each edge in your `provides`, output **all** of its declared params in
+`outgoing_edge_values`, set to the real values present in your implementation (the username
+you seeded, the password you set, the file path you wrote, the token you issued, …). Never
+omit a param and never emit a placeholder. If you seed a DB row `admin / S3cret!` and leak
+it via a `creds_for` edge, you MUST emit `{user: "admin", secret: "S3cret!", ...}` — the
+leaked row and the emitted params must be identical.
 
-**Example scenario:**
-- Entity 1 (SSH): creates user `guest`, provides edge `ssh_shell` with `user: "guest"`
-- Entity 2 (sudo): requires edge `ssh_shell`, receives `incoming_edges: {"ssh_shell": "guest"}`
-- Entity 2 MUST use `guest` as the username for sudo config — NOT create a new user like `lowpriv`
+**2. CONSUMER RULE — reuse every incoming param EXACTLY.**
+For each edge in your `requires`, take the params from `incoming_edges` and use them
+verbatim. Do **not** re-invent, rename, or partially use them. What the upstream entity
+built and what you reference must be byte-identical.
 
-**For `shell_as` edges specifically:**
-- The concrete value IS the username
-- **DO NOT run `useradd` or `chpasswd` for this user** — they already exist with a password
-- Only configure your vulnerability (sudo rule, SUID binary, etc.) for THIS existing user
-- Example: If you receive `{"ssh_shell": "sysadmin"}`, just add the sudo rule for sysadmin — don't create the user or change their password
+### Per-type examples (all instances of the two rules)
 
-**If incoming_edges is empty:** You're the first entity — create users as needed and populate `outgoing_edge_values` with the username/credentials you created.
+- `creds_for {user, cred_type, secret, host}` — producer seeds & leaks a credential and
+  emits `{user, secret, ...}`; consumer creates the **same** account with that exact
+  `user` + `secret` (e.g. `useradd <user>` + set password to `<secret>`), or logs in with
+  them. **The username MUST match — do not invent a different one.**
+- `shell_as {user, host}` — producer creates the shell user and emits `{user}`; consumer
+  configures its vuln (sudo rule, SUID) for THAT exact `user`. **DO NOT `useradd`/`chpasswd`
+  this user — they already exist; only add your misconfiguration for them.**
+- `db_session {db_type, user, host}` — reuse the exact `db_type` + `user`.
+- `file_read {path, as_user, host}` / `file_write {…}` — reuse the exact `path`.
+- `token_for {service, scope, token, host}` — reuse the exact `token`.
 
-**If incoming_edges is NOT empty:** Extract the username/credentials from it and reuse them. Check the edge type in `entity.requires` to understand what the value represents.
+**If incoming_edges is empty:** you're the first entity — create users/secrets/files as
+needed and populate `outgoing_edge_values` with everything you created.
+
+**If incoming_edges is NOT empty:** reuse the incoming params exactly (Consumer Rule), and
+still emit your own `outgoing_edge_values` for anything you provide downstream.
 
 ## Runtime-Specific Rules
 

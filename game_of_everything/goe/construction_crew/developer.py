@@ -16,6 +16,37 @@ _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "developer_system.md").rea
 _RUNTIMES_DIR = Path(__file__).resolve().parent.parent / "runtimes" / "templates"
 
 
+def validate_outgoing_edge_values(outgoing: dict, provided_schema: dict) -> None:
+    """Constrain developer-emitted outgoing edge values to the plan-time edge schema.
+
+    Each edge_id must be one this entity provides, and every param key must be a declared
+    param. Keys are fixed at plan time — the developer fills values, it never invents
+    structure. Raises ValueError on any unknown edge_id, non-dict payload, or undeclared
+    param key. A no-op when provided_schema is empty (e.g. standalone single-entity builds).
+    """
+    if not provided_schema:
+        return
+    allowed_ids = set(provided_schema)
+    for eid, payload in outgoing.items():
+        if eid not in allowed_ids:
+            raise ValueError(
+                f"outgoing_edge_values has unknown edge '{eid}'; "
+                f"this entity only provides {sorted(allowed_ids)}"
+            )
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"outgoing_edge_values['{eid}'] must be a dict of params, "
+                f"got {type(payload).__name__}"
+            )
+        declared = set(provided_schema[eid].get("params", []))
+        extra = set(payload) - declared
+        if extra:
+            raise ValueError(
+                f"outgoing_edge_values['{eid}'] has undeclared params "
+                f"{sorted(extra)}; declared params are {sorted(declared)}"
+            )
+
+
 def _load_runtime_spec(runtime_id: str) -> str:
     path = _RUNTIMES_DIR / f"{runtime_id}.yaml"
     return path.read_text() if path.exists() else f"(runtime spec for {runtime_id!r} not found)"
@@ -25,11 +56,17 @@ def develop(
     entity: "Entity",
     plan: "EngineerPlan",
     incoming_edges: dict,
+    edge_schemas: dict | None = None,
 ) -> tuple:
     """Call the Developer LLM to produce source code and a BuildArtifact.
 
+    Args:
+        edge_schemas: optional {edge_id: {"type", "direction", "params": [names]}} for the
+            entity's provided/required edges. Constrains the param keys the developer may
+            emit in outgoing_edge_values (keys are fixed at plan time, never invented).
+
     Returns:
-        (BuildArtifact, outgoing_values: dict[str, str])
+        (BuildArtifact, outgoing_values: dict[str, dict[str, str]])
     """
     from goe.bedrock import call
     from goe.config import GoEConfig
@@ -68,6 +105,21 @@ These constraints MUST be satisfied for the vulnerability to work:
 
 """ if logic_reqs else ""
 
+    edge_schemas = edge_schemas or {}
+    provided_schema = {
+        eid: s for eid, s in edge_schemas.items() if s.get("direction") == "provides"
+    }
+    schema_section = f"""## Edge Schemas (declared param keys — fill these EXACTLY, never invent keys)
+
+```json
+{json.dumps(edge_schemas, indent=2)}
+```
+
+For every edge in your `provides`, `outgoing_edge_values[edge_id]` MUST be a dict whose keys
+are exactly the declared params above, each set to a concrete value you actually built.
+
+""" if edge_schemas else ""
+
     user_msg = f"""## Entity Spec
 
 ```json
@@ -80,7 +132,7 @@ These constraints MUST be satisfied for the vulnerability to work:
 {plan.model_dump_json(indent=2)}
 ```
 
-{spec_section}## Incoming Edge Values
+{spec_section}{schema_section}## Incoming Edge Values
 
 ```json
 {json.dumps(incoming_edges, indent=2)}
@@ -98,6 +150,8 @@ Output ONLY valid JSON matching the schema in the system prompt."""
 
         db_data = data.pop("db_setup", None)
         outgoing = data.pop("outgoing_edge_values", {})
+
+        validate_outgoing_edge_values(outgoing, provided_schema)
 
         artifact = BuildArtifact(
             source_files=data["source_files"],
@@ -130,8 +184,9 @@ Compare your implementation against the proven patterns below:
 1. **Self-contained**: Does the script set up the misconfiguration from scratch without external dependencies?
 2. **Vulnerability present**: Is the misconfiguration from the plan actually applied and not accidentally fixed?
 3. **Idempotent**: Does the script avoid errors if run a second time (use -f for rm, || true for commands that may fail)?
-4. **Outgoing values**: Are all outgoing_edge_values set to concrete values (not placeholders)?
-5. **Atom guidance**: Does your implementation satisfy the atom synthesis guidance above (if provided)? Fix any violations.
+4. **Outgoing values**: For every provided edge, are ALL its declared params present in outgoing_edge_values, set to concrete values (not placeholders) that match what the script actually created (same username, same password/secret, etc.)?
+5. **Incoming values**: If incoming_edges is non-empty, did you reuse every incoming param EXACTLY (no re-invented usernames/paths/tokens)?
+6. **Atom guidance**: Does your implementation satisfy the atom synthesis guidance above (if provided)? Fix any violations.
 
 If any check fails, output the corrected JSON. If all checks pass, output the original JSON unchanged.
 Output ONLY valid JSON."""
@@ -144,7 +199,8 @@ Output ONLY valid JSON."""
 4. **Seeding**: Is there exactly ONE seeding approach — either inline startup OR db_setup, never both?
 5. **Vulnerability present**: Is the vulnerability from the plan actually present and not accidentally sanitized?
 6. **Single file**: Is the entire app in a single source file?
-7. **Atom guidance**: Does your implementation satisfy the atom synthesis guidance above (if provided)? Fix any violations.
+7. **Edge values**: For every provided edge, are ALL its declared params present in outgoing_edge_values with concrete values that match what the app seeds/leaks (e.g. the exact username AND password in the DB)? And did you reuse every incoming param exactly?
+8. **Atom guidance**: Does your implementation satisfy the atom synthesis guidance above (if provided)? Fix any violations.
 
 If any check fails, output the corrected JSON. If all checks pass, output the original JSON unchanged.
 Output ONLY valid JSON."""

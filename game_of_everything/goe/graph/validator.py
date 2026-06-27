@@ -14,12 +14,12 @@ if TYPE_CHECKING:
 EDGE_TYPE_PARAMS: dict[EdgeType, set[str]] = {
     EdgeType.network_reach: {"host", "port"},
     EdgeType.shell_as: {"user", "host"},
-    EdgeType.creds_for: {"user", "host", "cred_type"},
+    EdgeType.creds_for: {"user", "host", "cred_type", "secret"},
     EdgeType.db_session: {"db_type", "host", "user"},
     EdgeType.file_read: {"path", "host", "as_user"},
     EdgeType.file_write: {"path", "host", "as_user"},
     EdgeType.code_exec: {"runtime", "host", "as_user"},
-    EdgeType.token_for: {"service", "host", "scope"},
+    EdgeType.token_for: {"service", "host", "scope", "token"},
 }
 
 

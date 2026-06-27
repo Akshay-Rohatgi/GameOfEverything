@@ -117,9 +117,11 @@ expect:
 2. **All steps run from the attacker**: use `exec_attacker` and `http_request` only. Never `exec_target`.
 3. **The final step MUST assert end-to-end success** — e.g. a shell command executing on the final target, or a final credential being verified.
 4. **Use concrete edge values**: the `concrete` param values are already known — use them directly via `${edge.<id>.<param>}` rather than re-discovering them.
-5. **Keep it minimal**: only the steps needed to prove the chain works end-to-end.
-6. **sshpass for SSH**: use `sshpass -p '<password>'` for non-interactive SSH. The attacker container has sshpass pre-installed.
-7. **No browser sessions**: do not include `sessions` or use browser actions.
+5. **Keep it minimal**: only the steps needed to prove the chain works end-to-end. ONE step per entity is the target. Do NOT add steps for the same entity that you already have a step for.
+6. **No speculative recon**: only reference files, paths, users, and artefacts that actually exist in the graph (edge values, build artifacts, entity specs). NEVER invent extra filenames (e.g. `credentials.txt`, `users.txt`, `readme.txt`), guess username lists, recurse/enumerate shares, or "download all files". If the build planted exactly one artefact, interact with exactly that artefact. Inventing artefacts that were never created is the #1 cause of false chain-test failures.
+7. **Probe steps must not gate on `exit_code: 0`**: any step that explores, enumerates, or tries something that may legitimately not exist (a missing file, an absent user, an optional path) MUST assert on a positive signal of success (`stdout_contains` / `stdout_regex` matching a known artefact), NOT on `exit_code: 0`. A tool like `smbclient`, `ssh`, or `grep` returning non-zero on "not found" is expected and must not fail the chain. Only use `exit_code: 0` when the command is guaranteed to succeed given the known graph state.
+8. **sshpass for SSH**: use `sshpass -p '<password>'` for non-interactive SSH. The attacker container has sshpass pre-installed.
+9. **No browser sessions**: do not include `sessions` or use browser actions.
 
 ## Output Format
 

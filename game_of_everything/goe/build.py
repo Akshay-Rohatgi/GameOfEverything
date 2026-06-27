@@ -16,6 +16,7 @@ def build_entity(
     scope: str = "",
     verbose: bool = True,
     env=None,  # TestEnvironment | ProgressiveEnvironment | None
+    edge_schemas: dict | None = None,
 ) -> "BuildOutcome":
     """Run the full build pipeline for a single entity.
 
@@ -34,6 +35,8 @@ def build_entity(
         verbose: Print progress to stdout.
         env: Optional pre-created environment (ProgressiveEnvironment or TestEnvironment).
             If provided, build_entity will not call setup() or teardown().
+        edge_schemas: Optional {edge_id: {"type", "direction", "params"}} for the entity's
+            provided/required edges — constrains the param keys the developer may emit.
 
     Returns:
         BuildOutcome wrapping the EntityResult plus the final deploy script,
@@ -73,7 +76,7 @@ def build_entity(
     section("PHASE 1: Construction Crew")
     log("Running engineer...")
     t0 = time.time()
-    crew: CrewResult = crew_build(entity, incoming_edges)
+    crew: CrewResult = crew_build(entity, incoming_edges, edge_schemas=edge_schemas)
     log(f"Crew finished in {time.time() - t0:.1f}s")
 
     section("Engineer Plan")
@@ -183,7 +186,7 @@ def build_entity(
                 diagnosis = diagnose(entity, crew.artifact, result, env)
             log(f"Diagnosis: {diagnosis.category} — {diagnosis.description}")
 
-            new_crew = retry_crew(entity, incoming_edges, crew, diagnosis, attempt)
+            new_crew = retry_crew(entity, incoming_edges, crew, diagnosis, attempt, edge_schemas=edge_schemas)
             if new_crew is None:
                 log("Max retries exceeded.")
                 return BuildOutcome(

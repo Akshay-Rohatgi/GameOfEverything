@@ -73,3 +73,6 @@ edges:
       cred_type:
         structural: password
         concrete: null
+      secret:
+        structural: db_user_password
+        concrete: null

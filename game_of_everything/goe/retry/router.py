@@ -25,6 +25,7 @@ def retry(
     crew_result: "CrewResult",
     diagnosis: "Diagnosis",
     attempt: int,
+    edge_schemas: dict | None = None,
 ) -> "CrewResult | None":
     """Return a new CrewResult after re-running the appropriate crew members.
 
@@ -63,7 +64,9 @@ def retry(
         if attempt > _MAX_IMPLEMENTATION_RETRIES:
             return None
         # Re-run developer + attacker — engineer plan is fine
-        new_artifact, new_outgoing = developer.develop(entity, crew_result.plan, incoming_edges)
+        new_artifact, new_outgoing = developer.develop(
+            entity, crew_result.plan, incoming_edges, edge_schemas=edge_schemas
+        )
         new_procedure = attacker.attack(entity, crew_result.plan, new_artifact, new_outgoing)
         return CrewResult(
             artifact=new_artifact,
@@ -75,4 +78,4 @@ def retry(
     else:  # design_flaw — full crew re-run
         if attempt > _MAX_DESIGN_RETRIES:
             return None
-        return build(entity, incoming_edges)
+        return build(entity, incoming_edges, edge_schemas=edge_schemas)

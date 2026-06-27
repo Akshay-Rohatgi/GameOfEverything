@@ -23,7 +23,7 @@ class BuildOutcomeSnapshot(BaseModel):
 
     deploy_script: str
     procedure: dict | None = None  # Procedure.model_dump(mode="json")
-    outgoing_values: dict[str, str] = {}
+    outgoing_values: dict[str, dict[str, str]] = {}  # edge_id → {param: value}
     attempts: int = 1
 
 

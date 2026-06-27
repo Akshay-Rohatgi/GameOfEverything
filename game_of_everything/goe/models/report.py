@@ -39,7 +39,7 @@ class BuildOutcome:
     result: "EntityResult"
     deploy_script: str | None = None
     procedure: "Procedure | None" = None
-    outgoing_values: dict[str, str] = field(default_factory=dict)
+    outgoing_values: dict[str, dict[str, str]] = field(default_factory=dict)  # edge_id → {param: value}
 
 
 class ChainTestStatus(str, Enum):

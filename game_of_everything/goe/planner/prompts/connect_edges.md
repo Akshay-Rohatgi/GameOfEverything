@@ -83,6 +83,8 @@ Use STRUCTURAL values in params (descriptive identifiers, not concrete values):
 - `user`, `as_user`: role descriptor (e.g. `"www-data"`, `"app_user"`, `"db_admin"`)
 - `path`: descriptor (e.g. `"config_file"`, `"webshell_path"`, `"shadow_file"`)
 - `cred_type`: one of `"password"`, `"ssh_key"`, `"api_key"`
+- `secret` (creds_for): descriptor for the actual secret value (e.g. `"db_user_password"`, `"ssh_private_key"`) — the concrete password/key is filled in after build
+- `token` (token_for): descriptor for the captured token/cookie (e.g. `"admin_session_cookie"`) — the concrete value is filled in after build
 - `runtime`: one of `"node"`, `"python"`, `"php"`
 - `service`, `scope`: descriptive strings
 
@@ -123,7 +125,8 @@ Use STRUCTURAL values in params (descriptive identifiers, not concrete values):
     "params": {
       "user": {"structural": "db_user", "concrete": null},
       "host": {"structural": "target", "concrete": null},
-      "cred_type": {"structural": "password", "concrete": null}
+      "cred_type": {"structural": "password", "concrete": null},
+      "secret": {"structural": "db_user_password", "concrete": null}
     }
   },
   {

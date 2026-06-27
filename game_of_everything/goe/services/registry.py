@@ -24,20 +24,36 @@ _RECIPES_DIR = Path(__file__).parent / "recipes"
 class ServiceRegistry:
     """Loads service recipes and generates deployment/restart scripts."""
 
+    _ALIASES: dict[str, str] = {
+        "ssh": "openssh",
+        "sshd": "openssh",
+        "smb": "samba",
+        "cifs": "samba",
+        "mariadb": "mysql",
+        "httpd": "apache",
+        "vsftpd": "ftp",
+        "php-fpm": "php_fpm",
+        "memcache": "memcached",
+    }
+
     def __init__(self):
         self._recipes: dict[str, dict] = {}
         for path in _RECIPES_DIR.glob("*.yaml"):
             data = yaml.safe_load(path.read_text())
             self._recipes[data["id"]] = data
 
+    def _resolve_id(self, service_id: str) -> str:
+        return self._ALIASES.get(service_id, service_id)
+
     def get_recipe(self, service_id: str) -> dict:
-        """Get a recipe by ID. Raises ValueError if not found."""
-        if service_id not in self._recipes:
+        """Get a recipe by ID (or alias). Raises ValueError if not found."""
+        resolved = self._resolve_id(service_id)
+        if resolved not in self._recipes:
             available = list(self._recipes.keys())
             raise ValueError(
                 f"Unknown service: {service_id!r}. Available: {available}"
             )
-        return self._recipes[service_id]
+        return self._recipes[resolved]
 
     def deploy_all(self, specs: list[ServiceSpec]) -> str:
         """Generate a bash script that installs, configures, and starts all services.

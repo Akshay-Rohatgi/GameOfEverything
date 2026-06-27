@@ -163,12 +163,24 @@ def run_chain_test(
             "systems": systems_ctx,
             "edges": {},
         }
-        # Populate edge concrete values into ctx["edges"]
+        # Populate edge concrete values into ctx["edges"]. Every consumed param should
+        # carry a concrete value by now (resolve.py + the build's edge propagation). If a
+        # param is still unfilled we fall back to its structural description to interpolate
+        # *something*, but log it loudly — a structural placeholder (e.g. "db_username")
+        # leaking into an executed command is a partial-information bug, not a valid value.
         for edge in graph.edges:
-            ctx["edges"][edge.id] = {
-                p: (pv.concrete or pv.structural)
-                for p, pv in edge.params.items()
-            }
+            resolved: dict[str, str] = {}
+            for p, pv in edge.params.items():
+                if pv.concrete is not None:
+                    resolved[p] = pv.concrete
+                else:
+                    logger.warning(
+                        "ChainTest: edge %s param '%s' has no concrete value; "
+                        "falling back to structural placeholder '%s'",
+                        edge.id, p, pv.structural,
+                    )
+                    resolved[p] = pv.structural
+            ctx["edges"][edge.id] = resolved
 
         attempt = 0
         while attempt <= MAX_RETRIES:

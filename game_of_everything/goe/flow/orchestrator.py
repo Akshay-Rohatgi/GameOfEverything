@@ -31,48 +31,27 @@ class RunResult:
     failed: dict[str, str] = field(default_factory=dict)
     final_violations: list = field(default_factory=list)
     chain_test: object = None  # ChainTestResult | None
+    edge_gaps: list = field(default_factory=list)  # ["edge_id.param", ...] unfilled params
 
 
-def _populate_edge_concrete(graph: EntityGraph, entity_id: str, outgoing_values: dict[str, str]) -> None:
+def _populate_edge_concrete(
+    graph: EntityGraph, entity_id: str, outgoing_values: dict[str, dict[str, str]]
+) -> None:
     """Write build-time concrete values back onto graph edge params.
 
-    The developer outputs one flat string per outgoing edge. We store it based on
-    edge type semantics so the chain attacker can reference individual params:
-      - shell_as: flat value = username → written to 'user' param
-      - creds_for: flat value = password → written to 'password' param (created if missing)
-      - network_reach: flat value = host or port (less common)
-      - any edge: flat value also stored as 'value' param (universal fallback)
+    The developer emits a per-param dict for each outgoing edge
+    (`{edge_id: {param: value}}`). We write each value onto the matching, already-declared
+    edge param — keys are fixed at plan time, so we never add, rename, or invent params.
+    Undeclared keys are rejected at developer parse time; we ignore them defensively here.
     """
-    from goe.models.edge import EdgeType, ParamValue
-
     for edge in graph.edges:
-        if edge.id not in outgoing_values:
+        payload = outgoing_values.get(edge.id)
+        if not payload:
             continue
-        val = outgoing_values[edge.id]
-
-        # Store under semantically appropriate param
-        if edge.type == EdgeType.shell_as:
-            if "user" in edge.params:
-                edge.params["user"].concrete = val
-            # Backfill: if there's an upstream creds_for edge targeting the same
-            # entity, its 'user' param is the same username
-            for other in graph.edges:
-                if other.type == EdgeType.creds_for and other.to_entity == edge.from_entity:
-                    if "user" in other.params and other.params["user"].concrete is None:
-                        other.params["user"].concrete = val
-        elif edge.type == EdgeType.creds_for:
-            if "password" not in edge.params:
-                edge.params["password"] = ParamValue(structural="password", concrete=val)
-            else:
-                edge.params["password"].concrete = val
-        elif edge.type == EdgeType.network_reach:
-            pass  # network_reach edges usually have concrete from planning
-
-        # Universal fallback: always store as 'value' so ${edge.<id>.value} works
-        if "value" not in edge.params:
-            edge.params["value"] = ParamValue(structural="credential_or_artifact", concrete=val)
-        else:
-            edge.params["value"].concrete = val
+        for param_name, value in payload.items():
+            param = edge.params.get(param_name)
+            if param is not None:
+                param.concrete = value
 
 
 def _slug(text: str, max_len: int = 40) -> str:
@@ -185,7 +164,7 @@ def run(
             system_entities = [e for e in graph.entities if e.system_id == system.id]
             all_ubuntu = all(e.runtime == Runtime.ubuntu for e in system_entities)
             if all_ubuntu and (len(system_entities) > 1 or system.services):
-                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}")
+                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}_{system.id}")
                 penv.setup()
                 # Register before provision() so the finally tears it down even
                 # if service provisioning fails partway through.
@@ -197,6 +176,7 @@ def run(
             if nxt is None:
                 break  # defensive — nothing buildable but not complete
             entity, incoming = nxt
+            edge_schemas = _edge_schemas_for(graph, entity)
 
             import sys
             print(f"[ORCH] Building entity {entity.id} on system {entity.system_id}", file=sys.stderr)
@@ -218,6 +198,7 @@ def run(
                     scope=f"run_{entity.id[:12]}",
                     verbose=verbose,
                     env=penv,
+                    edge_schemas=edge_schemas,
                 )
             else:
                 # Web apps or single-entity systems: use per-entity isolation
@@ -226,6 +207,7 @@ def run(
                     incoming_edges=incoming,
                     scope=f"run_{entity.id[:12]}",
                     verbose=verbose,
+                    edge_schemas=edge_schemas,
                 )
 
             if outcome.result.status == EntityStatus.PASSED:
@@ -271,6 +253,19 @@ def run(
         for penv in progressive_envs.values():
             penv.teardown()
 
+    # ---- Edge completeness guard ------------------------------------------
+    # Every declared param of a consumed edge must carry a concrete value by now.
+    # A gap means partial information was lost between entities (e.g. a username that
+    # never propagated) — fail loudly rather than letting chain_test silently inject the
+    # structural placeholder text into commands.
+    edge_gaps = _incomplete_consumed_edges(graph, built)
+    if edge_gaps:
+        import sys
+        print(
+            f"[ORCH] Incomplete edge params after build: {', '.join(edge_gaps)}",
+            file=sys.stderr,
+        )
+
     # ---- Phase 3: chain test (any run with > 1 entity built) ---------------
     from goe.models.report import ChainTestResult, ChainTestStatus
 
@@ -302,9 +297,9 @@ def run(
         output_dir = OUTPUT_ROOT / state.run_id
         package(graph, built, output_dir, request=request, chain_procedure=chain_procedure)
 
-    # Gating: chain test failure makes the overall run fail
+    # Gating: chain test failure OR incomplete edge params make the overall run fail
     chain_passed = chain_test is None or chain_test.status == ChainTestStatus.PASSED
-    success = bool(built) and not state.failed and chain_passed
+    success = bool(built) and not state.failed and chain_passed and not edge_gaps
 
     if console:
         console.summary(
@@ -322,7 +317,65 @@ def run(
         success=success,
         failed={eid: fail.reason for eid, fail in state.failed.items()},
         chain_test=chain_test,
+        edge_gaps=edge_gaps,
     )
+
+
+def _edge_schemas_for(graph: "EntityGraph", entity: "Entity") -> dict:
+    """Declared param schema for the edges this entity provides/requires.
+
+    Returns {edge_id: {"type", "direction", "params": [declared param names]}}. The param
+    keys come straight from the plan-time edge definitions, so the developer fills values
+    for fixed keys and never invents structure.
+    """
+    provided = set(entity.provides)
+    required = {r.edge_id for r in entity.requires}
+    schemas: dict = {}
+    for edge in graph.edges:
+        if edge.id in provided:
+            direction = "provides"
+            # The developer only fills params not already resolved at plan time
+            # (host/port come from resolve.py); this also stops it overwriting them.
+            params = sorted(p for p, pv in edge.params.items() if pv.concrete is None)
+        elif edge.id in required:
+            direction = "requires"
+            params = sorted(edge.params.keys())
+        else:
+            continue
+        schemas[edge.id] = {
+            "type": edge.type.value,
+            "direction": direction,
+            "params": params,
+        }
+    return schemas
+
+
+def _incomplete_consumed_edges(graph: "EntityGraph", built: dict) -> list[str]:
+    """Find edges consumed by a built entity that still have unfilled (partial) params.
+
+    After build + propagation every declared param of a consumed edge must have a concrete
+    value (resolve.py fills host/port; the producing developer fills the rest). A declared
+    param left with concrete=None means information was lost in transit — return a list of
+    human-readable "edge_id.param" identifiers so the caller can fail loudly instead of
+    silently substituting the structural description text into executed commands.
+    """
+    required_ids: set[str] = set()
+    for eid in built:
+        entity = graph.entity_by_id(eid)
+        if entity is not None:
+            required_ids.update(r.edge_id for r in entity.requires)
+
+    missing: list[str] = []
+    for edge in graph.edges:
+        if edge.id not in required_ids:
+            continue
+        # Only check edges whose producer actually built (operator edges always count).
+        if edge.from_entity != "operator" and edge.from_entity not in built:
+            continue
+        for param_name, pv in edge.params.items():
+            if pv.concrete is None:
+                missing.append(f"{edge.id}.{param_name}")
+    return missing
 
 
 def _same_system_parent(graph: "EntityGraph", entity: "Entity") -> str | None:

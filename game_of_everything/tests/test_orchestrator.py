@@ -12,15 +12,21 @@ from goe.graph.models import EntityGraph
 from goe.models.procedure import ExecAttackerAction, Procedure, Step
 from goe.models.report import BuildOutcome, ChainTestResult, ChainTestStatus, EntityResult, EntityStatus
 from goe.planner.pipeline import PlanResult
+from goe.planner.resolve import resolve
 
 FIXTURES = Path(__file__).parent / "fixtures" / "graphs"
 
+# Concrete creds the sqli_entity build "leaks" — every declared param of the consumed
+# creds_for edge, so the edge-completeness guard is satisfied (host comes from resolve()).
+_SQLI_CREDS = {"sqli_to_ssh": {"user": "admin", "secret": "hunter2", "cred_type": "password"}}
+
 
 def _graph() -> EntityGraph:
-    return EntityGraph.from_yaml(FIXTURES / "valid_2entity_chain.yaml")
+    # Mirror the real pipeline: plan() returns an already-resolved graph (host/port filled).
+    return resolve(EntityGraph.from_yaml(FIXTURES / "valid_2entity_chain.yaml"))
 
 
-def _passed_outcome(entity_id: str, outgoing: dict[str, str]) -> BuildOutcome:
+def _passed_outcome(entity_id: str, outgoing: dict) -> BuildOutcome:
     proc = Procedure(procedure=[
         Step(step_id=f"{entity_id}_s1",
              action=ExecAttackerAction(type="exec_attacker", command="echo hi"))
@@ -50,10 +56,10 @@ def test_propagation_and_packaging(output_root):
     graph = _graph()
     seen_incoming: dict[str, dict] = {}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
         seen_incoming[entity.id] = dict(incoming_edges or {})
         if entity.id == "sqli_entity":
-            return _passed_outcome("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
+            return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
         return _passed_outcome("ssh_entity", {})
 
     chain_outcome = ChainTestOutcome(
@@ -68,8 +74,8 @@ def test_propagation_and_packaging(output_root):
         result = orchestrator.run("sqli to ssh")
 
     assert result.success
-    # Value propagated from sqli_entity to ssh_entity's incoming edges.
-    assert seen_incoming["ssh_entity"] == {"sqli_to_ssh": "admin:hunter2"}
+    # Full credential dict (incl. username) propagated from sqli_entity to ssh_entity.
+    assert seen_incoming["ssh_entity"] == _SQLI_CREDS
     # Package produced.
     assert result.output_dir is not None
     assert (result.output_dir / "deploy.sh").exists()
@@ -79,13 +85,55 @@ def test_propagation_and_packaging(output_root):
     assert result.chain_test.status == ChainTestStatus.PASSED
 
 
+def test_incomplete_edge_param_fails_run(output_root):
+    """If the producer omits a declared param (partial info), the run must fail loudly
+    rather than silently substituting the structural placeholder downstream."""
+    graph = _graph()
+
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
+        if entity.id == "sqli_entity":
+            # Leak only the username — 'secret' and 'cred_type' never propagate.
+            return _passed_outcome("sqli_entity", {"sqli_to_ssh": {"user": "admin"}})
+        return _passed_outcome("ssh_entity", {})
+
+    chain_outcome = ChainTestOutcome(result=ChainTestResult(status=ChainTestStatus.PASSED))
+
+    with patch("goe.planner.pipeline.plan",
+               return_value=PlanResult(graph=graph, success=True, attempts=1)), \
+         patch("goe.build.build_entity", side_effect=fake_build), \
+         patch("goe.flow.chain_test.run_chain_test", return_value=chain_outcome), \
+         _mock_progressive_env_patch():
+        result = orchestrator.run("sqli to ssh")
+
+    assert not result.success
+    # The unfilled params are reported (secret + cred_type on the consumed creds_for edge).
+    assert "sqli_to_ssh.secret" in result.edge_gaps
+    assert "sqli_to_ssh.cred_type" in result.edge_gaps
+
+
+def test_populate_edge_concrete_writes_all_declared_params(output_root):
+    """_populate_edge_concrete writes every payload param onto the matching declared edge
+    param, for any edge type, and never invents keys."""
+    graph = _graph()  # sqli_to_ssh is creds_for {user, host, cred_type, secret}
+    orchestrator._populate_edge_concrete(
+        graph, "sqli_entity",
+        {"sqli_to_ssh": {"user": "admin", "secret": "hunter2", "cred_type": "password"}},
+    )
+    edge = graph.edge_by_id("sqli_to_ssh")
+    assert edge.params["user"].concrete == "admin"
+    assert edge.params["secret"].concrete == "hunter2"
+    assert edge.params["cred_type"].concrete == "password"
+    # No phantom keys created (e.g. the old 'value' / 'password' backfill).
+    assert set(edge.params) == {"user", "host", "cred_type", "secret"}
+
+
 def test_chain_test_failure_gates_success(output_root):
     """A failed chain test must make RunResult.success=False even if all entities built."""
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
         if entity.id == "sqli_entity":
-            return _passed_outcome("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
+            return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
         return _passed_outcome("ssh_entity", {})
 
     chain_outcome = ChainTestOutcome(
@@ -110,7 +158,7 @@ def test_chain_test_failure_gates_success(output_root):
 def test_failed_entity_skips_dependents(output_root):
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
         if entity.id == "sqli_entity":
             return BuildOutcome(
                 result=EntityResult(
@@ -146,10 +194,10 @@ def test_checkpoint_resume_skips_completed(output_root):
     graph = _graph()
     call_count = {"n": 0}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
         call_count["n"] += 1
         if entity.id == "sqli_entity":
-            return _passed_outcome("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
+            return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
         # ssh_entity fails on the first run so the run is resumable mid-flight.
         if call_count["n"] <= 2 and entity.id == "ssh_entity":
             return BuildOutcome(result=EntityResult(
