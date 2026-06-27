@@ -118,6 +118,7 @@ Output ONLY valid YAML (no markdown fences, no explanation)."""
 3. **Edge value usage**: stolen credentials and other artefacts are referenced via `${edge.<id>.<param>}` or `${steps.<step_id>.<output>}` — not hardcoded.
 4. **Final step assertion**: the last step explicitly verifies the end-to-end attack succeeded (command output, credential visible, etc.).
 5. **Topological order**: entities are exploited in dependency order (upstream entity before downstream).
+6. **Distinct technique per entity**: each entity's specific attack technique must be exercised. Do NOT reuse an upstream entity's access method to bypass a downstream entity. For example, if a command injection entity provides a shell (reverse shell, bind shell, SSH), and a subsequent entity does privilege escalation, the privesc MUST run from within the obtained shell — NOT by piping commands through the original HTTP injection.
 
 If any check fails, output the corrected YAML. If all pass, output the original YAML unchanged.
 Output ONLY valid YAML (no markdown fences)."""

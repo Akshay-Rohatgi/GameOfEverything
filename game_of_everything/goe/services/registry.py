@@ -45,6 +45,14 @@ class ServiceRegistry:
     def _resolve_id(self, service_id: str) -> str:
         return self._ALIASES.get(service_id, service_id)
 
+    def has_recipe(self, service_id: str) -> bool:
+        """True if a recipe exists for this service id (or alias).
+
+        Lets callers skip pseudo-services like ``web``/``database`` that are handled by the
+        web runtime layer rather than the ServiceRegistry.
+        """
+        return self._resolve_id(service_id) in self._recipes
+
     def get_recipe(self, service_id: str) -> dict:
         """Get a recipe by ID (or alias). Raises ValueError if not found."""
         resolved = self._resolve_id(service_id)

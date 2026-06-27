@@ -129,6 +129,14 @@ def run(
         console.header(request, len(graph.entities))
 
     # ---- Phase 2: schedule + build ----------------------------------------
+    # Materialize generable edge secrets (SSH keypairs) deterministically before any
+    # entity builds, so the producer and consumer embed the SAME key. Idempotent on resume.
+    from goe.graph.secrets import materialize_secrets
+    materialized = materialize_secrets(graph)
+    if materialized:
+        import sys
+        print(f"[ORCH] Materialized secrets for edges: {', '.join(materialized)}", file=sys.stderr)
+
     sched = BuildScheduler(graph)
     built: dict[str, object] = {}  # entity_id → BuildOutcome
     results: list = []
@@ -162,8 +170,7 @@ def run(
     try:
         for system in graph.systems:
             system_entities = [e for e in graph.entities if e.system_id == system.id]
-            all_ubuntu = all(e.runtime == Runtime.ubuntu for e in system_entities)
-            if all_ubuntu and (len(system_entities) > 1 or system.services):
+            if len(system_entities) > 1 or system.services:
                 penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}_{system.id}")
                 penv.setup()
                 # Register before provision() so the finally tears it down even
@@ -177,6 +184,8 @@ def run(
                 break  # defensive — nothing buildable but not complete
             entity, incoming = nxt
             edge_schemas = _edge_schemas_for(graph, entity)
+            system_context = _system_chain_context(graph, entity)
+            provided_values = _provided_values_for(graph, entity)
 
             import sys
             print(f"[ORCH] Building entity {entity.id} on system {entity.system_id}", file=sys.stderr)
@@ -199,15 +208,19 @@ def run(
                     verbose=verbose,
                     env=penv,
                     edge_schemas=edge_schemas,
+                    system_context=system_context,
+                    provided_values=provided_values,
                 )
             else:
-                # Web apps or single-entity systems: use per-entity isolation
+                # Single-entity systems (no services): per-entity isolation
                 outcome = build_entity(
                     entity,
                     incoming_edges=incoming,
                     scope=f"run_{entity.id[:12]}",
                     verbose=verbose,
                     edge_schemas=edge_schemas,
+                    system_context=system_context,
+                    provided_values=provided_values,
                 )
 
             if outcome.result.status == EntityStatus.PASSED:
@@ -350,6 +363,71 @@ def _edge_schemas_for(graph: "EntityGraph", entity: "Entity") -> dict:
     return schemas
 
 
+def _provided_values_for(graph: "EntityGraph", entity: "Entity") -> dict:
+    """Concrete values already determined for the edges this entity *provides*.
+
+    Returns ``{edge_id: {param: concrete}}`` for provided-edge params that carry a concrete
+    value at build time — host/port resolved by ``resolve.py`` and secrets materialized by
+    ``graph.secrets``. The producing developer is told to use these EXACT values in its
+    implementation (e.g. write the base64-decoded SSH key to the file it serves) rather than
+    generating fresh material that would not match the consumer.
+    """
+    provided = set(entity.provides)
+    out: dict[str, dict[str, str]] = {}
+    for edge in graph.edges:
+        if edge.id not in provided:
+            continue
+        concretes = {p: pv.concrete for p, pv in edge.params.items() if pv.concrete is not None}
+        if concretes:
+            out[edge.id] = concretes
+    return out
+
+
+def _system_chain_context(graph: "EntityGraph", entity: "Entity") -> str:
+    """Render the system + killchain context for an entity's build prompts.
+
+    Gives the engineer/developer what they were previously missing: the system this entity
+    runs on (and the services the platform already provides there), plus a one-line summary of
+    every sibling entity and the system it lives on. With this, an agent knows it is building
+    ONE link of a larger chain whose other links stay deployed — so it should not re-implement
+    another system's role (e.g. an SMB entity standing up a whole SSH server).
+    """
+    system = graph.system_by_id(entity.system_id)
+    lines: list[str] = ["## System & Chain Context", ""]
+
+    if system is not None:
+        services = ", ".join(s.id for s in system.services) or "(none)"
+        lines += [
+            f"This entity runs on system **{system.id}** (hostname `{system.network.hostname}`).",
+            f"- Services already installed and running on this system (provided by the platform): **{services}**",
+            "  Configure these services for your vulnerability — do NOT install or restart them, "
+            "and do NOT add services this system does not declare.",
+            "",
+        ]
+
+    siblings = [e for e in graph.entities if e.id != entity.id]
+    if siblings:
+        lines.append("Other entities in this scenario stay deployed and handle their own links — "
+                     "do NOT re-create their setup:")
+        for sib in siblings:
+            sib_sys = graph.system_by_id(sib.system_id)
+            host = f"/{sib_sys.network.hostname}" if sib_sys is not None else ""
+            lines.append(f"- `{sib.id}` (on system `{sib.system_id}`{host}): {sib.description}")
+        lines.append("")
+
+    # The edges this entity consumes/provides describe exactly which link it owns.
+    reqs = [r.edge_id for r in entity.requires]
+    if reqs:
+        lines.append(f"You consume (require) these edges from upstream: {', '.join(reqs)}.")
+    if entity.provides:
+        lines.append(f"You hand off (provide) these edges to downstream: {', '.join(entity.provides)}.")
+    lines.append(
+        "Build ONLY your own link. The end-to-end attack across systems is verified separately "
+        "by the chain test — your success indicator must be observable on THIS system alone."
+    )
+    return "\n".join(lines) + "\n"
+
+
 def _incomplete_consumed_edges(graph: "EntityGraph", built: dict) -> list[str]:
     """Find edges consumed by a built entity that still have unfilled (partial) params.
 
@@ -375,7 +453,22 @@ def _incomplete_consumed_edges(graph: "EntityGraph", built: dict) -> list[str]:
         for param_name, pv in edge.params.items():
             if pv.concrete is None:
                 missing.append(f"{edge.id}.{param_name}")
+            elif param_name == "secret" and _looks_like_path_secret(edge, pv.concrete):
+                # A creds_for ssh secret must be key *material* (base64 PEM), not a file path.
+                # This was the original bug: the producer leaked "/srv/.../id_rsa" and the
+                # consumer regenerated its own key. Fail loudly rather than ship a broken chain.
+                missing.append(f"{edge.id}.{param_name} (path, not key material)")
     return missing
+
+
+def _looks_like_path_secret(edge, value: str) -> bool:
+    """True if a creds_for SSH ``secret`` carries a filesystem path instead of key material."""
+    from goe.graph.secrets import _is_ssh_key
+
+    if not _is_ssh_key(edge.params.get("cred_type")):
+        return False
+    v = (value or "").strip()
+    return v.startswith("/") and "\n" not in v and "BEGIN" not in v
 
 
 def _same_system_parent(graph: "EntityGraph", entity: "Entity") -> str | None:

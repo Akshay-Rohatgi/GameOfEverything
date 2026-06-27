@@ -83,7 +83,7 @@ Use STRUCTURAL values in params (descriptive identifiers, not concrete values):
 - `user`, `as_user`: role descriptor (e.g. `"www-data"`, `"app_user"`, `"db_admin"`)
 - `path`: descriptor (e.g. `"config_file"`, `"webshell_path"`, `"shadow_file"`)
 - `cred_type`: one of `"password"`, `"ssh_key"`, `"api_key"`
-- `secret` (creds_for): descriptor for the actual secret value (e.g. `"db_user_password"`, `"ssh_private_key"`) — the concrete password/key is filled in after build
+- `secret` (creds_for): descriptor for the actual secret value (e.g. `"db_user_password"`, `"ssh_private_key"`) — the concrete password/key is filled in after build. For SSH keys, set `cred_type` structural to `"ssh_key"`; the build generates one keypair and fills `secret` with base64 key material shared by both the serving and authorizing entities (you do NOT put a path here)
 - `token` (token_for): descriptor for the captured token/cookie (e.g. `"admin_session_cookie"`) — the concrete value is filled in after build
 - `runtime`: one of `"node"`, `"python"`, `"php"`
 - `service`, `scope`: descriptive strings

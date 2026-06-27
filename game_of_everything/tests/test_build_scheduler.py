@@ -41,13 +41,13 @@ def test_report_complete_propagates_values():
     graph = EntityGraph.from_yaml(FIXTURES / "valid_2entity_chain.yaml")
     sched = BuildScheduler(graph)
     sched.next_buildable()  # get sqli_entity
-    sched.report_complete("sqli_entity", {"sqli_to_ssh": "admin:hunter2"})
+    sched.report_complete("sqli_entity", {"sqli_to_ssh": {"user": "admin", "secret": "hunter2"}})
 
     result = sched.next_buildable()
     assert result is not None
     entity, incoming = result
     assert entity.id == "ssh_entity"
-    assert incoming == {"sqli_to_ssh": "admin:hunter2"}
+    assert incoming == {"sqli_to_ssh": {"user": "admin", "secret": "hunter2"}}
 
 
 def test_report_complete_marks_complete():
@@ -68,7 +68,7 @@ def test_is_complete_after_all_done():
     graph = EntityGraph.from_yaml(FIXTURES / "valid_2entity_chain.yaml")
     sched = BuildScheduler(graph)
     e1, _ = sched.next_buildable()
-    sched.report_complete(e1.id, {"sqli_to_ssh": "creds"})
+    sched.report_complete(e1.id, {"sqli_to_ssh": {"secret": "creds"}})
     e2, _ = sched.next_buildable()
     sched.report_complete(e2.id, {})
     assert sched.is_complete()
@@ -86,7 +86,7 @@ def test_4entity_chain_builds_in_order():
         entity, _ = result
         build_order.append(entity.id)
         # Simulate providing the outgoing edge value
-        outgoing = {e.id: f"value_from_{entity.id}" for e in graph.edges_from(entity.id)}
+        outgoing = {e.id: {"v": f"value_from_{entity.id}"} for e in graph.edges_from(entity.id)}
         sched.report_complete(entity.id, outgoing)
 
     assert build_order == ["entity_a", "entity_b", "entity_c", "entity_d"]
@@ -99,7 +99,7 @@ def test_failure_skips_downstream():
     # Build entity_a successfully
     e, _ = sched.next_buildable()
     assert e.id == "entity_a"
-    outgoing = {e_out.id: "val" for e_out in graph.edges_from(e.id)}
+    outgoing = {e_out.id: {"v": "val"} for e_out in graph.edges_from(e.id)}
     sched.report_complete(e.id, outgoing)
 
     # Fail entity_b

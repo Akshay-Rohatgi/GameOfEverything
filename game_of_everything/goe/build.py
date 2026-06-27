@@ -17,6 +17,8 @@ def build_entity(
     verbose: bool = True,
     env=None,  # TestEnvironment | ProgressiveEnvironment | None
     edge_schemas: dict | None = None,
+    system_context: str | None = None,
+    provided_values: dict | None = None,
 ) -> "BuildOutcome":
     """Run the full build pipeline for a single entity.
 
@@ -37,6 +39,12 @@ def build_entity(
             If provided, build_entity will not call setup() or teardown().
         edge_schemas: Optional {edge_id: {"type", "direction", "params"}} for the entity's
             provided/required edges — constrains the param keys the developer may emit.
+        system_context: Optional rendered markdown describing this entity's system, the
+            platform-provided services, and sibling entities — injected into the engineer and
+            developer prompts so each entity builds only its own link.
+        provided_values: Optional {edge_id: {param: concrete}} of already-determined values
+            for edges this entity provides (resolved hosts, materialized secrets) that the
+            developer must embed verbatim instead of regenerating.
 
     Returns:
         BuildOutcome wrapping the EntityResult plus the final deploy script,
@@ -76,7 +84,10 @@ def build_entity(
     section("PHASE 1: Construction Crew")
     log("Running engineer...")
     t0 = time.time()
-    crew: CrewResult = crew_build(entity, incoming_edges, edge_schemas=edge_schemas)
+    crew: CrewResult = crew_build(
+        entity, incoming_edges, edge_schemas=edge_schemas,
+        system_context=system_context, provided_values=provided_values,
+    )
     log(f"Crew finished in {time.time() - t0:.1f}s")
 
     section("Engineer Plan")
@@ -186,7 +197,10 @@ def build_entity(
                 diagnosis = diagnose(entity, crew.artifact, result, env)
             log(f"Diagnosis: {diagnosis.category} — {diagnosis.description}")
 
-            new_crew = retry_crew(entity, incoming_edges, crew, diagnosis, attempt, edge_schemas=edge_schemas)
+            new_crew = retry_crew(
+                entity, incoming_edges, crew, diagnosis, attempt, edge_schemas=edge_schemas,
+                system_context=system_context, provided_values=provided_values,
+            )
             if new_crew is None:
                 log("Max retries exceeded.")
                 return BuildOutcome(

@@ -74,4 +74,20 @@ Respond with ONLY valid JSON (no markdown, no explanation).
 - The misconfiguration must be exploitable by running shell commands directly on the target
 - `attack_entry_point` is a shell command (e.g. `find / -perm -4000 -user root 2>/dev/null`)
 - `success_indicator` is the expected text in command stdout (e.g. `root` or `uid=0`)
-- Design the setup to be self-contained: a bash script that creates the misconfiguration from scratch
+- The setup is a bash script that creates the misconfiguration. Build only the packages and
+  config unique to this vulnerability — do NOT re-implement services or accounts that the
+  System & Chain Context says are provided elsewhere.
+
+### Build ONE link of the chain (read the System & Chain Context if present)
+This entity is one step in a larger attack chain. Other entities — possibly on other systems —
+stay deployed and provide their own pieces.
+- Build only THIS entity's misconfiguration on ITS OWN system. Do not stand up another
+  system's role to make your step look complete (e.g. an SMB-share entity must NOT also install
+  an SSH server, create the login account, or write `authorized_keys` — that belongs to the SSH
+  entity on the SSH system).
+- Services listed as already provided by the platform are installed and running with a default
+  config — edit their config and reload/restart that service to apply your vulnerability, but do
+  not reinstall them or add a service this system does not declare.
+- Your `success_indicator` MUST be observable on this entity's own system in isolation (e.g.
+  "the key file is anonymously readable from the share"), NOT the end-to-end cross-system
+  outcome (NOT "SSH login to the other box succeeds"). The full chain is verified separately.

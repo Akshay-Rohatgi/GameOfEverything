@@ -88,6 +88,14 @@ built and what you reference must be byte-identical.
   emits `{user, secret, ...}`; consumer creates the **same** account with that exact
   `user` + `secret` (e.g. `useradd <user>` + set password to `<secret>`), or logs in with
   them. **The username MUST match — do not invent a different one.**
+  - **`cred_type=ssh_key` (SSH keypair):** `secret` is **base64 of an OpenSSH PRIVATE key**, never
+    a file path, and it is **pre-generated for you** (see Pre-Filled Provided Edge Values /
+    Incoming Edge Values) so both systems share ONE key. Never run `ssh-keygen` to make a new key.
+    - *Producer* (serves/leaks the key): write the private key to the path you expose —
+      `echo '<secret_b64>' | base64 -d > /srv/samba/public/id_rsa && chmod 644 /srv/samba/public/id_rsa`.
+      Do not create the login account or `authorized_keys` — that is the SSH entity's job.
+    - *Consumer* (authorizes the key): create the user, then install the matching PUBLIC key —
+      `echo '<secret_b64>' | base64 -d > /tmp/k && chmod 600 /tmp/k && install -d -m700 /home/<user>/.ssh && ssh-keygen -y -f /tmp/k > /home/<user>/.ssh/authorized_keys && chown -R <user>:<user> /home/<user>/.ssh`.
 - `shell_as {user, host}` — producer creates the shell user and emits `{user}`; consumer
   configures its vuln (sudo rule, SUID) for THAT exact `user`. **DO NOT `useradd`/`chpasswd`
   this user — they already exist; only add your misconfiguration for them.**
@@ -117,8 +125,15 @@ The Runtime Spec you receive may include a `developer_rules` field. These are ma
 - **Choose ONE seeding approach** — either seed inline at app startup (using `:memory:` or a file DB opened at startup) OR provide `db_setup` with schema/seed SQL, never both. If you seed inline in the app code, set `db_setup` to null/omit it entirely.
 - Keep it to a single source file
 - Do not add any input validation or sanitization near the vulnerability
-- **For ubuntu entities:** Always install required packages at the start of setup.sh:
+- **For ubuntu entities:** install only the packages unique to THIS entity's vulnerability:
   - Sudo config? → `apt-get install -y sudo`
-  - SSH config? → `apt-get install -y openssh-server`
-  - Samba config? → `apt-get install -y samba`
-  - Never assume packages are pre-installed
+  - SUID/privesc helper binaries → install only what your vuln needs
+  - **Declared system services (see the System & Chain Context) are ALREADY installed and
+    running** — e.g. if the system declares `smb`/`ssh`, samba/openssh are present with a default
+    config. Edit their config for your vulnerability and reload/restart THAT service to apply it
+    (e.g. append your `[public]` share to `/etc/samba/smb.conf` then `smbcontrol smbd reload-config`
+    or restart smbd). But do NOT `apt-get install` a declared service, and do NOT install a
+    service this system does NOT declare — an SMB-share entity must never install `openssh-server`
+    or set up SSH login; that is the SSH system's job.
+  - Only assume a package is pre-installed if the System & Chain Context lists it as a provided
+    service; otherwise install it.

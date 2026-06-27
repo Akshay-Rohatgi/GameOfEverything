@@ -117,12 +117,21 @@ class RuntimeRegistry:
 
         # 6. Start the service (nohup — works in Docker without systemd)
         start_cmd = t["start_cmd"]
+        run_as = t.get("run_as", "")
         log_file = "/var/log/webapp.log"
         lines.append("# Start application")
         lines.append(f"cd {app_dir}")
-        lines.append(
-            f"nohup {start_cmd} > {log_file} 2>&1 &"
-        )
+        if run_as:
+            lines.append(f"id {run_as} &>/dev/null || useradd -r -s /bin/bash {run_as}")
+            lines.append(f"chown -R {run_as}:{run_as} {app_dir}")
+            lines.append(f"touch {log_file} && chown {run_as}:{run_as} {log_file}")
+            lines.append(
+                f"nohup runuser -u {run_as} -- {start_cmd} > {log_file} 2>&1 &"
+            )
+        else:
+            lines.append(
+                f"nohup {start_cmd} > {log_file} 2>&1 &"
+            )
         lines.append("sleep 3")
         lines.append("")
 

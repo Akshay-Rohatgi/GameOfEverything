@@ -52,8 +52,14 @@ class EngineerPlan(BaseModel):
     notes: str = ""
 
 
-def plan(entity: "Entity", incoming_edges: dict) -> EngineerPlan:
-    """Call the Engineer LLM to produce an architecture plan for the entity."""
+def plan(entity: "Entity", incoming_edges: dict, system_context: str | None = None) -> EngineerPlan:
+    """Call the Engineer LLM to produce an architecture plan for the entity.
+
+    Args:
+        system_context: Optional rendered markdown describing this entity's system, the
+            services the platform already provides there, and sibling entities — so the plan
+            covers only this entity's own link in the chain.
+    """
     from goe.bedrock import call
     from goe.config import GoEConfig
 
@@ -64,13 +70,15 @@ def plan(entity: "Entity", incoming_edges: dict) -> EngineerPlan:
         f"## Atom: {a}\n{load_atom(a)}" for a in (entity.atoms or [])
     )
 
+    context_section = f"{system_context}\n" if system_context else ""
+
     user_msg = f"""## Entity Spec
 
 ```json
 {entity.model_dump_json(indent=2)}
 ```
 
-## Incoming Edge Values
+{context_section}## Incoming Edge Values
 
 ```json
 {json.dumps(incoming_edges, indent=2)}

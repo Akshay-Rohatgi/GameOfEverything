@@ -105,12 +105,19 @@ class ProgressiveEnvironment:
             logger.info(f"[ProgressiveEnvironment] No services to provision for system {system.id}")
             return
 
-        logger.info(f"[ProgressiveEnvironment] Provisioning {len(system.services)} service(s) for system {system.id}")
-
         registry = get_registry()
 
+        # Filter pseudo-services (web, database) handled by the runtime layer,
+        # keeping only real daemons the ServiceRegistry knows how to install.
+        specs = [s for s in system.services if registry.has_recipe(s.id)]
+        if not specs:
+            logger.info(f"[ProgressiveEnvironment] No real services to provision for system {system.id} (pseudo-services only)")
+            return
+
+        logger.info(f"[ProgressiveEnvironment] Provisioning {len(specs)} service(s) for system {system.id}")
+
         # Generate and execute service deployment script
-        deploy_script = registry.deploy_all(system.services)
+        deploy_script = registry.deploy_all(specs)
         exit_code, stdout, stderr = self._exec_in_target(deploy_script)
 
         if exit_code != 0:
@@ -120,7 +127,7 @@ class ProgressiveEnvironment:
         logger.info(f"[ProgressiveEnvironment] Services deployed successfully")
 
         # Generate restart script (for services that need to restart after snapshot)
-        self._service_restart_script = registry.restart_all(system.services)
+        self._service_restart_script = registry.restart_all(specs)
 
         # Snapshot as base state
         base_tag = f"{self._scope}_base"

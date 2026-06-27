@@ -151,3 +151,59 @@ def test_chain_test_per_system_runs_grader():
     mock_call.assert_called_once()  # 2 same-system entities → grader runs
     assert "echo graded" in per_system["target_system"]
     assert per_system["target_system"].startswith("#!/bin/bash\n")
+
+
+# ---------------------------------------------------------------------------
+# Service layer in packaged scripts (declared services install via ServiceRegistry,
+# not via entity scripts — so an SMB-only system never installs SSH)
+# ---------------------------------------------------------------------------
+
+def _smb_ssh_graph() -> EntityGraph:
+    return EntityGraph.from_yaml(FIXTURES / "valid_smb_ssh_keychain.yaml")
+
+
+def test_service_section_per_system():
+    from goe.packaging.grader import service_section
+
+    graph = _smb_ssh_graph()
+    smb = service_section(graph.system_by_id("smb_server"))
+    ssh = service_section(graph.system_by_id("ssh_server"))
+
+    assert smb is not None and ssh is not None
+    smb_id, smb_script = smb
+    ssh_id, ssh_script = ssh
+    # SMB system installs samba and NOT openssh — the original leak.
+    assert "samba" in smb_script
+    assert "openssh-server" not in smb_script
+    # SSH system installs openssh.
+    assert "openssh-server" in ssh_script
+
+
+def test_service_section_skips_pseudo_services():
+    from goe.packaging.grader import service_section
+
+    graph = _graph()  # target_system has services: [web]
+    assert service_section(graph.system_by_id("target_system")) is None
+
+
+def test_package_multisystem_prepends_services(tmp_path):
+    from goe.packaging import grader
+
+    graph = _smb_ssh_graph()
+    built = {
+        "smb_key_share": _outcome("smb_key_share", "echo configure-share"),
+        "ssh_login": _outcome("ssh_login", "echo authorize-key"),
+    }
+    # Bypass the LLM grader deterministically (service + entity section = 2 sections).
+    with patch.object(grader, "grade_and_fix_script", side_effect=lambda c, s, **k: (c, [])):
+        out = package(graph, built, tmp_path / "pkg", request="smb to ssh")
+
+    smb_sh = (out / "smb_server_deploy.sh").read_text()
+    ssh_sh = (out / "ssh_server_deploy.sh").read_text()
+    # SMB box configures its share but never stands up SSH.
+    assert "samba" in smb_sh and "echo configure-share" in smb_sh
+    assert "openssh-server" not in smb_sh
+    # SSH box installs openssh and authorizes the key.
+    assert "openssh-server" in ssh_sh and "echo authorize-key" in ssh_sh
+    # Services come before entity config in each script.
+    assert smb_sh.index("samba") < smb_sh.index("echo configure-share")

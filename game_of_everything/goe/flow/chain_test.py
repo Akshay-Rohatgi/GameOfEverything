@@ -57,7 +57,7 @@ def _build_per_system_scripts(
 
     Returns ``{system_id: combined_deploy_script}``.
     """
-    from goe.packaging.grader import assemble_deploy_script
+    from goe.packaging.grader import assemble_deploy_script, service_section
 
     grouped = graph.entities_by_system()
     per_system: dict[str, str] = {}
@@ -67,6 +67,13 @@ def _build_per_system_scripts(
             for entity in entities
             if entity.id in built and (built[entity.id].deploy_script or "").strip()
         ]
+        # Prepend the system's declared services (same helper the packager uses) so the
+        # chain test deploys the exact script that gets packaged — services included.
+        system = graph.system_by_id(sid)
+        if system is not None:
+            svc = service_section(system)
+            if svc is not None:
+                sections.insert(0, svc)
         if sections:
             combined, warnings = assemble_deploy_script(sections)
             if warnings:

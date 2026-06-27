@@ -5,6 +5,7 @@ port: 5000
 default_app_dir: /opt/webapp
 primary_file: app.py
 start_cmd: "python3 app.py"
+run_as: www-data
 healthcheck: "curl -sf http://localhost:5000/ || curl -sf http://localhost:5000/health"
 setup_notes: >
   Flask is installed via pip3. app.py must call app.run(host='0.0.0.0', port=5000).

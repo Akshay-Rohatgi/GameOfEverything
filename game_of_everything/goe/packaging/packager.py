@@ -115,9 +115,15 @@ def _build_docker_compose(graph: "EntityGraph", per_system_scripts: dict[str, st
 
 
 def _build_deploy_sh(graph: "EntityGraph", built: dict[str, "BuildOutcome"], order: list[str]) -> str:
-    from goe.packaging.grader import assemble_deploy_script
+    from goe.packaging.grader import assemble_deploy_script, service_section
 
     sections = [(eid, built[eid].deploy_script or "") for eid in order]
+    # Prepend declared services for the (single) system, deterministically — entity scripts no
+    # longer install them. Services first so daemons are up before entities configure their vuln.
+    for system in graph.systems:
+        svc = service_section(system)
+        if svc is not None:
+            sections.insert(0, svc)
     combined, warnings = assemble_deploy_script(sections)
     if warnings:
         import logging
@@ -258,6 +264,13 @@ def package(
                 for entity in built_entities
                 if (built[entity.id].deploy_script or "").strip()
             ]
+            # Install the system's declared services first (deterministically, via the
+            # ServiceRegistry) so an SMB-only system never installs SSH and the daemons stay up
+            # for every entity and cross-system reach. Same helper the chain test uses.
+            from goe.packaging.grader import service_section
+            svc = service_section(system)
+            if svc is not None:
+                sections.insert(0, svc)
             if sections:
                 from goe.packaging.grader import assemble_deploy_script
                 combined, warnings = assemble_deploy_script(sections)

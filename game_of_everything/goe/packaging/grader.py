@@ -16,6 +16,31 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def service_section(system) -> "tuple[str, str] | None":
+    """Return the ``(id, deploy_script)`` section for a system's declared services, or None.
+
+    The services are installed deterministically by the ServiceRegistry — the same layer
+    ProgressiveEnvironment.provision() uses during the build — so entity scripts never install
+    services themselves. Callers prepend this section (services first) so the daemons are up
+    before any entity configures its vulnerability, and so the packaged and chain-tested scripts
+    are byte-identical.
+    """
+    if not getattr(system, "services", None):
+        return None
+    from goe.services.registry import get_registry
+
+    registry = get_registry()
+    # Skip pseudo-services (web/database) that the web runtime layer deploys, keeping only
+    # real daemons the ServiceRegistry knows how to install (ssh, smb, mysql, …).
+    specs = [s for s in system.services if registry.has_recipe(s.id)]
+    if not specs:
+        return None
+    script = registry.deploy_all(specs).strip()
+    if not script:
+        return None
+    return (f"{system.id}__services", script)
+
+
 def assemble_deploy_script(sections: list[tuple[str, str]]) -> tuple[str, list[str]]:
     """Concatenate ordered (entity_id, section) deploy scripts into one final script.
 

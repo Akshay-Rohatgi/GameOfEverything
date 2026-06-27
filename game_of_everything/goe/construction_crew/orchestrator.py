@@ -25,6 +25,8 @@ def build(
     incoming_edges: dict,
     ctx: dict | None = None,
     edge_schemas: dict | None = None,
+    system_context: str | None = None,
+    provided_values: dict | None = None,
 ) -> CrewResult:
     """Run the full construction crew for a single entity.
 
@@ -35,15 +37,20 @@ def build(
         entity: The entity to build.
         incoming_edges: Concrete values for incoming edges {edge_id: {param: value}}.
         ctx: Optional extra context (unused currently, reserved for future).
+        edge_schemas: Declared param schema for the entity's provided/required edges.
+        system_context: Rendered system + chain context injected into agent prompts.
+        provided_values: Already-determined values (resolved hosts, materialized secrets) for
+            edges this entity provides, to be embedded verbatim by the developer.
 
     Returns:
         CrewResult with artifact, procedure, outgoing edge values, and engineer plan.
     """
     from goe.construction_crew import engineer, developer, attacker
 
-    eng_plan = engineer.plan(entity, incoming_edges)
+    eng_plan = engineer.plan(entity, incoming_edges, system_context=system_context)
     artifact, outgoing_values = developer.develop(
-        entity, eng_plan, incoming_edges, edge_schemas=edge_schemas
+        entity, eng_plan, incoming_edges, edge_schemas=edge_schemas,
+        system_context=system_context, provided_values=provided_values,
     )
     procedure = attacker.attack(entity, eng_plan, artifact, outgoing_values)
 

@@ -5,6 +5,7 @@ port: 3000
 default_app_dir: /opt/webapp
 primary_file: app.js
 start_cmd: "node app.js"
+run_as: www-data
 healthcheck: "curl -sf http://localhost:3000/ || curl -sf http://localhost:3000/health"
 setup_notes: >
   Node.js MUST be installed via NodeSource — Ubuntu 22.04 apt ships v12 which is EOL.

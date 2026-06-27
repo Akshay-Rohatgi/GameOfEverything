@@ -45,6 +45,12 @@ def validate_outgoing_edge_values(outgoing: dict, provided_schema: dict) -> None
                 f"outgoing_edge_values['{eid}'] has undeclared params "
                 f"{sorted(extra)}; declared params are {sorted(declared)}"
             )
+        for param, value in payload.items():
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"outgoing_edge_values['{eid}']['{param}'] is empty; emit the real "
+                    f"concrete value your script created, never a blank or placeholder"
+                )
 
 
 def _load_runtime_spec(runtime_id: str) -> str:
@@ -57,6 +63,8 @@ def develop(
     plan: "EngineerPlan",
     incoming_edges: dict,
     edge_schemas: dict | None = None,
+    system_context: str | None = None,
+    provided_values: dict | None = None,
 ) -> tuple:
     """Call the Developer LLM to produce source code and a BuildArtifact.
 
@@ -64,6 +72,12 @@ def develop(
         edge_schemas: optional {edge_id: {"type", "direction", "params": [names]}} for the
             entity's provided/required edges. Constrains the param keys the developer may
             emit in outgoing_edge_values (keys are fixed at plan time, never invented).
+        system_context: optional rendered markdown describing this entity's system, the
+            platform-provided services, and sibling entities — so it builds only its own link.
+        provided_values: optional {edge_id: {param: concrete}} of already-determined values for
+            edges this entity provides (resolved hosts, materialized secrets). The developer
+            must embed these EXACTLY (e.g. base64-decode an SSH key to the served path) instead
+            of generating fresh material; these params are pre-filled and never re-emitted.
 
     Returns:
         (BuildArtifact, outgoing_values: dict[str, dict[str, str]])
@@ -106,6 +120,7 @@ These constraints MUST be satisfied for the vulnerability to work:
 """ if logic_reqs else ""
 
     edge_schemas = edge_schemas or {}
+    provided_values = provided_values or {}
     provided_schema = {
         eid: s for eid, s in edge_schemas.items() if s.get("direction") == "provides"
     }
@@ -120,19 +135,37 @@ are exactly the declared params above, each set to a concrete value you actually
 
 """ if edge_schemas else ""
 
+    prefilled_section = f"""## Pre-Filled Provided Edge Values (ALREADY DETERMINED — embed verbatim)
+
+```json
+{json.dumps(provided_values, indent=2)}
+```
+
+These params for your provided edges are already decided for you (resolved hostnames, and
+secrets — such as SSH keys — generated once so the consuming entity authorizes the SAME key).
+You MUST use these exact values in your implementation and must NOT regenerate them:
+- For an SSH key `secret`, the value is **base64 of an OpenSSH private key**. Write it to the
+  file you expose with: `echo '<value>' | base64 -d > /path/you/serve/id_rsa` (then `chmod 644`).
+  Do NOT run `ssh-keygen` to make a new key — that would not match the other system.
+- Do NOT list these pre-filled params again in `outgoing_edge_values`; they are already set.
+
+""" if provided_values else ""
+
+    context_section = f"{system_context}\n" if system_context else ""
+
     user_msg = f"""## Entity Spec
 
 ```json
 {entity.model_dump_json(indent=2)}
 ```
 
-## Architecture Plan
+{context_section}## Architecture Plan
 
 ```json
 {plan.model_dump_json(indent=2)}
 ```
 
-{spec_section}{schema_section}## Incoming Edge Values
+{spec_section}{schema_section}{prefilled_section}## Incoming Edge Values
 
 ```json
 {json.dumps(incoming_edges, indent=2)}
@@ -150,6 +183,16 @@ Output ONLY valid JSON matching the schema in the system prompt."""
 
         db_data = data.pop("db_setup", None)
         outgoing = data.pop("outgoing_edge_values", {})
+
+        # Drop any pre-filled params the LLM echoed back: those values are authoritative
+        # (resolved hosts, materialized secrets) and already live on the graph edge. This also
+        # keeps them out of validation, which only expects the still-unfilled declared params.
+        for eid, pre in provided_values.items():
+            if eid in outgoing and isinstance(outgoing[eid], dict):
+                for param in pre:
+                    outgoing[eid].pop(param, None)
+                if not outgoing[eid]:
+                    outgoing.pop(eid)
 
         validate_outgoing_edge_values(outgoing, provided_schema)
 
@@ -181,12 +224,13 @@ Compare your implementation against the proven patterns below:
     if is_ubuntu:
         review_msg = f"""{guidance_section}Review your bash setup script against these correctness checks before finalising:
 
-1. **Self-contained**: Does the script set up the misconfiguration from scratch without external dependencies?
+1. **One link only**: Does the script build ONLY this entity's vulnerability on its own system? Remove any service, account, or `authorized_keys` that belongs to another entity/system per the System & Chain Context (e.g. an SMB-share entity must not install openssh-server or create the SSH login). Do not install/restart services the platform already provides.
 2. **Vulnerability present**: Is the misconfiguration from the plan actually applied and not accidentally fixed?
 3. **Idempotent**: Does the script avoid errors if run a second time (use -f for rm, || true for commands that may fail)?
-4. **Outgoing values**: For every provided edge, are ALL its declared params present in outgoing_edge_values, set to concrete values (not placeholders) that match what the script actually created (same username, same password/secret, etc.)?
-5. **Incoming values**: If incoming_edges is non-empty, did you reuse every incoming param EXACTLY (no re-invented usernames/paths/tokens)?
-6. **Atom guidance**: Does your implementation satisfy the atom synthesis guidance above (if provided)? Fix any violations.
+4. **Outgoing values**: For every provided edge, are ALL its still-unfilled declared params present in outgoing_edge_values, set to concrete values (not placeholders) that match what the script actually created? Do NOT re-emit pre-filled params (resolved hosts, materialized secrets).
+5. **Shared secrets**: For an `ssh_key` secret, did you write the base64-decoded provided key to the served path (producer) or derive+authorize its public half (consumer) — and NOT run `ssh-keygen` to make a new key?
+6. **Incoming values**: If incoming_edges is non-empty, did you reuse every incoming param EXACTLY (no re-invented usernames/paths/tokens)?
+7. **Atom guidance**: Does your implementation satisfy the atom synthesis guidance above (if provided)? Fix any violations.
 
 If any check fails, output the corrected JSON. If all checks pass, output the original JSON unchanged.
 Output ONLY valid JSON."""

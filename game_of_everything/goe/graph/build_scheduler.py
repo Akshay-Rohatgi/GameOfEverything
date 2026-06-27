@@ -85,8 +85,18 @@ class BuildScheduler:
         entity = self._graph.entity_by_id(entity_id)
         incoming: dict[str, dict[str, str]] = {}
         for req in entity.requires:
+            merged: dict[str, str] = {}
+            # 1. Concrete params already on the graph edge: host/port resolved by resolve.py
+            #    and secrets filled by graph.secrets — these may not be in a producer's
+            #    emitted outgoing_values, so read them straight off the edge.
+            edge = self._graph.edge_by_id(req.edge_id)
+            if edge is not None:
+                merged = {p: pv.concrete for p, pv in edge.params.items() if pv.concrete is not None}
+            # 2. Producer-emitted values augment/override (e.g. the username it chose).
             if req.edge_id in self._concrete_values:
-                incoming[req.edge_id] = self._concrete_values[req.edge_id]
+                merged.update(self._concrete_values[req.edge_id])
+            if merged:
+                incoming[req.edge_id] = merged
         return incoming
 
     def _compute_downstream(self, failed_entity_id: str) -> list[str]:

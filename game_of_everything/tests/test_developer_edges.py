@@ -47,3 +47,11 @@ def test_rejects_flat_string_payload():
 def test_no_schema_is_noop():
     # Standalone single-entity builds pass no schema — anything goes.
     validate_outgoing_edge_values({"whatever": {"x": "y"}}, {})
+
+
+def test_rejects_empty_value():
+    # A blank/placeholder value is never a real built credential.
+    with pytest.raises(ValueError, match="is empty"):
+        validate_outgoing_edge_values(
+            {"sqli_to_ssh": {"user": "admin", "secret": "  "}}, _SCHEMA
+        )

@@ -56,7 +56,7 @@ def test_propagation_and_packaging(output_root):
     graph = _graph()
     seen_incoming: dict[str, dict] = {}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
         seen_incoming[entity.id] = dict(incoming_edges or {})
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
@@ -74,8 +74,10 @@ def test_propagation_and_packaging(output_root):
         result = orchestrator.run("sqli to ssh")
 
     assert result.success
-    # Full credential dict (incl. username) propagated from sqli_entity to ssh_entity.
-    assert seen_incoming["ssh_entity"] == _SQLI_CREDS
+    # Full credential dict (incl. username) propagated from sqli_entity to ssh_entity, plus the
+    # resolved host read straight off the graph edge (consumers now receive resolved params too).
+    expected = {"sqli_to_ssh": {**_SQLI_CREDS["sqli_to_ssh"], "host": "target"}}
+    assert seen_incoming["ssh_entity"] == expected
     # Package produced.
     assert result.output_dir is not None
     assert (result.output_dir / "deploy.sh").exists()
@@ -90,7 +92,7 @@ def test_incomplete_edge_param_fails_run(output_root):
     rather than silently substituting the structural placeholder downstream."""
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
         if entity.id == "sqli_entity":
             # Leak only the username — 'secret' and 'cred_type' never propagate.
             return _passed_outcome("sqli_entity", {"sqli_to_ssh": {"user": "admin"}})
@@ -131,7 +133,7 @@ def test_chain_test_failure_gates_success(output_root):
     """A failed chain test must make RunResult.success=False even if all entities built."""
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
         return _passed_outcome("ssh_entity", {})
@@ -158,7 +160,7 @@ def test_chain_test_failure_gates_success(output_root):
 def test_failed_entity_skips_dependents(output_root):
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
         if entity.id == "sqli_entity":
             return BuildOutcome(
                 result=EntityResult(
@@ -190,11 +192,41 @@ def test_plan_failure_aborts(output_root):
     assert result.output_dir is None
 
 
+def test_mixed_runtime_same_system_uses_progressive_env(output_root):
+    """Flask + ubuntu entities on the same system should use ProgressiveEnvironment."""
+    graph = resolve(EntityGraph.from_yaml(FIXTURES / "valid_flask_suid_chain.yaml"))
+    _SHELL_VALS = {"cmdi_to_suid": {"user": "www-data"}}
+
+    envs_passed = []
+
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
+        envs_passed.append((entity.id, env))
+        if entity.id == "flask_cmdi":
+            return _passed_outcome("flask_cmdi", dict(_SHELL_VALS))
+        return _passed_outcome("suid_privesc", {})
+
+    chain_outcome = ChainTestOutcome(
+        result=ChainTestResult(status=ChainTestStatus.PASSED),
+    )
+
+    with patch("goe.planner.pipeline.plan",
+               return_value=PlanResult(graph=graph, success=True, attempts=1)), \
+         patch("goe.build.build_entity", side_effect=fake_build), \
+         patch("goe.flow.chain_test.run_chain_test", return_value=chain_outcome), \
+         _mock_progressive_env_patch():
+        result = orchestrator.run("flask cmdi to suid")
+
+    assert result.success
+    # Both entities should receive the same progressive env (not None)
+    assert envs_passed[0][1] is not None
+    assert envs_passed[0][1] is envs_passed[1][1]
+
+
 def test_checkpoint_resume_skips_completed(output_root):
     graph = _graph()
     call_count = {"n": 0}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
         call_count["n"] += 1
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
