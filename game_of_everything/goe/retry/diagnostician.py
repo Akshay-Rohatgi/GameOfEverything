@@ -57,7 +57,6 @@ def diagnose(
     env: "TestEnvironment",
 ) -> Diagnosis:
     """Run L1 god-view diagnosis on a failed procedure result."""
-    from goe.bedrock import call
     from goe.config import GoEConfig
 
     cfg = GoEConfig.get()
@@ -108,11 +107,26 @@ Failed steps:
 
 Diagnose the failure and output ONLY valid JSON."""
 
-    raw = call(model_id=model, system=_SYSTEM, messages=[{"role": "user", "content": user_msg}], caller="diagnostician")
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        raw = raw.rsplit("```", 1)[0]
+    # Reuse the shared robust JSON caller (fence-stripping + one parse retry).
+    from pydantic import ValidationError
 
-    data = json.loads(raw)
-    return Diagnosis.model_validate(data)
+    from goe.planner._utils import call_json
+
+    try:
+        data = call_json(model, _SYSTEM, user_msg, caller="diagnostician")
+        return Diagnosis.model_validate(data)
+    except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+        # The diagnostician runs inside the build's bounded retry ladder; a malformed
+        # LLM response must not crash the entire flow. Fall back to the most
+        # conservative category (re-run the full crew) and record why.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Diagnostician: could not parse a valid Diagnosis, defaulting to design_flaw: %s",
+            exc,
+        )
+        return Diagnosis(
+            category=DiagnosisCategory.design_flaw,
+            description=f"Diagnostician response could not be parsed as valid JSON ({exc}).",
+            evidence="",
+        )

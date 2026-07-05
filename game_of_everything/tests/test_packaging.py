@@ -207,3 +207,93 @@ def test_package_multisystem_prepends_services(tmp_path):
     assert "openssh-server" in ssh_sh and "echo authorize-key" in ssh_sh
     # Services come before entity config in each script.
     assert smb_sh.index("samba") < smb_sh.index("echo configure-share")
+
+
+# ---------------------------------------------------------------------------
+# solve.sh
+# ---------------------------------------------------------------------------
+
+import shutil
+import subprocess
+
+from goe.models.procedure import StdoutContainsAssertion
+
+
+def _chain(command: str, needle: str) -> Procedure:
+    return Procedure(procedure=[
+        Step(
+            step_id="win",
+            action=ExecAttackerAction(type="exec_attacker", command=command),
+            expect=StdoutContainsAssertion(stdout_contains=needle),
+        )
+    ])
+
+
+def _bash_ok(path: Path) -> None:
+    if not shutil.which("bash"):
+        return
+    r = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_package_writes_solve_script(tmp_path):
+    graph = _graph()
+    built = {
+        "sqli_entity": _outcome("sqli_entity", "echo sqli"),
+        "ssh_entity": _outcome("ssh_entity", "echo ssh"),
+    }
+    chain = _chain("ssh ${system.target_system.host} id", "uid=0(root)")
+    out = package(graph, built, tmp_path / "pkg", chain_procedure=chain)
+
+    solve = out / "solve.sh"
+    assert solve.exists()
+    assert solve.stat().st_mode & 0o111, "solve.sh must be executable"
+    _bash_ok(solve)
+    body = solve.read_text()
+    assert "SYSTEM_TARGET_SYSTEM_HOST" in body
+    assert "grep -qF -- 'uid=0(root)'" in body
+    assert "## Solving" in (out / "README.md").read_text()
+
+
+def test_package_single_entity_uses_sole_procedure(tmp_path):
+    # No chain procedure, single built entity → solve.sh from that entity's procedure.
+    graph = _graph()
+    built = {"sqli_entity": _outcome("sqli_entity", "echo sqli")}
+    out = package(graph, built, tmp_path / "pkg")
+    assert (out / "solve.sh").exists()
+    _bash_ok(out / "solve.sh")
+
+
+def test_multisystem_compose_gets_attacker_service(tmp_path):
+    from goe.packaging import grader
+
+    graph = _smb_ssh_graph()
+    built = {
+        "smb_key_share": _outcome("smb_key_share", "echo share"),
+        "ssh_login": _outcome("ssh_login", "echo login"),
+    }
+    chain = _chain("ssh ${system.ssh_server.host} id", "uid=0(root)")
+    with patch.object(grader, "grade_and_fix_script", side_effect=lambda c, s, **k: (c, [])):
+        out = package(graph, built, tmp_path / "pkg", chain_procedure=chain)
+
+    assert (out / "solve.sh").exists()
+    compose = yaml.safe_load((out / "docker-compose.yml").read_text())
+    assert "attacker" in compose["services"]
+    atk = compose["services"]["attacker"]
+    assert atk["image"] == "goe-attacker:latest"
+    assert "./solve.sh:/goe/solve.sh:ro" in atk["volumes"]
+    assert "docker-compose exec attacker" in (out / "README.md").read_text()
+
+
+def test_unsupported_procedure_skips_solve_script(tmp_path):
+    from goe.models.procedure import NavigateAction
+
+    graph = _graph()
+    built = {"sqli_entity": _outcome("sqli_entity", "echo sqli")}
+    browser_chain = Procedure(procedure=[
+        Step(step_id="nav", action=NavigateAction(type="navigate", path="/"))
+    ])
+    out = package(graph, built, tmp_path / "pkg", chain_procedure=browser_chain)
+    assert not (out / "solve.sh").exists()
+    # README records why it was skipped.
+    assert "solve.sh not generated" in (out / "README.md").read_text()

@@ -13,6 +13,8 @@ to ``chain_playbook.yaml`` regardless of single- vs multi-system.
 
 from __future__ import annotations
 
+import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -62,11 +64,24 @@ def _detect_port_collisions(graph: "EntityGraph", order: list[str]) -> list[str]
     return warnings
 
 
-def _build_docker_compose(graph: "EntityGraph", per_system_scripts: dict[str, str]) -> str:
+# Kali attacker image (built locally by the topology test harness). Hardcoded to
+# avoid importing the heavy test_environment module just for the tag.
+_ATTACKER_IMAGE = "goe-attacker:latest"
+
+
+def _build_docker_compose(
+    graph: "EntityGraph",
+    per_system_scripts: dict[str, str],
+    include_attacker: bool = False,
+) -> str:
     """Generate a docker-compose.yml for a multi-system run.
 
     Each system becomes a service running ubuntu:22.04. Its deploy script is
     embedded as an inline command so ``docker-compose up`` fully configures it.
+
+    When ``include_attacker`` is set, a Kali ``attacker`` service (with ``solve.sh``
+    mounted at ``/goe/solve.sh``) is added on the same network so the solve is
+    turnkey: ``docker compose up -d && docker compose exec attacker bash /goe/solve.sh``.
     """
     import base64
 
@@ -100,6 +115,17 @@ def _build_docker_compose(graph: "EntityGraph", per_system_scripts: dict[str, st
         if port_mappings:
             svc["ports"] = port_mappings
         services[sid] = svc
+
+    if include_attacker:
+        services["attacker"] = {
+            "image": _ATTACKER_IMAGE,
+            "hostname": "attacker",
+            "networks": {"default": {"aliases": ["attacker"]}},
+            "command": "sleep infinity",
+            "working_dir": "/goe",
+            "volumes": ["./solve.sh:/goe/solve.sh:ro"],
+            "environment": ["DEBIAN_FRONTEND=noninteractive"],
+        }
 
     compose: dict = {
         "version": "3.8",
@@ -149,6 +175,7 @@ def _build_readme(
     order: list[str],
     request: str,
     warnings: list[str],
+    solve_written: bool = False,
 ) -> str:
     lines: list[str] = ["# GoE Build Package", ""]
     if request:
@@ -223,6 +250,35 @@ def _build_readme(
             "(executable via the GoE procedure runner).",
             "",
         ]
+
+    if solve_written:
+        lines += ["## Solving", "", "`solve.sh` is a standalone attacker solve script "
+                  "(compiled from the validated attack chain) that reproduces the exploit "
+                  "and exits 0 on success.", ""]
+        if multi:
+            lines += [
+                "Run it from the bundled Kali attacker container:",
+                "",
+                "```bash",
+                "docker-compose up -d",
+                "docker-compose exec attacker bash /goe/solve.sh",
+                "```",
+                "",
+                "(Requires the `goe-attacker:latest` image built locally.)",
+                "",
+            ]
+        else:
+            sid = graph.systems[0].id if graph.systems else "target"
+            var = "SYSTEM_" + re.sub(r"[^A-Za-z0-9_]", "_", sid).upper() + "_HOST"
+            lines += [
+                "Run it from a host with network access to the box (override the target "
+                "endpoint via env vars — defaults are the in-container hostnames):",
+                "",
+                "```bash",
+                f"{var}=<box-ip> bash solve.sh",
+                "```",
+                "",
+            ]
     return "\n".join(lines)
 
 
@@ -249,6 +305,16 @@ def package(
     order = _ordered_built(graph, built)
     warnings = _detect_port_collisions(graph, order)
     multi = len(graph.systems) > 1
+
+    # Compile a standalone attacker solve.sh from the validated procedure: the chain
+    # procedure when present, else the sole entity's procedure (single-entity runs).
+    # Must happen before docker-compose so the attacker service is added only when a
+    # solve script exists to mount. Kept in its own warnings list since the multi
+    # branch below reassigns ``warnings``.
+    solve_warnings: list[str] = []
+    solve_written = _write_solve_script(
+        graph, built, order, out_dir, chain_procedure, solve_warnings
+    )
 
     if multi:
         # Per-system deploy scripts
@@ -293,7 +359,8 @@ def package(
                 per_system_scripts[sid] = deploy_path.read_text(encoding="utf-8")
 
         (out_dir / "docker-compose.yml").write_text(
-            _build_docker_compose(graph, per_system_scripts), encoding="utf-8"
+            _build_docker_compose(graph, per_system_scripts, include_attacker=solve_written),
+            encoding="utf-8",
         )
     else:
         # Single-system: one combined deploy.sh (unchanged from Phase 3)
@@ -316,7 +383,45 @@ def package(
         )
 
     (out_dir / "README.md").write_text(
-        _build_readme(graph, built, order, request, warnings), encoding="utf-8"
+        _build_readme(graph, built, order, request, warnings + solve_warnings, solve_written),
+        encoding="utf-8",
     )
 
     return out_dir
+
+
+def _write_solve_script(
+    graph: "EntityGraph",
+    built: dict[str, "BuildOutcome"],
+    order: list[str],
+    out_dir: Path,
+    chain_procedure,
+    warnings: list[str],
+) -> bool:
+    """Compile and write ``solve.sh``. Returns whether it was written.
+
+    Uses the chain procedure when available, else the sole built entity's procedure
+    (single-entity runs). Skips (with a warning) rather than emitting a broken script
+    when the procedure uses actions bash can't represent (browser / exec_target).
+    """
+    proc = chain_procedure
+    if proc is None:
+        procs = [built[eid].procedure for eid in order if built[eid].procedure is not None]
+        if len(procs) == 1:
+            proc = procs[0]
+    if proc is None:
+        return False
+
+    from goe.packaging.solve_script import UnsupportedActionError, compile_solve_script
+
+    try:
+        script = compile_solve_script(graph, proc)
+    except UnsupportedActionError as exc:
+        warnings.append(f"solve.sh not generated (action not representable in bash): {exc}")
+        logging.getLogger(__name__).warning("Packager: %s", warnings[-1])
+        return False
+
+    solve_path = out_dir / "solve.sh"
+    solve_path.write_text(script, encoding="utf-8")
+    solve_path.chmod(0o755)
+    return True

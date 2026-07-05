@@ -128,11 +128,11 @@ def run_chain_test(
     """
     from goe.construction_crew import chain_attacker
     from goe.container.topology_environment import TopologyEnvironment
+    from goe.executor.interpolation import resolve_static_ctx
     from goe.executor.runner import run as run_procedure
     from goe.models.report import ChainTestResult, ChainTestStatus
 
     per_system_scripts = _build_per_system_scripts(graph, built)
-    systems_ctx = _build_systems_ctx(graph)
 
     env = TopologyEnvironment(graph, scope="chain")
     chain_procedure: Procedure | None = None  # type: ignore[name-defined]
@@ -163,31 +163,18 @@ def run_chain_test(
         chain_procedure = chain_attacker.attack(graph, built)
 
         # ---- Phase 3: execute + retry loop ----------------------------------
+        # Resolve the build-time-static ctx (systems + edge concrete values). Every
+        # consumed edge param should carry a concrete value by now (resolve.py + the
+        # build's edge propagation); a missing one falls back to its structural
+        # placeholder and is logged loudly (partial-information bug).
+        static_ctx = resolve_static_ctx(graph, logger=logger)
         ctx: dict = {
             "target_host": env.get_target_host(),
             "attacker_host": env.get_attacker_host(),
             "target_port": "",
-            "systems": systems_ctx,
-            "edges": {},
+            "systems": static_ctx["systems"],
+            "edges": static_ctx["edges"],
         }
-        # Populate edge concrete values into ctx["edges"]. Every consumed param should
-        # carry a concrete value by now (resolve.py + the build's edge propagation). If a
-        # param is still unfilled we fall back to its structural description to interpolate
-        # *something*, but log it loudly — a structural placeholder (e.g. "db_username")
-        # leaking into an executed command is a partial-information bug, not a valid value.
-        for edge in graph.edges:
-            resolved: dict[str, str] = {}
-            for p, pv in edge.params.items():
-                if pv.concrete is not None:
-                    resolved[p] = pv.concrete
-                else:
-                    logger.warning(
-                        "ChainTest: edge %s param '%s' has no concrete value; "
-                        "falling back to structural placeholder '%s'",
-                        edge.id, p, pv.structural,
-                    )
-                    resolved[p] = pv.structural
-            ctx["edges"][edge.id] = resolved
 
         attempt = 0
         while attempt <= MAX_RETRIES:
