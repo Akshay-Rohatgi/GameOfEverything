@@ -56,7 +56,7 @@ def test_propagation_and_packaging(output_root):
     graph = _graph()
     seen_incoming: dict[str, dict] = {}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
         seen_incoming[entity.id] = dict(incoming_edges or {})
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
@@ -92,7 +92,7 @@ def test_incomplete_edge_param_fails_run(output_root):
     rather than silently substituting the structural placeholder downstream."""
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
         if entity.id == "sqli_entity":
             # Leak only the username — 'secret' and 'cred_type' never propagate.
             return _passed_outcome("sqli_entity", {"sqli_to_ssh": {"user": "admin"}})
@@ -133,7 +133,7 @@ def test_chain_test_failure_gates_success(output_root):
     """A failed chain test must make RunResult.success=False even if all entities built."""
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
         return _passed_outcome("ssh_entity", {})
@@ -160,7 +160,7 @@ def test_chain_test_failure_gates_success(output_root):
 def test_failed_entity_skips_dependents(output_root):
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
         if entity.id == "sqli_entity":
             return BuildOutcome(
                 result=EntityResult(
@@ -199,7 +199,7 @@ def test_mixed_runtime_same_system_uses_progressive_env(output_root):
 
     envs_passed = []
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
         envs_passed.append((entity.id, env))
         if entity.id == "flask_cmdi":
             return _passed_outcome("flask_cmdi", dict(_SHELL_VALS))
@@ -226,7 +226,7 @@ def test_checkpoint_resume_skips_completed(output_root):
     graph = _graph()
     call_count = {"n": 0}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
         call_count["n"] += 1
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))

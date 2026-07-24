@@ -109,7 +109,7 @@ def run(
 
         if console:
             console.planning()
-        plan_result = plan(request, verbose=verbose)
+        plan_result = plan(request, verbose=verbose, console=console)
         if not plan_result.success or plan_result.graph is None:
             if console:
                 console.plan_failed(plan_result.final_violations)
@@ -210,6 +210,7 @@ def run(
                     edge_schemas=edge_schemas,
                     system_context=system_context,
                     provided_values=provided_values,
+                    console=console,
                 )
             else:
                 # Single-entity systems (no services): per-entity isolation
@@ -221,6 +222,7 @@ def run(
                     edge_schemas=edge_schemas,
                     system_context=system_context,
                     provided_values=provided_values,
+                    console=console,
                 )
 
             if outcome.result.status == EntityStatus.PASSED:

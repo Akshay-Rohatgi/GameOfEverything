@@ -82,6 +82,49 @@ def assemble_deploy_script(sections: list[tuple[str, str]]) -> tuple[str, list[s
     return apply_post_processors(combined) + "\n", warnings
 
 
+def _is_valid_bash(script: str) -> tuple[bool, str]:
+    """Validate bash syntax using bashlex parser.
+
+    Args:
+        script: The bash script to validate
+
+    Returns:
+        (is_valid, error_message) tuple
+    """
+    try:
+        import bashlex
+        bashlex.parse(script)
+        return True, ""
+    except ImportError:
+        # bashlex not available, fall back to basic checks
+        logger.warning("[ScriptGrader] bashlex not available, using basic validation")
+        # Check for obvious truncation patterns
+        if script.count("'") % 2 != 0 or script.count('"') % 2 != 0:
+            return False, "Unmatched quotes detected"
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _detect_suspicious_truncation(original: str, fixed: str) -> bool:
+    """Check if fixed script lost significant content AND has syntax errors.
+
+    Note: We don't just check size loss, as legitimate conflict resolution
+    (removing duplicate users/passwords) can remove 30-40% of content.
+    Only flag as truncation if BOTH size loss is significant AND syntax is broken.
+    """
+    if len(fixed) < len(original) * 0.7:  # Lost >30% of content
+        loss_pct = 100 - int(len(fixed) / len(original) * 100)
+        logger.warning(
+            f"[ScriptGrader] Fixed script is {len(original) - len(fixed)} chars shorter "
+            f"({loss_pct}% content loss) — checking syntax..."
+        )
+        # Only flag as truncation if syntax is also broken
+        is_valid, _ = _is_valid_bash(fixed)
+        return not is_valid
+    return False
+
+
 def grade_and_fix_script(
     concatenated_script: str,
     entity_sections: dict[str, str],
@@ -121,6 +164,26 @@ Your job: Review a concatenated bash deployment script from multiple entities an
 
 5. **File overwrites**: If section A writes `/etc/config` and section B overwrites it completely (not appends), this is likely a bug — keep the first write, DELETE the second.
 
+## CRITICAL: Base64-Encoded Files
+
+**DO NOT truncate or partially remove base64-encoded echo commands.**
+
+Base64 file writes look like:
+```bash
+echo 'VGhpc0lzQVZlcnlMb25nQmFzZTY0U3RyaW5n...[potentially 1000s of chars]...' | base64 -d > /path/to/file
+```
+
+When removing a duplicate file write with base64 encoding:
+- You MUST remove the ENTIRE LINE including the full base64 string and closing quote
+- OR keep it entirely
+- NEVER output a partial line like `echo 'VGhpc0...` with no closing quote
+
+If you cannot safely remove a long base64 echo statement (>2000 chars):
+- Leave it in the script (duplicates are better than syntax errors)
+- OR replace the entire statement with: `# Duplicate file write removed: /path/to/file`
+
+Base64 strings can be very long (5000+ characters on a single line). You must output the entire line or none of it.
+
 ## Output Format
 
 Return ONLY the fixed bash script. No explanation, no markdown fences, just the corrected script text.
@@ -132,6 +195,7 @@ Return ONLY the fixed bash script. No explanation, no markdown fences, just the 
 - For config files: first write wins unless second is clearly an append (>>)
 - Preserve all service start/restart commands
 - Keep all `set -e`, `#!/bin/bash` directives from the original
+- **NEVER truncate base64 echo statements — remove entirely or keep entirely**
 - If no issues found, return the original script unchanged"""
 
     # Build context showing entity boundaries
@@ -163,6 +227,20 @@ Grade and fix this script. Remove conflicting commands (especially duplicate use
     if fixed_script.startswith("```"):
         lines = fixed_script.split("\n")
         fixed_script = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+
+    # Validate the fixed script before accepting it
+    is_valid, error = _is_valid_bash(fixed_script)
+    is_truncated = _detect_suspicious_truncation(concatenated_script, fixed_script)
+
+    if not is_valid or is_truncated:
+        logger.error(
+            f"[ScriptGrader] Fixed script failed validation "
+            f"(valid={is_valid}, truncated={is_truncated}). "
+            f"Error: {error}. Reverting to original script."
+        )
+        return concatenated_script, [
+            f"Grader output rejected (syntax error: {error or 'truncation detected'})"
+        ]
 
     # Detect what changed
     warnings = _diff_summary(concatenated_script, fixed_script)

@@ -16,13 +16,32 @@ if TYPE_CHECKING:
 
 _SYSTEM = """You are a senior security engineer diagnosing a failed automated penetration test.
 
-You have god-view access to the running Docker environment. Inspect the failure and categorise it.
+You have god-view access to the running Docker environment. The evidence below was gathered
+specifically for this entity's runtime and vulnerability type. Inspect the failure and categorise it.
 
 ## Diagnosis Categories
 
 - `procedure_bug`: The app is deployed correctly, but the attack procedure is wrong (wrong URL, wrong payload, wrong assertion). Fix: re-run the attacker agent.
 - `implementation_bug`: The app is running but the vulnerability is not present or not exploitable as expected (wrong query, sanitized input, wrong column names). Fix: re-run the developer and attacker agents.
 - `design_flaw`: The app is fundamentally broken — wrong port, startup failure, wrong runtime behaviour. Fix: re-run the full crew.
+
+## Common Failure Patterns
+
+**File Permission Issues (implementation_bug):**
+When a vulnerability involves reading files from user home directories (e.g., .bash_history, .ssh/*, config files):
+- A file can be world-readable (0644) but still inaccessible if the **parent directory** lacks execute/search permission
+- www-data or attacker user needs **execute permission on ALL parent directories** in the path to traverse to the file
+- Example: `/home/stacy/.bash_history` may be 0644, but if `/home/stacy` is 0750 (owner+group only), www-data cannot traverse into it
+- **Fix**: The developer must `chmod 755 /home/<user>` to allow directory traversal, not just set file permissions
+- This is an **implementation_bug** because the vulnerability setup is incomplete
+
+**Permission Denied vs Wrong Path:**
+- "Permission denied" → check directory permissions, not just file permissions (implementation_bug)
+- "No such file or directory" → wrong path or file not created (could be implementation_bug or procedure_bug)
+
+**Process Not Running:**
+- If the app process isn't in `ps aux` or the port isn't in `ss -tlnp`, that's a **design_flaw** (startup failed)
+- If the process is running but not behaving correctly, that's **implementation_bug**
 
 ## Output Format
 
@@ -58,15 +77,27 @@ def diagnose(
 ) -> Diagnosis:
     """Run L1 god-view diagnosis on a failed procedure result."""
     from goe.config import GoEConfig
+    from goe.retry.probes import ProbeContext, execute_probes, select_probes
 
     cfg = GoEConfig.get()
     model = cfg.model_for("diagnostician")
 
-    # Collect god-view evidence from the running containers
-    _, app_log, _ = env.exec_in("target", "cat /var/log/webapp.log 2>/dev/null | tail -50 || echo '(no log)'")
-    _, bot_log, _ = env.exec_in("target", "cat /tmp/adminbot.log 2>/dev/null | tail -30 || echo '(no bot log)'")
-    _, ps_out, _ = env.exec_in("target", "ps aux 2>/dev/null | head -20")
-    _, port_check, _ = env.exec_in("target", "ss -tlnp 2>/dev/null | head -20 || netstat -tlnp 2>/dev/null | head -20")
+    # Build probe context from entity/artifact metadata
+    ctx = ProbeContext(
+        runtime=entity.runtime.value,
+        atoms=entity.atoms or [],
+        has_db=artifact.db_setup is not None,
+        db_type=artifact.db_setup.db_type if artifact.db_setup else None,
+        app_dir=artifact.app_dir or "",
+        port=getattr(artifact, "port", None),
+        source_files=list(artifact.source_files.keys()),
+        failed_step=result.failed_step,
+        system_deps=artifact.system_deps or [],
+    )
+
+    # Select and execute relevant probes
+    probes = select_probes(ctx)
+    evidence = execute_probes(env, probes, ctx)
 
     # Summarise failed steps
     failed_steps = [
@@ -77,6 +108,11 @@ def diagnose(
     source_listing = "\n\n".join(
         f"### {fname}\n```\n{content[:2000]}\n```"
         for fname, content in artifact.source_files.items()
+    )
+
+    # Format evidence dynamically based on probe results
+    evidence_section = "\n\n".join(
+        f"### {label}\n{output}" for label, output in evidence
     )
 
     user_msg = f"""## Failed Procedure
@@ -93,17 +129,7 @@ Failed steps:
 
 ## God-View Evidence
 
-### App Log (last 50 lines)
-{app_log}
-
-### Admin Bot Log (last 30 lines)
-{bot_log}
-
-### Running Processes
-{ps_out}
-
-### Listening Ports
-{port_check}
+{evidence_section}
 
 Diagnose the failure and output ONLY valid JSON."""
 

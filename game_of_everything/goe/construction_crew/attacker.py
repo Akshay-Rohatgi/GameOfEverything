@@ -103,11 +103,9 @@ Write a YAML procedure that exploits the vulnerability and verifies success.
 Output ONLY valid YAML (no markdown fences)."""
 
     def _parse(raw: str) -> "Procedure":
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1]
-            raw = raw.rsplit("```", 1)[0]
-        data = yaml.safe_load(raw)
+        from goe.models.procedure import Procedure
+        from goe.construction_crew._yaml_repair import safe_parse_yaml
+        data = safe_parse_yaml(raw)
         return Procedure.model_validate(data)
 
     # Inject Testing Guidance as verification (during self-review)
@@ -143,10 +141,18 @@ Output ONLY valid YAML (no markdown fences)."""
     try:
         return _parse(raw)
     except Exception as e:
+        from goe.construction_crew._yaml_repair import ProcedureParseError
         retry_msg = f"Your previous YAML failed to parse: {e}\n\nOutput ONLY valid YAML."
         messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": retry_msg}]
         raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="attacker.retry")
-        return _parse(raw2)
+        try:
+            return _parse(raw2)
+        except Exception as e2:
+            raise ProcedureParseError(
+                f"attacker.attack: YAML parse failed after retry: {e2}",
+                raw=raw2,
+                cause=e2,
+            ) from e2
 
 
 def fix_procedure(
@@ -188,11 +194,9 @@ Fix the procedure to address exactly this issue. Do not change steps that are wo
 Output ONLY valid YAML (no markdown fences, no explanation)."""
 
     def _parse(raw: str) -> "Procedure":
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1]
-            raw = raw.rsplit("```", 1)[0]
-        data = yaml.safe_load(raw)
+        from goe.models.procedure import Procedure
+        from goe.construction_crew._yaml_repair import safe_parse_yaml
+        data = safe_parse_yaml(raw)
         return Procedure.model_validate(data)
 
     raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}], caller="attacker.fix_procedure")
@@ -200,6 +204,14 @@ Output ONLY valid YAML (no markdown fences, no explanation)."""
     try:
         return _parse(raw)
     except Exception as e:
+        from goe.construction_crew._yaml_repair import ProcedureParseError
         retry_msg = f"{user_msg}\n\nYour previous YAML failed to parse: {e}\n\nOutput ONLY valid YAML."
         raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}], caller="attacker.fix_procedure.retry")
-        return _parse(raw2)
+        try:
+            return _parse(raw2)
+        except Exception as e2:
+            raise ProcedureParseError(
+                f"attacker.fix_procedure: YAML parse failed after retry: {e2}",
+                raw=raw2,
+                cause=e2,
+            ) from e2

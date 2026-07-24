@@ -71,6 +71,35 @@ expect:
   body_regex: "pattern"    # HTTP response body matches regex
 ```
 
+**CRITICAL: Prefer regex over exact string matching for all assertions.**
+
+String matching (`stdout_contains`, `body_contains`) is brittle - it breaks on formatting changes, extra whitespace, or equivalent-but-different output. Use regex to capture the **essential semantic content**.
+
+**Common patterns:**
+
+| Intent | ❌ Wrong (brittle) | ✅ Right (semantic) |
+|--------|-------------------|---------------------|
+| Root access | `stdout_contains: "uid=0(root)"` | `stdout_regex: "uid=0\("` |
+| Effective root | `stdout_contains: "euid=0"` | `stdout_regex: "(e)?uid=0"` |
+| Root group | `stdout_contains: "groups=0"` | `stdout_regex: "groups=.*\b0\b"` |
+| Credential leaked | `body_contains: "password: secret123"` | `body_regex: "password[\"']?\s*:\s*[\"']?secret123"` |
+| SQL injection | `body_contains: "admin:hash"` | `body_regex: "admin.*:.*\$2[aby]\$"` |
+| Command output | `stdout_contains: "flag{...}"` | `stdout_regex: "flag\{[a-f0-9]{32}\}"` |
+| File exists | `stdout_contains: "credentials.txt"` | `stdout_regex: "credentials\.txt"` |
+
+**Why regex wins:**
+- Handles formatting variations (spaces, quotes, case)
+- Captures semantic meaning (uid=0 is root regardless of username)
+- Resilient to output changes (extra fields, reordering)
+- Self-documenting (pattern shows what matters)
+
+**When `contains` is OK:**
+- Unique identifier strings (e.g., a UUID you generated)
+- Literal file contents you wrote (e.g., checking your XSS payload reflects)
+- Magic strings that can't vary (e.g., "HTTP/1.1 200 OK")
+
+**Default to regex.** Only use `contains` when the string is truly fixed and unique.
+
 ### Output Capture (optional)
 
 ```yaml

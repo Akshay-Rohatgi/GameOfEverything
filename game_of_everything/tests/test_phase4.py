@@ -308,6 +308,8 @@ class TestChainTestRunner:
         env.get_attacker_host.return_value = "attacker"
         env.get_cdp_url.return_value = ""
         env.deploy_system.return_value = (0, "", "")
+        env.exec_in.return_value = (0, "", "")  # For healthcheck
+        env.reset_all_systems.return_value = {}  # For retry reset
         return env
 
     def _built(self) -> dict:

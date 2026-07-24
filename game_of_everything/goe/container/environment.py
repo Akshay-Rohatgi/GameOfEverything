@@ -35,7 +35,7 @@ class TestEnvironment:
 
     def __init__(self, runtime: str = "ubuntu", scope: str = "", enable_browser: bool = True, expose_ports: dict[int, int] | None = None):
         image = _image_for(runtime)
-        from game_of_everything.tools.test_environment import TestEnvironmentTool
+        from goe.container.test_environment_tool import TestEnvironmentTool
         self._tool = TestEnvironmentTool(
             scope=scope,
             target_image=image,

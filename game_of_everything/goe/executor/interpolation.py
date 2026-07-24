@@ -73,7 +73,11 @@ def interpolate(template: str, ctx: dict) -> str:
         if len(parts) == 1:
             val = ctx.get(parts[0])
         elif parts[0] == "edge" and len(parts) == 3:
-            val = ctx.get("edges", {}).get(parts[1], {}).get(parts[2])
+            edge_params = ctx.get("edges", {}).get(parts[1], {})
+            val = edge_params.get(parts[2])
+            # Fallback for ${edge.<id>.value}: return the first non-empty param
+            if val is None and parts[2] == "value":
+                val = next((v for v in edge_params.values() if v), None)
         elif parts[0] == "steps" and len(parts) == 3:
             val = ctx.get("steps", {}).get(parts[1], {}).get(parts[2])
         elif parts[0] == "system" and len(parts) == 3:

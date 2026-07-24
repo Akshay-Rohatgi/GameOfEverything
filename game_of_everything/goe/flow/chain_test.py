@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 2
+MAX_RETRIES = 4  # Increased from 2: multi-entity chains need more attempts
 
 
 @dataclass
@@ -85,22 +85,99 @@ def _build_per_system_scripts(
     return per_system
 
 
-def _summarise_failure(result: "ProcedureResult") -> str:  # type: ignore[name-defined]
-    """Turn a failed ProcedureResult into a diagnosis string for fix_chain."""
+def _summarise_failure(result: "ProcedureResult", env=None, procedure=None) -> str:  # type: ignore[name-defined]
+    """Turn a failed ProcedureResult into a diagnosis string for fix_chain.
+
+    Args:
+        result: The failed procedure execution result.
+        env: Optional TopologyEnvironment for probing containers.
+        procedure: Optional Procedure to extract system context from steps.
+
+    Returns:
+        Diagnosis string with context, failures, and optional probe evidence.
+    """
     lines: list[str] = []
+
     if result.error:
         lines.append(f"Executor error: {result.error}")
-    for step in result.steps:
-        if not step.passed:
-            lines.append(f"Step '{step.step_id}' failed: {step.reason}")
-            if step.raw.stdout:
-                lines.append(f"  stdout: {step.raw.stdout[:400]}")
-            if step.raw.stderr:
-                lines.append(f"  stderr: {step.raw.stderr[:200]}")
-            if step.raw.error:
-                lines.append(f"  error: {step.raw.error}")
-            break  # report only the first failure
+
+    # Show last 3 successful steps for context
+    successes = [s for s in result.steps if s.passed][-3:]
+    if successes:
+        lines.append("\n## Recent Successful Steps (context)")
+        for s in successes:
+            lines.append(f"  ✓ {s.step_id}")
+
+    # Show ALL failures, not just first
+    failures = [s for s in result.steps if not s.passed]
+    if failures:
+        lines.append("\n## Failed Steps")
+        for s in failures:
+            lines.append(f"  ✗ {s.step_id}: {s.reason}")
+            if s.raw.stdout:
+                lines.append(f"    stdout: {s.raw.stdout[:800]}")  # Increased from 400
+            if s.raw.stderr:
+                lines.append(f"    stderr: {s.raw.stderr[:400]}")  # Increased from 200
+            if s.raw.error:
+                lines.append(f"    error: {s.raw.error}")
+            if s.raw.body:
+                lines.append(f"    body: {s.raw.body[:400]}")
+
+    # Gather evidence from containers if environment is available
+    if env and failures:
+        lines.append("\n## Container Evidence")
+        first_failure = failures[0]
+
+        # Universal attacker probes
+        lines.append("  [Attacker Container]")
+        _, ps_out, _ = env.exec_in("attacker", "ps aux 2>/dev/null | head -15 || echo '(ps failed)'")
+        lines.append(f"    Processes: {ps_out[:300]}")
+        _, ss_out, _ = env.exec_in("attacker", "ss -tn 2>/dev/null | head -10 || echo '(ss failed)'")
+        lines.append(f"    Connections: {ss_out[:300]}")
+
+        # Try to identify which system the failed step was targeting
+        target_system = _extract_target_system(first_failure, procedure)
+        if target_system:
+            lines.append(f"  [{target_system} Container]")
+            _, sys_ps, _ = env.exec_in(target_system, "ps aux 2>/dev/null | head -15 || echo '(ps failed)'")
+            lines.append(f"    Processes: {sys_ps[:300]}")
+            _, sys_ss, _ = env.exec_in(target_system, "ss -tlnp 2>/dev/null | head -10 || echo '(ss failed)'")
+            lines.append(f"    Listening: {sys_ss[:300]}")
+
     return "\n".join(lines) or "Unknown failure — no step details available."
+
+
+def _extract_target_system(failed_step, procedure) -> str | None:
+    """Extract system_id from a failed step by looking at the action.
+
+    Returns the system_id if we can infer it from ${system.<id>.host} in the command/URL.
+    """
+    if not procedure:
+        return None
+
+    # Find the step in the procedure
+    proc_step = next((s for s in procedure.procedure if s.step_id == failed_step.step_id), None)
+    if not proc_step or not proc_step.action:
+        return None
+
+    action = proc_step.action
+
+    # Check command for exec_attacker
+    if hasattr(action, 'command') and action.command:
+        import re
+        # Match ${system.<id>.host}
+        match = re.search(r'\$\{system\.([^.}]+)\.host\}', action.command)
+        if match:
+            return match.group(1)
+
+    # Check URL for http_request
+    if hasattr(action, 'url') and action.url:
+        import re
+        match = re.search(r'\$\{system\.([^.}]+)\.host\}', action.url)
+        if match:
+            return match.group(1)
+
+    return None
 
 
 def run_chain_test(
@@ -146,6 +223,8 @@ def run_chain_test(
         deploy_failures: list[str] = []
         for system_id, script in per_system_scripts.items():
             ec, _stdout, stderr = env.deploy_system(system_id, script)
+            if console:
+                console.chain_test_deploy(system_id, ec == 0, stderr)
             if ec != 0:
                 deploy_failures.append(
                     f"System '{system_id}' deploy failed (exit {ec}): {stderr[:300]}"
@@ -158,9 +237,51 @@ def run_chain_test(
                 result=ChainTestResult(status=ChainTestStatus.FAILED, reason=reason)
             )
 
+        # Healthcheck: verify exposed ports are responding
+        logger.info("ChainTest: running healthchecks on exposed ports…")
+        healthcheck_failures: list[str] = []
+        n_checks = 0
+        for system in graph.systems:
+            if system.network.exposed_ports:
+                for port in system.network.exposed_ports:
+                    n_checks += 1
+                    # Try both root and /health endpoints
+                    check_cmd = (
+                        f"curl -sf --max-time 5 http://{system.network.hostname}:{port}/ || "
+                        f"curl -sf --max-time 5 http://{system.network.hostname}:{port}/health"
+                    )
+                    ec, _stdout, _stderr = env.exec_in("attacker", check_cmd)
+                    if ec != 0:
+                        healthcheck_failures.append(
+                            f"System '{system.id}' healthcheck failed on port {port}"
+                        )
+
+        if console and n_checks > 0:
+            console.chain_test_healthcheck(n_checks, len(healthcheck_failures))
+
+        if healthcheck_failures:
+            reason = "; ".join(healthcheck_failures)
+            logger.warning(f"ChainTest: healthcheck failures (may be expected for non-web systems): {reason}")
+            # Don't fail the chain test on healthcheck — some systems are SSH-only, no HTTP
+
         # ---- Phase 2: synthesise the chain procedure ------------------------
         logger.info("ChainTest: synthesising chain procedure…")
-        chain_procedure = chain_attacker.attack(graph, built)
+        if console:
+            console.chain_test_synthesizing()
+        from goe.construction_crew._yaml_repair import ProcedureParseError
+
+        try:
+            chain_procedure = chain_attacker.attack(graph, built)
+            if console:
+                console.chain_test_procedure_summary(len(chain_procedure.procedure))
+        except ProcedureParseError as e:
+            logger.warning(f"ChainTest: chain_attacker failed to produce parseable YAML: {e}")
+            return ChainTestOutcome(
+                result=ChainTestResult(
+                    status=ChainTestStatus.FAILED,
+                    reason=f"Chain attacker YAML parse failure: {e}",
+                )
+            )
 
         # ---- Phase 3: execute + retry loop ----------------------------------
         # Resolve the build-time-static ctx (systems + edge concrete values). Every
@@ -179,7 +300,34 @@ def run_chain_test(
         attempt = 0
         while attempt <= MAX_RETRIES:
             logger.info(f"ChainTest: executing chain procedure (attempt {attempt + 1})…")
+            if console:
+                console.chain_test_executing(attempt + 1, MAX_RETRIES)
             exec_result = run_procedure(chain_procedure, env, ctx)
+
+            # Show step results if console is available
+            if console and exec_result.steps:
+                for step in exec_result.steps:
+                    # Extract action detail for failed steps
+                    action_detail = ""
+                    if not step.passed:
+                        # Get the corresponding step from procedure to show action
+                        proc_step = next((s for s in chain_procedure.procedure if s.step_id == step.step_id), None)
+                        if proc_step and proc_step.action:
+                            action = proc_step.action
+                            # Format action detail based on type
+                            if hasattr(action, 'command'):
+                                action_detail = action.command
+                            elif hasattr(action, 'url'):
+                                action_detail = f"{action.method} {action.url}"
+
+                    console.chain_test_step(
+                        step.step_id,
+                        step.passed,
+                        step.reason,
+                        action_detail=action_detail,
+                        stdout=step.raw.stdout if not step.passed else "",
+                        stderr=step.raw.stderr if not step.passed else ""
+                    )
 
             if exec_result.passed:
                 logger.info("ChainTest: PASSED")
@@ -192,12 +340,37 @@ def run_chain_test(
             if attempt > MAX_RETRIES:
                 break
 
-            diagnosis = _summarise_failure(exec_result)
+            diagnosis = _summarise_failure(exec_result, env=env, procedure=chain_procedure)
             logger.info(f"ChainTest: attempt {attempt} failed — diagnosing and retrying…\n{diagnosis}")
-            chain_procedure = chain_attacker.fix_chain(chain_procedure, diagnosis)
+            if console:
+                console.chain_test_diagnosis(diagnosis)
+
+            # Reset containers to clear stale state from the failed attempt
+            logger.info("ChainTest: resetting all system containers…")
+            if console:
+                console.chain_test_resetting()
+            reset_results = env.reset_all_systems(per_system_scripts)
+            reset_failures = [
+                f"System '{sid}' re-deploy failed (exit {ec}): {stderr[:300]}"
+                for sid, (ec, _, stderr) in reset_results.items()
+                if ec != 0
+            ]
+            if reset_failures:
+                reason = "; ".join(reset_failures)
+                logger.warning(f"ChainTest: reset failed, aborting retries: {reason}")
+                return ChainTestOutcome(
+                    result=ChainTestResult(status=ChainTestStatus.FAILED, reason=f"Reset failed: {reason}")
+                )
+
+            # Fix the procedure based on the diagnosis
+            try:
+                chain_procedure = chain_attacker.fix_chain(chain_procedure, diagnosis)
+            except ProcedureParseError as e:
+                logger.warning(f"ChainTest: fix_chain failed to produce parseable YAML: {e}")
+                break  # exhaust retries gracefully
 
         # All retries exhausted
-        diagnosis = _summarise_failure(exec_result) if exec_result else "No result"
+        diagnosis = _summarise_failure(exec_result, env=env, procedure=chain_procedure) if exec_result else "No result"
         broken_step = exec_result.failed_step if exec_result else None
         return ChainTestOutcome(
             result=ChainTestResult(

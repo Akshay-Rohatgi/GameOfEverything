@@ -69,6 +69,12 @@ Respond with ONLY valid JSON (no markdown, no explanation).
 - For SQL injection: always seed at least one user row with a known username and password
 - Keep the app small — 1 file, minimal routes, just enough to host the vulnerability
 - The attack entry point must be reachable without authentication unless the vulnerability IS the auth bypass
+- **Database type selection:**
+  - Check the System & Chain Context for declared services
+  - If the system declares `mysql`, `mariadb`, or `postgresql` → plan for that specific DB type
+  - If NO concrete DB service is declared (or only generic "database"/"web") → default to **SQLite3**
+  - SQLite3 is file-based and needs no service; MySQL/MariaDB require a running service
+  - Use MySQL/MariaDB only when: (a) explicitly provided as a service, OR (b) the vulnerability requires MySQL-specific features like `LOAD_FILE()` or `INTO OUTFILE`
 
 ### Ubuntu (misconfig) entities
 - The misconfiguration must be exploitable by running shell commands directly on the target

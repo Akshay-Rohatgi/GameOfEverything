@@ -13,9 +13,21 @@ class _FakeEnv:
 
 
 def _args():
-    artifact = SimpleNamespace(source_files={"app.py": "print('x')"})
+    # Mock entity with all fields needed by ProbeContext
+    from goe.models.entity import Runtime
+    entity = SimpleNamespace(
+        id="e1",
+        runtime=SimpleNamespace(value="express"),
+        atoms=[],
+    )
+    # Mock artifact with all fields needed by ProbeContext
+    artifact = SimpleNamespace(
+        source_files={"app.py": "print('x')"},
+        db_setup=None,
+        app_dir="/opt/webapp",
+        system_deps=[],
+    )
     result = SimpleNamespace(error="assertion failure", failed_step="exploit", steps=[])
-    entity = SimpleNamespace(id="e1")
     return entity, artifact, result, _FakeEnv()
 
 

@@ -75,7 +75,7 @@ class TopologyEnvironment:
 
     def setup(self) -> None:
         """Create the chain network, bootstrap system containers, start attacker."""
-        from game_of_everything.tools.test_environment import (
+        from goe.container.test_environment_tool import (
             wait_for_docker,
             ATTACKER_IMAGE_TAG,
             ATTACKER_DOCKERFILE_DIR,
@@ -176,6 +176,67 @@ class TopologyEnvironment:
         self.teardown()
 
     # ------------------------------------------------------------------
+    # Reset (for retry loops)
+    # ------------------------------------------------------------------
+
+    def reset_all_systems(self, per_system_scripts: dict[str, str]) -> dict[str, tuple[int, str, str]]:
+        """Reset all system containers to fresh state and re-deploy.
+
+        Used by the chain test retry loop to clear stale state from failed attempts.
+        Kills all containers, recreates them from the base ubuntu image, re-bootstraps,
+        and re-runs all deploy scripts.
+
+        Args:
+            per_system_scripts: {system_id: deploy_script} dict
+
+        Returns:
+            {system_id: (exit_code, stdout, stderr)} for each re-deploy
+        """
+        logger.info("TopologyEnvironment: resetting all systems for retry…")
+
+        # Kill and recreate all system containers
+        for system in self._graph.systems:
+            cname = f"goe_chain_{self._scope}_{system.id}"
+            hostname = system.network.hostname
+
+            # Remove old container
+            old_container = self._containers.get(system.id)
+            if old_container:
+                try:
+                    old_container.remove(force=True)
+                except Exception as e:
+                    logger.warning(f"TopologyEnvironment: error removing {cname}: {e}")
+
+            # Recreate container (reuse port bindings from setup)
+            port_bindings = None
+            if system.id in self.port_map:
+                port_bindings = {f"{cp}/tcp": hp for cp, hp in self.port_map[system.id].items()}
+
+            container = self._docker.containers.run(
+                _BASE_TARGET_IMAGE,
+                command="sleep infinity",
+                name=cname,
+                hostname=hostname,
+                network=self._net_name,
+                ports=port_bindings,
+                detach=True,
+                remove=False,
+            )
+            # Re-add hostname alias
+            self._network.disconnect(container)
+            self._network.connect(container, aliases=[hostname])
+            # Re-bootstrap
+            self._bootstrap(container, system.id)
+            self._containers[system.id] = container
+
+        # Re-deploy all system scripts
+        results: dict[str, tuple[int, str, str]] = {}
+        for system_id, script in per_system_scripts.items():
+            results[system_id] = self.deploy_system(system_id, script)
+
+        return results
+
+    # ------------------------------------------------------------------
     # Deployment
     # ------------------------------------------------------------------
 
@@ -183,6 +244,9 @@ class TopologyEnvironment:
         """Run deploy_script inside the named system's container.
 
         The script is transferred via base64 to handle arbitrary content.
+        After deployment succeeds, restarts any services that need it (SSH, Samba,
+        etc.) so they pick up user/config changes made by the deploy script.
+
         Returns (exit_code, stdout, stderr).
         """
         container = self._containers.get(system_id)
@@ -207,6 +271,8 @@ class TopologyEnvironment:
             )
         else:
             logger.info(f"TopologyEnvironment: deploy for {system_id} OK")
+            # Restart services so they pick up user/config changes (SSH, Samba, etc.)
+            self._restart_services(container, system_id)
         return ec, stdout, stderr
 
     # ------------------------------------------------------------------
@@ -282,6 +348,63 @@ class TopologyEnvironment:
         if ec != 0:
             stderr = (out_tuple[1] or b"").decode("utf-8", errors="replace") if out_tuple else ""
             logger.warning(f"TopologyEnvironment: bootstrap warning for {system_id} (exit {ec}): {stderr[:200]}")
+
+    def _restart_services(self, container, system_id: str) -> None:
+        """Restart services on the system after deploy so they pick up config changes.
+
+        Restarts SSH, Samba, MySQL, etc. — services that don't auto-reload when /etc/passwd
+        or config files change. Uses ServiceRegistry.restart_all() if the system declares
+        services; otherwise uses a heuristic restart script for common daemons.
+        """
+        system = self._graph.system_by_id(system_id)
+        if system is None:
+            logger.warning(f"TopologyEnvironment: no system found for {system_id}, skipping service restart")
+            return
+
+        # If system declares services, use ServiceRegistry to restart them
+        if system.services:
+            from goe.services import get_registry
+            registry = get_registry()
+            specs = [s for s in system.services if registry.has_recipe(s.id)]
+            if specs:
+                restart_script = registry.restart_all(specs)
+                logger.info(f"TopologyEnvironment: restarting {len(specs)} service(s) for system {system_id}…")
+                ec, _stdout, stderr = self.exec_in(system_id, restart_script)
+                if ec != 0:
+                    logger.warning(f"TopologyEnvironment: service restart errors for {system_id}: {stderr[:300]}")
+                return
+
+        # Fallback: heuristic restart for common daemons (when system has no declared services)
+        # Kill and restart SSH, Samba, MySQL background processes. Use `|| true` to ignore
+        # failures (service might not be installed). These containers don't have systemd —
+        # services run as background processes started with `nohup cmd &`.
+        heuristic_restart = """
+# SSH
+if pgrep -f '/usr/sbin/sshd' >/dev/null 2>&1; then
+    pkill -f '/usr/sbin/sshd' || true
+    sleep 1
+    /usr/sbin/sshd -D -e &>/dev/null &
+fi
+
+# Samba
+if pgrep -f 'smbd' >/dev/null 2>&1; then
+    pkill -f 'smbd|nmbd' || true
+    sleep 1
+    smbd -D &>/dev/null &
+    nmbd -D &>/dev/null &
+fi
+
+# MySQL/MariaDB
+if pgrep -f 'mysqld' >/dev/null 2>&1; then
+    pkill -f 'mysqld' || true
+    sleep 2
+    mysqld &>/var/log/mysql.log &
+fi
+"""
+        logger.info(f"TopologyEnvironment: heuristic service restart for system {system_id}…")
+        ec, _stdout, stderr = self.exec_in(system_id, heuristic_restart)
+        if ec != 0:
+            logger.debug(f"TopologyEnvironment: heuristic restart had warnings for {system_id}: {stderr[:200]}")
 
     def _force_cleanup(self) -> None:
         """Remove all chain containers and networks by well-known names."""
