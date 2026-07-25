@@ -83,6 +83,8 @@ Respond with ONLY valid JSON (no markdown, no explanation).
 - The setup is a bash script that creates the misconfiguration. Build only the packages and
   config unique to this vulnerability — do NOT re-implement services or accounts that the
   System & Chain Context says are provided elsewhere.
+- If the setup requires non-trivial tools (`ssh-keygen`, `openssl`, `crontab`, `gcc`, etc.),
+  note this in `notes` so the developer installs them before use.
 
 ### Build ONE link of the chain (read the System & Chain Context if present)
 This entity is one step in a larger attack chain. Other entities — possibly on other systems —

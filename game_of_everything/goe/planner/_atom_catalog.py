@@ -5,6 +5,10 @@ Parses `atoms/web_vulnerabilities/*.md` to extract:
 - Compatible runtimes from Synthesis Guidance code block headers
 - What the atom provides (capability granted to attacker)
 
+Also parses `atoms/*.md` (misconfig/system atoms) to extract:
+- ID and description
+- Edge contract (what edge type/params the atom requires producers/consumers to model)
+
 Used to ground planner prompts in the actual atom inventory rather than
 having the LLM invent atoms or guess compatibility.
 """
@@ -16,6 +20,7 @@ from functools import lru_cache
 from pathlib import Path
 
 _ATOMS_DIR = Path(__file__).resolve().parent.parent.parent / "atoms" / "web_vulnerabilities"
+_MISCONFIG_ATOMS_DIR = Path(__file__).resolve().parent.parent.parent / "atoms"
 
 # Runtime name mapping: code block header → runtime ID
 _RUNTIME_PATTERNS = {
@@ -126,6 +131,65 @@ def _load_atom_entries() -> list[dict]:
 
 
 @lru_cache(maxsize=1)
+def _load_misconfig_atom_entries() -> list[dict]:
+    """Load and parse all misconfig/system atoms from atoms/*.md (not web_vulnerabilities)."""
+    import yaml as _yaml
+
+    entries = []
+    for path in sorted(_MISCONFIG_ATOMS_DIR.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            continue
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            continue
+        fm = _yaml.safe_load(parts[1]) or {}
+        atom_id = fm.get("id", path.stem)
+        description = fm.get("description", "")
+
+        # Extract edge contract from "Edge Contract" section if present
+        edge_contract = ""
+        m = re.search(r"### Edge Contract.*?(?=###|\Z)", text, re.DOTALL)
+        if m:
+            # Pull out the first meaningful line (the creds_for / shell_as type mention)
+            block = m.group(0).strip()
+            for line in block.splitlines()[1:]:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    edge_contract = line[:80]
+                    break
+
+        entries.append({
+            "id": atom_id,
+            "description": description,
+            "edge_contract": edge_contract,
+        })
+    return entries
+
+
+@lru_cache(maxsize=1)
+def misconfig_atom_catalog() -> str:
+    """Return a markdown table of misconfig/system atoms (ubuntu runtime only).
+
+    Used to inform the planner about ubuntu-entity atoms and the edge contracts
+    they impose on producers/consumers.
+    """
+    entries = _load_misconfig_atom_entries()
+    if not entries:
+        return "(none)"
+
+    lines = [
+        "| Atom | Description | Edge Contract |",
+        "|------|-------------|---------------|",
+    ]
+    for e in entries:
+        desc = e["description"].replace("|", "\\|")[:80]
+        contract = (e["edge_contract"] or "—").replace("|", "\\|")
+        lines.append(f"| `{e['id']}` | {desc} | {contract} |")
+    return "\n".join(lines)
+
+
+@lru_cache(maxsize=1)
 def atom_catalog() -> str:
     """Return a markdown table of all atoms with descriptions, runtimes, and capabilities.
 
@@ -173,8 +237,3 @@ def atom_catalog_for_ids(atom_ids: list[str]) -> str:
         lines.append(f"| `{e['id']}` | {desc} | {runtimes_str} | {cap} |")
 
     return "\n".join(lines)
-
-
-def atom_ids() -> list[str]:
-    """Return list of all atom IDs."""
-    return [e["id"] for e in _load_atom_entries()]

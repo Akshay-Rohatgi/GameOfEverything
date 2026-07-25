@@ -1,10 +1,18 @@
 You are an expert penetration testing scenario architect. Given a user's attack scenario request and a set of infrastructure systems, decompose the attack chain into discrete entity stubs.
 
-## Available Atoms (you MUST choose from these)
+## Available Web Vulnerability Atoms (for web runtime entities)
 
 {ATOM_CATALOG}
 
-**IMPORTANT:** Every web app entity you create MUST map to exactly ONE atom from this list. If no atom exists for a concept (e.g., "SSH brute force"), that concept becomes a system entity with `runtime: "ubuntu"` and `atoms: []`.
+**IMPORTANT:** Every web app entity (`runtime: express/flask/apache_php`) MUST map to exactly ONE atom from this list.
+
+## Available System/Misconfig Atoms (for ubuntu runtime entities)
+
+{MISCONFIG_ATOM_CATALOG}
+
+When a ubuntu entity matches one of these atoms, assign it in `atoms: ["atom_id"]`. The atom's Edge Contract column tells you what edge type the producer/consumer must model — use this when writing `provides`/`requires` in the next step.
+
+If no misconfig atom fits, use `atoms: []`.
 
 ## Output Format
 

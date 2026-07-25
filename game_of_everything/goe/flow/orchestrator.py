@@ -144,7 +144,6 @@ def run(
     # Set up progressive environments. ProgressiveEnvironment runs an ubuntu:22.04
     # target and never installs a web runtime, so it only applies to all-ubuntu
     # systems. Web/mixed systems keep per-entity TestEnvironment isolation.
-    from goe.models.entity import Runtime
     from goe.container.progressive import ProgressiveEnvironment
 
     progressive_envs: dict[str, ProgressiveEnvironment] = {}  # system_id → env
@@ -184,7 +183,7 @@ def run(
                 break  # defensive — nothing buildable but not complete
             entity, incoming = nxt
             edge_schemas = _edge_schemas_for(graph, entity)
-            system_context = _system_chain_context(graph, entity)
+            system_context = _system_chain_context(graph, entity, built=built)
             provided_values = _provided_values_for(graph, entity)
 
             import sys
@@ -385,15 +384,81 @@ def _provided_values_for(graph: "EntityGraph", entity: "Entity") -> dict:
     return out
 
 
-def _system_chain_context(graph: "EntityGraph", entity: "Entity") -> str:
+def _extract_build_summary(entity: "Entity", outcome) -> dict:
+    """Parse a completed BuildOutcome into a lightweight summary of concrete facts.
+
+    Extracts from the deploy script: which users were created, which paths were written,
+    which services were restarted, and the app_dir. These facts constrain what co-located
+    downstream entities can assume about the filesystem and user database.
+    """
+    import re as _re
+
+    summary: dict = {
+        "entity_id": entity.id,
+        "runtime": entity.runtime.value,
+        "app_dir": None,
+        "users_created": [],
+        "paths_written": [],
+        "services_configured": [],
+        "description": entity.description,
+    }
+
+    script = getattr(outcome, "deploy_script", None) or ""
+
+    # app_dir: find the mkdir -p that sets up the app directory.
+    # The deploy script always has `mkdir -p <app_dir>` right before writing source files
+    # via `echo '...' | base64 -d > <app_dir>/...`. Find the mkdir whose path is a parent
+    # of a base64 write — that's the app_dir.
+    b64_dest = _re.findall(r"base64 -d > ([/][\w./-]+)", script)
+    if b64_dest:
+        # Pick the deepest common ancestor of the first few written paths
+        import posixpath
+        first_dest = b64_dest[0]
+        candidate = posixpath.dirname(first_dest)
+        summary["app_dir"] = candidate
+    else:
+        # Fall back: first mkdir -p with a non-trivial path (not /root/.ssh etc.)
+        for m in _re.finditer(r"mkdir -p ([/][\w.-]+)", script):
+            path = m.group(1)
+            if path not in ("/root/.ssh", "/tmp", "/var/run", "/etc"):
+                summary["app_dir"] = path
+                break
+
+    # Users created: capture the username that immediately follows -m/-s/flags or is the last word
+    # useradd [-m] [-s /bin/bash] username  — username is the last non-flag token on the line
+    summary["users_created"] = [
+        m.group(1) for line in script.splitlines()
+        if (m := _re.search(r"useradd\b.*?(\b(?!-)\w[\w-]*)\s*(?:#|$|2>)", line))
+        and not m.group(1).startswith("-")
+    ]
+
+    # Paths written: echo ... > /path and heredoc redirections
+    summary["paths_written"] = list(dict.fromkeys(
+        _re.findall(r"(?:>|cat >)\s*([/][\w./-]+)", script)
+    ))
+
+    # Services configured: both `service <name> <action>` and `systemctl <action> <name>`
+    svc = _re.findall(r"service\s+([\w-]+)\s+(?:restart|reload|start)", script)
+    svc += _re.findall(r"systemctl\s+(?:restart|reload|start)\s+([\w-]+)", script)
+    summary["services_configured"] = list(dict.fromkeys(svc))
+
+    return summary
+
+
+def _system_chain_context(
+    graph: "EntityGraph",
+    entity: "Entity",
+    built: dict | None = None,
+) -> str:
     """Render the system + killchain context for an entity's build prompts.
 
     Gives the engineer/developer what they were previously missing: the system this entity
-    runs on (and the services the platform already provides there), plus a one-line summary of
-    every sibling entity and the system it lives on. With this, an agent knows it is building
-    ONE link of a larger chain whose other links stay deployed — so it should not re-implement
-    another system's role (e.g. an SMB entity standing up a whole SSH server).
+    runs on (and the services the platform already provides there), plus a summary of every
+    sibling entity. For already-built co-system entities, we include concrete facts (app_dir,
+    users created, paths written) so downstream entities can reference the actual filesystem
+    state rather than guessing.
     """
+    built = built or {}
     system = graph.system_by_id(entity.system_id)
     lines: list[str] = ["## System & Chain Context", ""]
 
@@ -409,13 +474,40 @@ def _system_chain_context(graph: "EntityGraph", entity: "Entity") -> str:
 
     siblings = [e for e in graph.entities if e.id != entity.id]
     if siblings:
-        lines.append("Other entities in this scenario stay deployed and handle their own links — "
-                     "do NOT re-create their setup:")
+        # Split siblings into: already-built on same system vs everything else
+        built_cosystem = []
+        other = []
         for sib in siblings:
-            sib_sys = graph.system_by_id(sib.system_id)
-            host = f"/{sib_sys.network.hostname}" if sib_sys is not None else ""
-            lines.append(f"- `{sib.id}` (on system `{sib.system_id}`{host}): {sib.description}")
-        lines.append("")
+            if sib.id in built and sib.system_id == entity.system_id:
+                built_cosystem.append(sib)
+            else:
+                other.append(sib)
+
+        if built_cosystem:
+            lines.append("**Already deployed on this system** (their files/users are live in the container):")
+            for sib in built_cosystem:
+                summary = _extract_build_summary(sib, built[sib.id])
+                lines.append(f"- `{sib.id}`: {sib.description}")
+                if summary["app_dir"]:
+                    lines.append(f"  - app_dir: `{summary['app_dir']}`")
+                if summary["users_created"]:
+                    lines.append(f"  - users created: {', '.join(summary['users_created'])}")
+                if summary["paths_written"]:
+                    # Only show first 6 paths to avoid overwhelming the prompt
+                    paths = summary["paths_written"][:6]
+                    lines.append(f"  - paths written: {', '.join(paths)}")
+                if summary["services_configured"]:
+                    lines.append(f"  - services configured: {', '.join(summary['services_configured'])}")
+            lines.append("")
+
+        if other:
+            lines.append("Other entities in this scenario stay deployed and handle their own links — "
+                         "do NOT re-create their setup:")
+            for sib in other:
+                sib_sys = graph.system_by_id(sib.system_id)
+                host = f"/{sib_sys.network.hostname}" if sib_sys is not None else ""
+                lines.append(f"- `{sib.id}` (on system `{sib.system_id}`{host}): {sib.description}")
+            lines.append("")
 
     # The edges this entity consumes/provides describe exactly which link it owns.
     reqs = [r.edge_id for r in entity.requires]

@@ -27,14 +27,6 @@ UBUNTU_BASE_PACKAGES = [
     "sshpass",
 ]
 
-# Attacker container packages (Kali-based, pre-built)
-ATTACKER_IMAGE = "goe-attacker:latest"
-
-# Base images for different runtimes
-BASE_IMAGES = {
-    "ubuntu": "ubuntu:22.04",
-    "preset": "goe-preset-target:latest",
-}
 
 
 def get_bootstrap_command(target_type: str = "ubuntu") -> str:
@@ -57,16 +49,3 @@ def get_bootstrap_command(target_type: str = "ubuntu") -> str:
     raise ValueError(f"Unknown target type: {target_type}")
 
 
-def get_base_image(target_type: str = "ubuntu") -> str:
-    """Get the Docker base image for a target type.
-
-    Args:
-        target_type: Type of target
-
-    Returns:
-        Docker image name (e.g., "ubuntu:22.04")
-    """
-    if target_type not in BASE_IMAGES:
-        raise ValueError(f"Unknown target type: {target_type}")
-
-    return BASE_IMAGES[target_type]

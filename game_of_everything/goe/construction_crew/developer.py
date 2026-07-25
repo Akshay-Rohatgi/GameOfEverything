@@ -88,6 +88,7 @@ def develop(
 
     cfg = GoEConfig.get()
     model = cfg.model_for("developer")
+    review_model = cfg.model_for("developer_review")
 
     is_ubuntu = entity.runtime.value == "ubuntu"
     runtime_spec = "" if is_ubuntu else _load_runtime_spec(entity.runtime.value)
@@ -252,7 +253,7 @@ Output ONLY valid JSON."""
     messages = [{"role": "user", "content": user_msg}]
     raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="developer")
     messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": review_msg}]
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="developer.self_review")
+    raw = call(model_id=review_model, system=_SYSTEM_PROMPT, messages=messages, caller="developer.self_review")
 
     try:
         return _parse(raw)

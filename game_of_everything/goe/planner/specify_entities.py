@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from goe.models.entity import Entity
 from goe.models.system import System
-from goe.planner._atom_catalog import atom_catalog, atom_catalog_for_ids
+from goe.planner._atom_catalog import atom_catalog, atom_catalog_for_ids, misconfig_atom_catalog
 from goe.planner._utils import call_json, render_system_prompt
 from goe.planner.search import atom_ids_for_query
 
@@ -41,6 +41,7 @@ def specify_entities(
     system_prompt = (
         _SYSTEM_PROMPT_TEMPLATE
         .replace("{ATOMS}", atom_section)
+        .replace("{MISCONFIG_ATOMS}", misconfig_atom_catalog())
         .replace("{RUNTIMES}", runtime_list())
         .replace("{EDGE_TYPES}", edge_type_list())
     )

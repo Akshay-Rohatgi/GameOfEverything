@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from goe.models.system import System
-from goe.planner._atom_catalog import atom_catalog
+from goe.planner._atom_catalog import atom_catalog, misconfig_atom_catalog
 from goe.planner._utils import call_json
 
 _SYSTEM_PROMPT_TEMPLATE = (Path(__file__).parent / "prompts" / "plan_entities.md").read_text()
@@ -25,8 +25,12 @@ class EntityStub(BaseModel):
 
 
 def plan_entities(request: str, systems: list[System], model: str, killchain: str = "") -> list[EntityStub]:
-    # Render atom catalog into the system prompt
-    system_prompt = _SYSTEM_PROMPT_TEMPLATE.replace("{ATOM_CATALOG}", atom_catalog())
+    # Render atom catalogs into the system prompt
+    system_prompt = (
+        _SYSTEM_PROMPT_TEMPLATE
+        .replace("{ATOM_CATALOG}", atom_catalog())
+        .replace("{MISCONFIG_ATOM_CATALOG}", misconfig_atom_catalog())
+    )
 
     systems_json = json.dumps([s.model_dump(mode="json") for s in systems], indent=2)
     user_msg = f"## User Request\n\n{request}\n\n"

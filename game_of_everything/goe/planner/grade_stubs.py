@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from goe.planner._atom_catalog import atom_catalog
+from goe.planner._atom_catalog import atom_catalog, misconfig_atom_catalog
 from goe.planner._utils import call_json
 
 if TYPE_CHECKING:
@@ -28,8 +28,11 @@ def grade_stubs(
     """
     from goe.planner.plan_entities import EntityStub
 
-    # Render atom catalog into the system prompt
-    system_prompt = _SYSTEM_PROMPT_TEMPLATE.replace("{ATOM_CATALOG}", atom_catalog())
+    system_prompt = (
+        _SYSTEM_PROMPT_TEMPLATE
+        .replace("{ATOM_CATALOG}", atom_catalog())
+        .replace("{MISCONFIG_ATOM_CATALOG}", misconfig_atom_catalog())
+    )
 
     stubs_json = json.dumps([s.model_dump(mode="json") for s in stubs], indent=2)
     systems_json = json.dumps([s.model_dump(mode="json") for s in systems], indent=2)

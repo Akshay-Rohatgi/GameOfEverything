@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from goe.construction_crew.engineer import EngineerPlan
 
 
-def _generate_file_tree(plan: "EngineerPlan", runtime: str) -> str:
+def _generate_file_tree(plan: "EngineerPlan", runtime: str, app_dir: str | None = None) -> str:
     """Generate a tree representation of the planned file structure."""
     lines = []
 
@@ -20,7 +20,8 @@ def _generate_file_tree(plan: "EngineerPlan", runtime: str) -> str:
         lines.append("[dim]/opt/[/dim]")
         lines.append("└── setup.sh")
     else:
-        lines.append("[dim]/opt/webapp/[/dim]")
+        display_dir = app_dir or "/opt/webapp"
+        lines.append(f"[dim]{display_dir}/[/dim]")
 
         items = []
 
@@ -177,7 +178,7 @@ def build_entity(
 
     if console:
         console.crew_agent_done("Engineer + Developer + Attacker", duration)
-        file_tree = _generate_file_tree(crew.plan, entity.runtime.value)
+        file_tree = _generate_file_tree(crew.plan, entity.runtime.value, getattr(crew.artifact, "app_dir", None))
         console.crew_plan_summary(
             crew.plan.runtime,
             crew.plan.summary,
@@ -314,13 +315,13 @@ def build_entity(
                     if step.raw.error:
                         log(f"  error: {step.raw.error}")
 
+        from goe.retry.diagnostician import Diagnosis, DiagnosisCategory
         diagnosis_history = []  # Track diagnosis categories to detect stuck loops
         while not result.passed:
             attempt += 1
             if forced_deploy_failure:
                 # Deterministic: a non-zero deploy exit is a design_flaw by
                 # definition — don't ask the LLM to second-guess a broken deploy.
-                from goe.retry.diagnostician import Diagnosis, DiagnosisCategory
                 diagnosis = Diagnosis(
                     category=DiagnosisCategory.design_flaw,
                     description="Deploy script exited non-zero — app failed to deploy.",
@@ -389,7 +390,6 @@ def build_entity(
             # Re-deploy if artifact changed (implementation_bug or design_flaw).
             # Also reset the target — old app processes, port bindings, and DB
             # files from the previous attempt would otherwise persist.
-            from goe.retry.diagnostician import DiagnosisCategory
             if diagnosis.category != DiagnosisCategory.procedure_bug:
                 log("Resetting target container...")
                 env.reset_target()

@@ -1,8 +1,14 @@
 You are a penetration testing scenario designer. Given entity stubs and context about the full attack chain, fully specify all entities as a JSON array.
 
-## Available Atoms
+## Available Web Vulnerability Atoms
 
 {ATOMS}
+
+## Available System/Misconfig Atoms (ubuntu entities)
+
+{MISCONFIG_ATOMS}
+
+The **Edge Contract** column tells you what edge type and params an entity using this atom must model in its `provides`/`requires`. Follow these contracts exactly when wiring edges.
 
 ## Available Runtimes
 

@@ -137,3 +137,8 @@ The Runtime Spec you receive may include a `developer_rules` field. These are ma
     or set up SSH login; that is the SSH system's job.
   - Only assume a package is pre-installed if the System & Chain Context lists it as a provided
     service; otherwise install it.
+  - **Tool availability in setup.sh:** Your script runs inside a Docker container. Do not assume
+    any tool beyond bash and coreutils exists. If your script calls `ssh-keygen`, `openssl`,
+    `python3`, `crontab`, `at`, `mysql`, `gcc`, or any other non-trivial binary — `apt-get install -y`
+    the relevant package at the top of setup.sh before using it. `apt-get install` is idempotent;
+    installing a package that is already present is a no-op and costs nothing.

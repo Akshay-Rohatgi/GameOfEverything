@@ -40,6 +40,7 @@ def attack(
 
     cfg = GoEConfig.get()
     model = cfg.model_for("attacker")
+    review_model = cfg.model_for("attacker_review")
 
     # Provide all source files so the attacker can see exact endpoints/params
     source_listing = "\n\n".join(
@@ -136,7 +137,7 @@ Output ONLY valid YAML (no markdown fences)."""
     messages = [{"role": "user", "content": user_msg}]
     raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="attacker")
     messages += [{"role": "assistant", "content": raw}, {"role": "user", "content": review_msg}]
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=messages, caller="attacker.self_review")
+    raw = call(model_id=review_model, system=_SYSTEM_PROMPT, messages=messages, caller="attacker.self_review")
 
     try:
         return _parse(raw)

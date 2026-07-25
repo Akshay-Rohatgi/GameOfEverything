@@ -23,7 +23,6 @@ class CrewResult:
 def build(
     entity: "Entity",
     incoming_edges: dict,
-    ctx: dict | None = None,
     edge_schemas: dict | None = None,
     system_context: str | None = None,
     provided_values: dict | None = None,
@@ -36,7 +35,6 @@ def build(
     Args:
         entity: The entity to build.
         incoming_edges: Concrete values for incoming edges {edge_id: {param: value}}.
-        ctx: Optional extra context (unused currently, reserved for future).
         edge_schemas: Declared param schema for the entity's provided/required edges.
         system_context: Rendered system + chain context injected into agent prompts.
         provided_values: Already-determined values (resolved hosts, materialized secrets) for
