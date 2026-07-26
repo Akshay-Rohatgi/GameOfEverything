@@ -16,20 +16,22 @@ The project is in active rewrite. There are two parallel codebases:
 
 v2 models scenarios as a directed graph of **entities** (exploitable vulnerabilities) connected by **typed edges** (attacker capabilities). See `docs/rewrite/entity_graph_model.md` for full spec.
 
-### Current State (Phase 2 complete, Phase 3 next)
+### Current State (Phases 0–4 complete, Phase 5 next)
 
 **What works now:**
-- Single entity → full construction crew (Engineer/Opus → Developer/Sonnet → Attacker/Sonnet) → deploy → L2 test → retry escalation
+- Full end-to-end single-system flow: `goe.flow run "..."` → plan → build all entities → package output
+- Multi-system flow: parallel builds across systems, `TopologyEnvironment`, `docker-compose.yml` + `chain_playbook.yaml`
+- L3 chain test gates overall success; `chain_attacker` synthesizes end-to-end procedures
+- Checkpoint/resume: `--resume output/.checkpoints/<run_id>/`
+- Artifacts/eval: opt-in LLM conversation persistence and evaluation suites
 - 3 runtimes: Express (Node.js 20), Flask (Python 3), Apache/PHP
 - 13 web vulnerability atoms (SQLi, CMDi, XSS, SSTI, file upload, path traversal, deserialization, etc.)
-- Confirmed passing: SQLi/Express, CMDi/Flask, SQLi/PHP, XSS-stored/PHP, XSS-admin-bot/Express
-- `python -m goe.planner "..."` → validated entity graph YAML (all planning agents use Sonnet)
-- Static validator (7 checks), BuildScheduler (topological ordering + value propagation)
+- Confirmed passing single entities: SQLi/Express, CMDi/Flask, SQLi/PHP, XSS-stored/PHP, XSS-admin-bot/Express
 
-**What's next (Phase 3):**
-- Flow orchestrator: graph → build all entities → package output
-- `goe run "..."` CLI end-to-end
-- Deliverable: user request → validated deploy script + playbook
+**What's next (Phase 5 — Polish and Parity):**
+- Atom integration into construction crew (engineer receives relevant atoms via RAG)
+- EC2 deploy (port v1's `ec2_deploy.py`)
+- Cost optimization, observability, preset apps
 
 ### Key Components
 
@@ -37,32 +39,44 @@ v2 models scenarios as a directed graph of **entities** (exploitable vulnerabili
 goe/
   bedrock.py              Direct boto3 Bedrock wrapper (no crewAI)
   build.py                Single-entity pipeline + CLI entry point
-  construction_crew/      Engineer → Developer → Attacker agents
+  construction_crew/      Engineer → Developer → Attacker agents (+ chain_attacker)
   executor/               Procedure DSL runner (HTTP, shell, browser)
   runtimes/               Deterministic deploy script generation
   retry/                  Diagnostician + escalation router
   container/              TestEnvironment adapter over v1 Docker tools
   graph/                  EntityGraph, validator (7 checks), topology, BuildScheduler
-  planner/                design_systems, plan_entities, specify_entities, connect_edges, resolve, pipeline
+  planner/                design_systems, plan_killchain, plan_entities, specify_entities, connect_edges, resolve, pipeline
+  flow/                   Orchestrator (plan → build → package), CLI entry point, checkpoint/resume
+  packaging/              deploy.sh + playbook.yaml + README generation
+  metrics/                MetricsSession, token/latency/cost instrumentation
+  artifacts/              Opt-in LLM conversation + file persistence
+  eval/                   Evaluation suites (build, planning, full)
+  services/               Shared service helpers
 ```
 
 ### Running v2
 
 ```bash
-# Plan an attack graph from natural language (requires AWS creds)
+# Full end-to-end run (requires AWS creds + Docker)
 cd game_of_everything
+.venv/bin/python -m goe.flow run "web app with SQL injection that leaks credentials"
+.venv/bin/python -m goe.flow run --verbose "SSH server with weak credentials and SUID privesc"
+.venv/bin/python -m goe.flow run --resume output/.checkpoints/<run_id>/
+
+# Re-test an existing output directory (no LLM — deploys in Docker and runs playbook)
+.venv/bin/python -m goe.flow test output/<run_id>/
+
+# Plan only (Steps 0–3, outputs graph YAML)
 .venv/bin/python -m goe.planner "web app with SQL injection leading to credential theft"
-.venv/bin/python -m goe.planner "..." --output graph.yaml --verbose
 
 # Build a single entity end-to-end
 .venv/bin/python -m goe.build --spec tests/fixtures/entities/sqli_express.yaml
 
-# Run the entity test suite (requires Docker + AWS creds)
-.venv/bin/pytest tests/test_build.py -v -m "llm and docker" -k "sqli"
-
 # Fast unit tests (no Docker, no LLM)
-.venv/bin/pytest tests/test_bedrock.py tests/test_runtimes.py -v
-.venv/bin/pytest tests/test_graph_models.py tests/test_topology.py tests/test_validator.py tests/test_build_scheduler.py tests/test_resolve.py tests/test_planner.py -v
+.venv/bin/python -m pytest -m "not docker and not llm"
+
+# Full test suite (requires Docker + AWS creds)
+.venv/bin/python -m pytest tests/
 ```
 
 ### Procedure DSL
@@ -110,7 +124,7 @@ See `docs/rewrite/implementation_plan.md` for the full phased plan with status.
 |-------|--------|-------------|
 | 0 — Foundation | ✅ Complete | Models, executor, container adapter |
 | 1 — Construction Crew | ✅ Complete | Single entity E2E with retry |
-| 2 — Graph Planning | ✅ Complete | `goe plan "..."` → valid entity graph |
-| 3 — E2E Single System | ⬜ Planned | `goe run "..."` → deploy script + playbook |
-| 4 — Multi-System | ⬜ Planned | docker-compose + chain test |
-| 5 — Polish | ⬜ Planned | Atom RAG, EC2, cost optimization |
+| 2 — Graph Planning | ✅ Complete | `goe.planner "..."` → valid entity graph |
+| 3 — E2E Single System | ✅ Complete | `goe.flow run "..."` → deploy script + playbook |
+| 4 — Multi-System | ✅ Complete | docker-compose + chain test |
+| 5 — Polish and Parity | ⬜ Planned | Atom RAG, EC2, cost optimization, preset apps |
