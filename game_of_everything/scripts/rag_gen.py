@@ -17,14 +17,24 @@ CHROMA_DB_PATH = PROJECT_DIR / "src/game_of_everything" / "chroma_db"
 # grab aws keys/data from goe.toml
 
 import tomllib
-with open(PROJECT_DIR / "goe.toml", 'rb') as f:
+
+toml_path = PROJECT_DIR / "goe.toml"
+if not toml_path.exists():
+    print("Error: goe.toml not found. Run: cp goe.toml.example goe.toml")
+    raise SystemExit(1)
+
+with open(toml_path, 'rb') as f:
     data = tomllib.load(f)
 
-aws_session = boto3.Session(
-    aws_access_key_id=data['aws']['access_key_id'],
-    aws_secret_access_key=data['aws']['secret_access_key'],
-    region_name=os.getenv("AWS_REGION", "us-east-1"),
-)
+aws_cfg = data.get('aws', {})
+session_kwargs: dict = {"region_name": os.getenv("AWS_REGION", aws_cfg.get("region", "us-east-1"))}
+key_id = aws_cfg.get("access_key_id", "")
+secret = aws_cfg.get("secret_access_key", "")
+if key_id and secret:
+    session_kwargs["aws_access_key_id"] = key_id
+    session_kwargs["aws_secret_access_key"] = secret
+
+aws_session = boto3.Session(**session_kwargs)
 
 bedrock_ef = AmazonBedrockEmbeddingFunction(
     session=aws_session,

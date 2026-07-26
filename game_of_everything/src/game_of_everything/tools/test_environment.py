@@ -275,9 +275,13 @@ class TestEnvironmentTool:
                         dockerfile_dir = info["dockerfile_dir"]
                         break
             if dockerfile_dir:
-                logger.info(f"Building target image {self._target_image} from {dockerfile_dir}...")
-                self.client.images.build(path=dockerfile_dir, tag=self._target_image, rm=True)
-                logger.info(f"Built target image: {self._target_image}")
+                try:
+                    self.client.images.get(self._target_image)
+                    logger.info(f"Target image {self._target_image} already exists — skipping build.")
+                except Exception:
+                    logger.info(f"Building target image {self._target_image} from {dockerfile_dir}...")
+                    self.client.images.build(path=dockerfile_dir, tag=self._target_image, rm=True)
+                    logger.info(f"Built target image: {self._target_image}")
 
         # Start target container
         port_bindings = {f"{cp}/tcp": hp for cp, hp in self._expose_ports.items()} if self._expose_ports else None
@@ -309,14 +313,18 @@ class TestEnvironmentTool:
         else:
             logger.info("Skipping bootstrap — pre-built target image already has base tools.")
 
-        # Build the attacker image from the Kali Dockerfile
-        logger.info(f"Building attacker image from {ATTACKER_DOCKERFILE_DIR}...")
-        self.client.images.build(
-            path=ATTACKER_DOCKERFILE_DIR,
-            tag=ATTACKER_IMAGE_TAG,
-            rm=True,
-        )
-        logger.info(f"Built attacker image: {ATTACKER_IMAGE_TAG}")
+        # Build the attacker image only if it doesn't already exist locally
+        try:
+            self.client.images.get(ATTACKER_IMAGE_TAG)
+            logger.info(f"Attacker image {ATTACKER_IMAGE_TAG} already exists — skipping build.")
+        except Exception:
+            logger.info(f"Building attacker image from {ATTACKER_DOCKERFILE_DIR}...")
+            self.client.images.build(
+                path=ATTACKER_DOCKERFILE_DIR,
+                tag=ATTACKER_IMAGE_TAG,
+                rm=True,
+            )
+            logger.info(f"Built attacker image: {ATTACKER_IMAGE_TAG}")
 
         # Start attacker container on the same network
         self.attacker_container = self.client.containers.run(
@@ -332,13 +340,17 @@ class TestEnvironmentTool:
 
         # Start browser sidecar if requested
         if self._enable_browser:
-            logger.info(f"Building browser image from {BROWSER_DOCKERFILE_DIR}...")
-            self.client.images.build(
-                path=BROWSER_DOCKERFILE_DIR,
-                tag=BROWSER_IMAGE_TAG,
-                rm=True,
-            )
-            logger.info(f"Built browser image: {BROWSER_IMAGE_TAG}")
+            try:
+                self.client.images.get(BROWSER_IMAGE_TAG)
+                logger.info(f"Browser image {BROWSER_IMAGE_TAG} already exists — skipping build.")
+            except Exception:
+                logger.info(f"Building browser image from {BROWSER_DOCKERFILE_DIR}...")
+                self.client.images.build(
+                    path=BROWSER_DOCKERFILE_DIR,
+                    tag=BROWSER_IMAGE_TAG,
+                    rm=True,
+                )
+                logger.info(f"Built browser image: {BROWSER_IMAGE_TAG}")
 
             # Pick a free host port for CDP endpoint
             import socket
