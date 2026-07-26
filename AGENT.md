@@ -14,7 +14,7 @@ The project is in active rewrite. There are two parallel codebases:
 
 ## v2 Architecture
 
-v2 models scenarios as a directed graph of **entities** (exploitable vulnerabilities) connected by **typed edges** (attacker capabilities). See `docs/rewrite/entity_graph_model.md` for full spec.
+v2 models scenarios as a directed graph of **entities** (exploitable vulnerabilities) connected by **typed edges** (attacker capabilities). See `docs/architecture/entity_graph_model.md` for full spec.
 
 ### Current State (Phases 0–4 complete, Phase 5 next)
 
@@ -81,7 +81,7 @@ cd game_of_everything
 
 ### Procedure DSL
 
-Attack procedures are YAML files with a strict schema. Actions: `http_request`, `exec_attacker`, `exec_attacker_bg` (detached background), `exec_target`, `listen`, `sleep`, browser actions (`navigate`, `click`, `fill_and_submit`, `evaluate`, etc.). See `docs/rewrite/goe_rewrite.md` for full DSL reference.
+Attack procedures are YAML files with a strict schema. Actions: `http_request`, `exec_attacker`, `exec_attacker_bg` (detached background), `exec_target`, `listen`, `sleep`, browser actions (`navigate`, `click`, `fill_and_submit`, `evaluate`, etc.). See `docs/architecture/v2_spec.md` for the full DSL reference.
 
 ### Runtime Templates
 
@@ -118,7 +118,7 @@ v1 uses crewAI Flow with a multi-agent pipeline. See `CLAUDE.md` for full v1 doc
 
 ## Implementation Roadmap
 
-See `docs/rewrite/implementation_plan.md` for the full phased plan with status.
+See `docs/architecture/v2_implementation_plan.md` for the full phased plan with status.
 
 | Phase | Status | Deliverable |
 |-------|--------|-------------|
