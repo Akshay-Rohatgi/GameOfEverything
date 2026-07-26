@@ -121,7 +121,10 @@ cp goe.toml.example goe.toml
 Verify Bedrock access and ingest the RAG atom database before running the full pipeline:
 
 ```bash
-python scripts/bedrock_access.py
+python scripts/bedrock_access.py \
+  us.anthropic.claude-sonnet-4-6-20251001-v1:0 \
+  us.anthropic.claude-opus-4-6-v1:0 \
+  amazon.titan-embed-text-v2:0
 python scripts/rag_gen.py
 ```
 
