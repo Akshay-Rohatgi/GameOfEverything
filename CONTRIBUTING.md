@@ -161,7 +161,7 @@ New features should include corresponding tests. Bug fixes should include a test
 | Runtime templates | `goe/runtimes/templates/` | Per-runtime install/start/healthcheck |
 | Docker images | `docker/` | Target and attacker Dockerfiles |
 
-When adding a new atom or runtime, follow the patterns documented in [CLAUDE.md](game_of_everything/CLAUDE.md).
+When adding a new atom or runtime, follow the patterns documented in [CLAUDE.md](CLAUDE.md).
 
 ---
 

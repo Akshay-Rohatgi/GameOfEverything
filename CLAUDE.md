@@ -2,6 +2,8 @@
 
 Guidance for Claude Code when working with this repository.
 
+> **Working directory**: all commands below are relative to `game_of_everything/` unless noted otherwise.
+
 ---
 
 ## GoE v2 (`goe/`) — Active Development Branch: `goe-rewrite`
