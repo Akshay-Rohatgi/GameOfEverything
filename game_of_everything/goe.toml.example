@@ -12,25 +12,19 @@ secret_access_key = ""
 region = "us-east-1"
 
 [models]
-# Default Bedrock model ID used when an agent has no explicit override.
-# The "us." inference-profile prefix is added automatically by llm_factory.
-default = "anthropic.claude-sonnet-4-6"
+# Default Bedrock model ID. Use the full cross-region inference profile ID:
+#   e.g. "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 
 [models.overrides]
-# Per-agent model overrides. Keys must match agent names in config/agents.yaml.
-# Uncomment to override a specific agent; otherwise the defaults from
-# config/models.yaml (Opus for app_generation_agent, Sonnet for attack_agent)
-# are used.
-# request_parser_agent          = "anthropic.claude-haiku-3-5"
-# mapping_agent                 = "anthropic.claude-sonnet-4-6"
-# mapping_validator_agent       = "anthropic.claude-haiku-3-5"
-# dependency_enumeration_agent  = "anthropic.claude-haiku-3-5"
-# sequencing_agent              = "anthropic.claude-haiku-3-5"
-# snippet_generation_agent      = "anthropic.claude-sonnet-4-6"
-# testing_agent                 = "anthropic.claude-haiku-3-5"
-# diagnostic_agent              = "anthropic.claude-sonnet-4-6"
-# app_generation_agent          = "anthropic.claude-opus-4-6-v1"
-# attack_agent                  = "anthropic.claude-sonnet-4-6"
+# Per-role model overrides. Keys match role names in goe/config.py.
+# Uncomment to override a specific role; otherwise [models].default is used.
+# planner        = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# engineer       = "us.anthropic.claude-opus-4-6-v1:0"
+# developer      = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# attacker       = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# diagnostician  = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# chain_attacker = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 
 [deploy]
 # EC2 one-click deploy settings used by steps/deploy.py + ec2_deploy.py.
