@@ -10,13 +10,11 @@ Usage:
 import os
 import sys
 import argparse
+import tomllib
 from pathlib import Path
 import chromadb
 import boto3
-from dotenv import load_dotenv
 from chromadb.utils.embedding_functions import AmazonBedrockEmbeddingFunction
-
-load_dotenv()
 
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_DIR = SCRIPT_DIR.parent
@@ -27,11 +25,23 @@ COLLECTION_NAMES = {
     "web_vuln_atoms": "web_vuln_atoms",
 }
 
-aws_session = boto3.Session(
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
-    region_name=os.getenv("AWS_REGION", "us-east-1"),
-)
+# Read AWS credentials from goe.toml (same as rag_gen.py), with env var override.
+toml_path = PROJECT_DIR / "goe.toml"
+_aws_cfg: dict = {}
+if toml_path.exists():
+    with open(toml_path, "rb") as _f:
+        _aws_cfg = tomllib.load(_f).get("aws", {})
+
+_session_kwargs: dict = {
+    "region_name": os.getenv("AWS_REGION", _aws_cfg.get("region", "us-east-1"))
+}
+_key_id = os.getenv("AWS_ACCESS_KEY_ID") or _aws_cfg.get("access_key_id", "")
+_secret = os.getenv("AWS_SECRET_ACCESS_KEY") or _aws_cfg.get("secret_access_key", "")
+if _key_id and _secret:
+    _session_kwargs["aws_access_key_id"] = _key_id
+    _session_kwargs["aws_secret_access_key"] = _secret
+
+aws_session = boto3.Session(**_session_kwargs)
 
 bedrock_ef = AmazonBedrockEmbeddingFunction(
     session=aws_session,
