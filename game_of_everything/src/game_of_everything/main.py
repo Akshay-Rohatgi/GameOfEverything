@@ -423,5 +423,28 @@ def destroy():
     print(f"Destroyed infrastructure for run {args.run_id}")
 
 
+def build_attacker():
+    """Pre-build the goe-attacker Docker image.
+
+    Separates image build failures from test failures so you know before
+    running a full pipeline whether the attacker Dockerfile is broken.
+    """
+    import docker
+    from game_of_everything.tools.test_environment import (
+        ATTACKER_DOCKERFILE_DIR,
+        ATTACKER_IMAGE_TAG,
+    )
+
+    client = docker.from_env()
+    print(f"Building {ATTACKER_IMAGE_TAG} from {ATTACKER_DOCKERFILE_DIR} ...")
+    _, logs = client.images.build(
+        path=ATTACKER_DOCKERFILE_DIR, tag=ATTACKER_IMAGE_TAG, rm=True
+    )
+    for chunk in logs:
+        if "stream" in chunk:
+            print(chunk["stream"], end="", flush=True)
+    print(f"Done: {ATTACKER_IMAGE_TAG}")
+
+
 if __name__ == "__main__":
     kickoff()

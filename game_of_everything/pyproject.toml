@@ -29,6 +29,7 @@ goe = "goe.flow.__main__:main"
 kickoff = "game_of_everything.main:kickoff"
 run_crew = "game_of_everything.main:kickoff"
 plot = "game_of_everything.main:plot"
+build_attacker = "game_of_everything.main:build_attacker"
 goe-destroy = "game_of_everything.main:destroy"
 goe-deploy = "game_of_everything.main:deploy_from_output"
 
