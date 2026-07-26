@@ -18,7 +18,7 @@ Game of Everything is an agentic framework for building vulnerable cybersecurity
 - AWS account with access to **Amazon Bedrock** (Claude Sonnet/Opus models + `amazon.titan-embed-text-v2:0`)
 
 > **Bedrock model access**: Enable the following models in your AWS Bedrock console before first use:
-> `us.anthropic.claude-sonnet-4-6`, `us.anthropic.claude-opus-4-6-v1`, `amazon.titan-embed-text-v2:0`
+> `us.anthropic.claude-sonnet-4-6-20251001-v1:0`, `us.anthropic.claude-opus-4-6-v1:0`, `amazon.titan-embed-text-v2:0`
 
 ---
 
@@ -61,11 +61,12 @@ secret_access_key = ""
 region            = "us-east-1"
 
 [models]
-default = "anthropic.claude-sonnet-4-6"   # default Bedrock model for all agents
+# Use the full cross-region inference profile ID
+default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 
 [models.overrides]
-# Per-agent overrides — keys match agent names in config/agents.yaml
-# app_generation_agent = "anthropic.claude-opus-4-6-v1"
+# Per-role overrides — keys match role names in goe/config.py
+# engineer = "us.anthropic.claude-opus-4-6-v1:0"
 
 [deploy]
 instance_type     = "t3.medium"
@@ -74,7 +75,7 @@ security_group_id = ""        # auto-created if blank
 subnet_id         = ""        # auto-selected if blank
 ```
 
-Environment variables override toml values: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `GOE_DEFAULT_MODEL`, `GOE_MODEL_<AGENT_NAME>`.
+Environment variables override toml values: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `GOE_DEFAULT_MODEL`, `GOE_MODEL_<ROLE_NAME>`.
 
 ### Enable Bedrock Model Access
 
