@@ -76,10 +76,15 @@ subnet_id         = ""        # auto-selected if blank
 
 Environment variables override toml values: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `GOE_DEFAULT_MODEL`, `GOE_MODEL_<AGENT_NAME>`.
 
-### Verify Bedrock Access
+### Enable Bedrock Model Access
+
+Run this once per AWS account to accept model agreements and request entitlements:
 
 ```bash
-python scripts/bedrock_access.py
+python scripts/bedrock_access.py \
+  us.anthropic.claude-sonnet-4-6-20251001-v1:0 \
+  us.anthropic.claude-opus-4-6-v1:0 \
+  amazon.titan-embed-text-v2:0
 ```
 
 ---
@@ -130,7 +135,7 @@ crewai run
 | `--deploy ec2` | — | After generation, deploy the scenario to AWS EC2 |
 | `--review` | off | After script generation, pause for interactive per-box review before deploying |
 | `--ec2-region REGION` | `us-east-1` | AWS region for EC2 deployment |
-| `--ec2-instance-type TYPE` | `t3.medium` | EC2 instance type |
+| `--ec2-instance-type TYPE` | `t3.small` | EC2 instance type |
 | `--ec2-attacker-cidr CIDR` | `$GOE_ATTACKER_CIDR` | Your IP in CIDR notation — required for `--deploy ec2` |
 | `--ec2-ttl-hours N` | `4` | Auto-destroy TTL in hours (`0` = no auto-destroy) |
 
@@ -164,7 +169,7 @@ goe-deploy output/20260418_200538_<scenario_slug> --attacker-cidr 203.0.113.5/32
 |---|---|
 | `output_dir` (positional) | Path to the output directory containing `playbook.json` and `*_deploy.sh` files |
 | `--region REGION` | AWS region (default: `$GOE_EC2_REGION` or `us-east-1`) |
-| `--instance-type TYPE` | EC2 instance type (default: `$GOE_EC2_INSTANCE_TYPE` or `t3.medium`) |
+| `--instance-type TYPE` | EC2 instance type (default: `$GOE_EC2_INSTANCE_TYPE` or `t3.small`) |
 | `--attacker-cidr CIDR` | Your IP in CIDR notation — required |
 | `--ttl-hours N` | Auto-destroy TTL in hours (default: `$GOE_EC2_TTL_HOURS` or `4`) |
 
@@ -200,10 +205,10 @@ plot
 Pre-build the attacker container to separate build failures from test failures:
 
 ```bash
-python -m game_of_everything.main build_attacker_image
+build_attacker
 ```
 
-Per-runtime target images (`goe-target-express`, `goe-target-flask`, `goe-target-php`) and the browser sidecar image (`goe-browser`) are built automatically on first use. Images are cached for 7 days.
+All images (`goe-attacker`, `goe-target-express`, `goe-target-flask`, `goe-target-php`, `goe-browser`) are built on first use and skipped on subsequent runs if they already exist locally.
 
 ---
 
