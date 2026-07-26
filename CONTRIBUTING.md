@@ -1,6 +1,6 @@
 # Contributing to Game of Everything
 
-Game of Everything is an open-source research project developed at **UC Irvine**, maintained by faculty and student members of [Cyber@UCI](https://cyberatuci.com). We welcome contributions from the broader community — whether you are fixing a bug, adding a new atom, or improving documentation.
+We welcome contributions from the broader community — whether you are fixing a bug, adding a new atom, or improving documentation.
 
 ---
 
@@ -152,23 +152,20 @@ New features should include corresponding tests. Bug fixes should include a test
 
 | Area | Location | Notes |
 |---|---|---|
-| v2 planner | `goe/planner/` | NL → EntityGraph; LLM prompts in `prompts/` |
-| v2 construction crew | `goe/construction_crew/` | Engineer / Developer / Attacker agents |
-| v2 flow & orchestration | `goe/flow/` | Run/resume pipeline, chain test |
-| v2 retry & diagnostics | `goe/retry/` | Failure categorization and agent routing |
+| planner | `goe/planner/` | NL → EntityGraph; LLM prompts in `prompts/` |
+| construction crew | `goe/construction_crew/` | Engineer / Developer / Attacker agents |
+| flow & orchestration | `goe/flow/` | Run/resume pipeline, chain test |
+| retry & diagnostics | `goe/retry/` | Failure categorization and agent routing |
 | Misconfig/privesc atoms | `atoms/` | Markdown + YAML frontmatter |
 | Web vulnerability atoms | `atoms/web_vulnerabilities/` | Markdown + YAML frontmatter |
 | Runtime templates | `goe/runtimes/templates/` | Per-runtime install/start/healthcheck |
 | Docker images | `docker/` | Target and attacker Dockerfiles |
-| v1 system (legacy) | `src/game_of_everything/` | crewAI-based; maintained but not actively extended |
 
 When adding a new atom or runtime, follow the patterns documented in [CLAUDE.md](game_of_everything/CLAUDE.md).
 
 ---
 
 ## Research & Attribution
-
-Game of Everything is developed as part of ongoing cybersecurity research at **UC Irvine**. Student contributors through [Cyber@UCI](https://cyberatuci.com) are the primary maintainers.
 
 If you use this project in academic work, please cite it appropriately and reach out to the maintainers — we welcome collaboration and co-authorship opportunities with researchers building on this work.
 
