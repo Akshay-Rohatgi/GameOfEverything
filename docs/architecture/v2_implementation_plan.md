@@ -189,16 +189,22 @@ Port v1's checkpoint system. Port v1's `GoEConsole` for minimal terminal output.
 
 ---
 
-## Phase 4: Multi-System
+## Phase 4: Multi-System ✅ COMPLETE
 
-### 4.1 — Multi-System Build
-Extend build scheduler for parallel builds across systems (ThreadPoolExecutor). Cross-system edges still enforce ordering. Port v1's `PipelineRenderer` + `BoxEventEmitter`.
+**Status**: Implemented. `TopologyEnvironment` deploys systems in Docker; `chain_attacker` synthesizes
+end-to-end procedures with `${system.<id>.host/port}` interpolation. Multi-system output: per-system
+deploy scripts + `docker-compose.yml` + `chain_playbook.yaml`. L3 chain test gates overall success.
 
-### 4.2 — Chain Test
-After all entities pass individual L2, deploy full topology and execute procedures in edge order, piping outputs between entities.
+### 4.1 — Multi-System Build ✅
+Parallel builds across systems via `BuildScheduler`. Cross-system edges enforce ordering. Port v1's
+`PipelineRenderer` + `BoxEventEmitter` pattern.
 
-### 4.3 — Docker Compose Generation
-Per-system `deploy_<system_id>.sh` + `docker-compose.yml` + chain-validated playbook.
+### 4.2 — Chain Test ✅
+`chain_attacker.py` (Sonnet) produces a combined `Procedure` across all built entities. `TopologyEnvironment`
+deploys all systems and executes the chain playbook end-to-end.
+
+### 4.3 — Docker Compose Generation ✅
+Per-system `deploy_<system_id>.sh` + `docker-compose.yml` + `chain_playbook.yaml` written by `packager.py`.
 
 ---
 
