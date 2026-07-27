@@ -2,7 +2,6 @@
 
 import json
 import re
-import rich
 from typing import Optional, TYPE_CHECKING
 from crewai import Agent, Task, Crew, Process
 

@@ -7,7 +7,6 @@ only structured progress output via a Rich Console bound to the real stdout.
 import io
 import logging
 import sys
-import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path

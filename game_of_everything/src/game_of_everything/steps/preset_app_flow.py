@@ -18,6 +18,8 @@ import yaml
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from pydantic import BaseModel
+
 from crewai import Agent, Task, Crew, Process
 from crewai.flow import Flow, listen, start
 
@@ -159,8 +161,6 @@ def _run_verdict_crew(
 # ---------------------------------------------------------------------------
 # State model for the flow
 # ---------------------------------------------------------------------------
-
-from pydantic import BaseModel
 
 
 class PresetAppState(BaseModel):
