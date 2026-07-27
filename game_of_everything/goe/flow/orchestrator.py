@@ -1,11 +1,12 @@
-"""Top-level single-system orchestrator: plan → schedule → build → package.
+"""Top-level orchestrator: plan → schedule → build → chain test → package.
 
-Wires the existing Phase 0-2 pieces together:
-  planner.pipeline.plan → graph.BuildScheduler → build.build_entity → packaging.package
+Phase 1 — plan:    planner.pipeline.plan → EntityGraph
+Phase 2 — build:   BuildScheduler drives build.build_entity per entity
+Phase 3 — test:    optional L3 chain test via TopologyEnvironment + chain_attacker
+Phase 4 — package: packaging.package writes deploy.sh / playbook.yaml / README
 
 build_entity manages its own per-entity Docker container lifecycle, so the
-orchestrator never touches Docker directly. Per-entity isolation is the existing
-design; the full-topology chain test is Phase 4.
+orchestrator never touches Docker directly.
 """
 
 from __future__ import annotations

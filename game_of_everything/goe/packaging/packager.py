@@ -1,7 +1,7 @@
 """Packager — assemble built entities into a self-contained deploy package.
 
 Single-system: all entities deploy onto one box → one ``deploy.sh``, one
-``playbook.yaml``, one ``README.md`` (unchanged from Phase 3).
+``playbook.yaml``, one ``README.md``.
 
 Multi-system: entities grouped by system_id → per-system ``<sid>_deploy.sh``
 files, a ``docker-compose.yml`` (one ubuntu:22.04 service per system on a shared
@@ -152,9 +152,7 @@ def _build_deploy_sh(graph: "EntityGraph", built: dict[str, "BuildOutcome"], ord
             sections.insert(0, svc)
     combined, warnings = assemble_deploy_script(sections)
     if warnings:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"Deploy script grader fixed {len(warnings)} conflict(s): {warnings}")
+        logging.getLogger(__name__).warning(f"Deploy script grader fixed {len(warnings)} conflict(s): {warnings}")
     return combined
 
 
@@ -341,7 +339,6 @@ def package(
                 from goe.packaging.grader import assemble_deploy_script
                 combined, warnings = assemble_deploy_script(sections)
                 if warnings:
-                    import logging
                     logging.getLogger(__name__).warning(
                         f"Deploy script grader fixed {len(warnings)} conflict(s) on system "
                         f"'{sid}': {warnings}"
