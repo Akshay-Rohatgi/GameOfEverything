@@ -60,7 +60,7 @@ def _slug(text: str, max_len: int = 40) -> str:
     return (s[:max_len].rstrip("_")) or "run"
 
 
-def _snapshot(outcome) -> "ckpt.BuildOutcomeSnapshot":
+def _snapshot(outcome: "BuildOutcome") -> "ckpt.BuildOutcomeSnapshot":
     proc = outcome.procedure
     return ckpt.BuildOutcomeSnapshot(
         deploy_script=outcome.deploy_script or "",
@@ -70,7 +70,7 @@ def _snapshot(outcome) -> "ckpt.BuildOutcomeSnapshot":
     )
 
 
-def _outcome_from_snapshot(entity_id: str, snap: "ckpt.BuildOutcomeSnapshot"):
+def _outcome_from_snapshot(entity_id: str, snap: "ckpt.BuildOutcomeSnapshot") -> "BuildOutcome":
     """Rebuild a BuildOutcome from a checkpoint snapshot (for packaging on resume)."""
     from goe.models.procedure import Procedure
     from goe.models.report import BuildOutcome, EntityResult, EntityStatus
@@ -385,7 +385,7 @@ def _provided_values_for(graph: "EntityGraph", entity: "Entity") -> dict:
     return out
 
 
-def _extract_build_summary(entity: "Entity", outcome) -> dict:
+def _extract_build_summary(entity: "Entity", outcome: "BuildOutcome") -> dict:
     """Parse a completed BuildOutcome into a lightweight summary of concrete facts.
 
     Extracts from the deploy script: which users were created, which paths were written,

@@ -24,6 +24,7 @@ from goe.graph.topology import topological_sort
 
 if TYPE_CHECKING:
     from goe.graph.models import EntityGraph
+    from goe.models.procedure import Procedure
     from goe.models.report import BuildOutcome
 
 
@@ -285,7 +286,7 @@ def package(
     built: dict[str, "BuildOutcome"],
     out_dir: Path,
     request: str = "",
-    chain_procedure=None,  # Procedure | None — from chain_test
+    chain_procedure: "Procedure | None" = None,
 ) -> Path:
     """Assemble PASSED entities into a self-contained package under ``out_dir``.
 

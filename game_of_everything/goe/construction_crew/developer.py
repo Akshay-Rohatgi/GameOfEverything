@@ -65,7 +65,7 @@ def develop(
     edge_schemas: dict | None = None,
     system_context: str | None = None,
     provided_values: dict | None = None,
-) -> tuple:
+) -> tuple["BuildArtifact", dict[str, dict[str, str]]]:
     """Call the Developer LLM to produce source code and a BuildArtifact.
 
     Args:
