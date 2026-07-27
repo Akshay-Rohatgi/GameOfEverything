@@ -27,7 +27,7 @@ default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # chain_attacker = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 
 [deploy]
-# EC2 one-click deploy settings used by steps/deploy.py + ec2_deploy.py.
+# EC2 deploy settings.
 # key_pair_name is required for deploy to proceed; the other fields are
 # optional and auto-discovered/created when blank.
 instance_type      = "t3.medium"
