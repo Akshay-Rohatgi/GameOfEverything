@@ -22,15 +22,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Reuse the attacker image and wait_for_docker from v1
-_V1_TOOLS = "game_of_everything.tools.test_environment"
-
 _BASE_TARGET_IMAGE = "ubuntu:22.04"
 _CHAIN_NETWORK_NAME = "goe_chain_net"
 _ATTACKER_CONTAINER_PREFIX = "goe_chain_attacker"
 
-# Bootstrap installed into each target before the deploy script runs.
-# Matches the subset that v1's chain test installed.
+# Bootstrap installed into each target before the deploy script runs:
+# apt update + curl, netcat, and common build/network tools.
 # Bootstrap command imported from central registry
 from goe.container.bootstrap import get_bootstrap_command
 _BOOTSTRAP_CMD = get_bootstrap_command("ubuntu")
