@@ -18,6 +18,13 @@ _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "attacker_system.md").read
 _RUNTIMES_DIR = Path(__file__).resolve().parent.parent / "runtimes" / "templates"
 
 
+def _parse(raw: str) -> "Procedure":
+    from goe.models.procedure import Procedure
+    from goe.construction_crew._yaml_repair import safe_parse_yaml
+    data = safe_parse_yaml(raw)
+    return Procedure.model_validate(data)
+
+
 def _load_attacker_rules(runtime_id: str) -> str:
     path = _RUNTIMES_DIR / f"{runtime_id}.yaml"
     if not path.exists():
@@ -103,12 +110,6 @@ Description: {entity.description}
 Write a YAML procedure that exploits the vulnerability and verifies success.
 Output ONLY valid YAML (no markdown fences)."""
 
-    def _parse(raw: str) -> "Procedure":
-        from goe.models.procedure import Procedure
-        from goe.construction_crew._yaml_repair import safe_parse_yaml
-        data = safe_parse_yaml(raw)
-        return Procedure.model_validate(data)
-
     # Inject Testing Guidance as verification (during self-review)
     testing_guidance = "\n\n".join(
         f"### Atom: {a}\n{load_testing_guidance(a)}"
@@ -193,12 +194,6 @@ def fix_procedure(
 
 Fix the procedure to address exactly this issue. Do not change steps that are working correctly.
 Output ONLY valid YAML (no markdown fences, no explanation)."""
-
-    def _parse(raw: str) -> "Procedure":
-        from goe.models.procedure import Procedure
-        from goe.construction_crew._yaml_repair import safe_parse_yaml
-        data = safe_parse_yaml(raw)
-        return Procedure.model_validate(data)
 
     raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}], caller="attacker.fix_procedure")
 
