@@ -12,7 +12,6 @@ Game of Everything (GoE) builds and validates intentionally vulnerable cybersecu
 ## Setup
 
 ```bash
-cd game_of_everything
 uv sync
 cp goe.toml.example goe.toml
 ```
@@ -38,4 +37,4 @@ uv run goe test output/<run_id>/
 uv run pytest -m "not docker and not llm"
 ```
 
-See [the v2 specification](docs/architecture/v2_spec.md), [entity graph model](docs/architecture/entity_graph_model.md), and [implementation plan](docs/architecture/v2_implementation_plan.md) for the architecture and workflow details.
+See [the v2 specification](docs/architecture/v2_spec.md), [entity graph model](docs/architecture/entity_graph_model.md), and [code architecture](docs/architecture/v2_code_architecture.md) for the architecture and workflow details.

@@ -1,6 +1,6 @@
 # GoE v2: Executable Architecture, Agent Context, and Test Gates
 
-This document was derived by enumerating and tracing the code under `game_of_everything/goe/`. It describes v2 only. It does not use the legacy `src/game_of_everything/` implementation as an architectural source.
+This document was derived by enumerating and tracing the code under `goe/`. It describes v2 only. It does not use the legacy `src/game_of_everything/` implementation as an architectural source.
 
 ## 1. Runtime boundaries and entry points
 
