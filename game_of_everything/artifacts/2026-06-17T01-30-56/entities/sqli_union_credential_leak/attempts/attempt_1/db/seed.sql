@@ -1,1 +1,0 @@
-USE catalog; INSERT INTO products (name, description) VALUES ('Widget A', 'A standard widget for everyday use'), ('Widget B', 'An advanced widget with extra features'), ('Gadget Pro', 'Professional grade gadget'), ('Tool Kit', 'Complete toolkit for all jobs'); INSERT INTO ssh_credentials (username, password) VALUES ('admin', 'Sup3rS3cr3tSSH!'), ('deploy', 'deploy@pass123');

@@ -1,5 +1,0 @@
-{
-  "category": "procedure_bug",
-  "description": "The attacker procedure used the wrong URL path. The app handles requests at '/search.php' or '/search' (as shown in index.php which is the actual handler checking REQUEST_URI), but Apache is serving files directly and the 'verify_endpoint' step likely requested a path that doesn't exist as a file (e.g., '/search.php' when only 'index.php' exists, or '/login.php' which is not defined). The index.php file contains all routing logic and must be accessed directly, or Apache must be configured to route all requests through index.php. The 404 suggests the attacker hit a URL that isn't routed to index.php.",
-  "evidence": "Step 'verify_endpoint': expected status 200, got 404. Apache is running on port 80, index.php contains the routing logic for /search.php and /search paths, but the attacker's verify_endpoint step hit a URL returning 404 - likely hitting /login.php or another path not handled by index.php, or the Apache config doesn't route requests through index.php as the front controller."
-}

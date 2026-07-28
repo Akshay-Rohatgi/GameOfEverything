@@ -19,7 +19,7 @@ cd "$PROJECT_ROOT"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="eval_results/fixture_validation_${TIMESTAMP}"
 
-# Confirmed passing fixtures (from CLAUDE.md)
+# Confirmed passing fixtures
 CONFIRMED=(
     "tests/fixtures/entities/sqli_express.yaml"
     "tests/fixtures/entities/cmdi_flask.yaml"

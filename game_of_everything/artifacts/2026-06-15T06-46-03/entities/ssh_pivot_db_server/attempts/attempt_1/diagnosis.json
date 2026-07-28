@@ -1,5 +1,0 @@
-{
-  "category": "design_flaw",
-  "description": "The SSH daemon (sshd) is not running. The container's main process is 'sleep infinity' (PID 1), and no sshd process is present. Port 22 is not listening. The setup.sh script creates a /start.sh that should launch sshd, but it was never executed as the container entrypoint.",
-  "evidence": "Running processes show only 'sleep infinity' as PID 1 with no sshd process. Listening ports show only 127.0.0.11:41727 (Docker DNS), no port 22. The attacker gets 'Connection refused' on port 22. The /start.sh script exists but was not used as the container's CMD/ENTRYPOINT."
-}

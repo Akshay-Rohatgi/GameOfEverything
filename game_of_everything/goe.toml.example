@@ -16,7 +16,7 @@ region = "us-east-1"
 #   e.g. "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 
-[models.overrides]
+[models.v2_overrides]
 # Per-role model overrides. Keys match role names in goe/config.py.
 # Uncomment to override a specific role; otherwise [models].default is used.
 # planner        = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
@@ -25,15 +25,6 @@ default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # attacker       = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # diagnostician  = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # chain_attacker = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
-
-[deploy]
-# EC2 deploy settings.
-# key_pair_name is required for deploy to proceed; the other fields are
-# optional and auto-discovered/created when blank.
-instance_type      = "t3.medium"
-key_pair_name      = ""
-security_group_id  = ""
-subnet_id          = ""
 
 [artifacts]
 # Persist workflow artifacts from every run: LLM conversation history (full

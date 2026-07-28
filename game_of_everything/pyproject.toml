@@ -1,7 +1,7 @@
 [project]
 name = "game_of_everything"
 version = "0.1.0"
-description = "game_of_everything using crewAI"
+description = "Game of Everything v2 scenario generation framework"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.11"
 dependencies = [
@@ -26,19 +26,13 @@ dev = [
 
 [project.scripts]
 goe = "goe.flow.__main__:main"
-kickoff = "game_of_everything.main:kickoff"
-run_crew = "game_of_everything.main:kickoff"
-plot = "game_of_everything.main:plot"
-build_attacker = "game_of_everything.main:build_attacker"
-goe-destroy = "game_of_everything.main:destroy"
-goe-deploy = "game_of_everything.main:deploy_from_output"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/game_of_everything", "goe"]
+packages = ["goe"]
 
 [tool.pytest.ini_options]
 markers = [
@@ -46,6 +40,3 @@ markers = [
     "llm: tests that make real LLM API calls (requires AWS credentials in goe.toml)",
     "eval: evaluation tests (requires docker and llm)",
 ]
-
-[tool.crewai]
-type = "flow"
