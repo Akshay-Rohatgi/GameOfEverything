@@ -96,6 +96,8 @@ stay deployed and provide their own pieces.
 - Services listed as already provided by the platform are installed and running with a default
   config — edit their config and reload/restart that service to apply your vulnerability, but do
   not reinstall them or add a service this system does not declare.
+- **`systemctl` is NOT available in Docker.** To reload a service: Samba → `smbcontrol smbd reload-config`;
+  SSH → `kill -HUP $(pgrep sshd)`; Apache → `apache2ctl graceful`. Never use `systemctl`.
 - Your `success_indicator` MUST be observable on this entity's own system in isolation (e.g.
   "the key file is anonymously readable from the share"), NOT the end-to-end cross-system
   outcome (NOT "SSH login to the other box succeeds"). The full chain is verified separately.

@@ -130,11 +130,14 @@ The Runtime Spec you receive may include a `developer_rules` field. These are ma
   - SUID/privesc helper binaries → install only what your vuln needs
   - **Declared system services (see the System & Chain Context) are ALREADY installed and
     running** — e.g. if the system declares `smb`/`ssh`, samba/openssh are present with a default
-    config. Edit their config for your vulnerability and reload/restart THAT service to apply it
-    (e.g. append your `[public]` share to `/etc/samba/smb.conf` then `smbcontrol smbd reload-config`
-    or restart smbd). But do NOT `apt-get install` a declared service, and do NOT install a
-    service this system does NOT declare — an SMB-share entity must never install `openssh-server`
-    or set up SSH login; that is the SSH system's job.
+    config. Edit their config for your vulnerability and reload/restart THAT service to apply it.
+    But do NOT `apt-get install` a declared service, and do NOT install a service this system does
+    NOT declare — an SMB-share entity must never install `openssh-server` or set up SSH login.
+  - **`systemctl` is NOT available in Docker containers.** Use direct process commands instead:
+    - Samba: `smbcontrol smbd reload-config` (config reload) or `pkill smbd && smbd -D` (full restart)
+    - SSH: `kill -HUP $(pgrep sshd)` (config reload without dropping connections)
+    - Apache: `apache2ctl graceful`
+    - Never use `systemctl restart/reload/start/stop` — it will fail with exit code 1 under `set -e`
   - Only assume a package is pre-installed if the System & Chain Context lists it as a provided
     service; otherwise install it.
   - **Tool availability in setup.sh:** Your script runs inside a Docker container. Do not assume

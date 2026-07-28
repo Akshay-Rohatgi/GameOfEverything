@@ -196,6 +196,7 @@ Return ONLY the fixed bash script. No explanation, no markdown fences, just the 
 - Preserve all service start/restart commands
 - Keep all `set -e`, `#!/bin/bash` directives from the original
 - **NEVER truncate base64 echo statements — remove entirely or keep entirely**
+- **ALWAYS preserve section header comments** (`# --- entity_id ---`) exactly as-is — never remove them
 - If no issues found, return the original script unchanged"""
 
     # Build context showing entity boundaries

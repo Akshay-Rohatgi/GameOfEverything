@@ -86,6 +86,11 @@ String matching (`stdout_contains`, `body_contains`) is brittle - it breaks on f
 | SQL injection | `body_contains: "admin:hash"` | `body_regex: "admin.*:.*\$2[aby]\$"` |
 | Command output | `stdout_contains: "flag{...}"` | `stdout_regex: "flag\{[a-f0-9]{32}\}"` |
 | File exists | `stdout_contains: "credentials.txt"` | `stdout_regex: "credentials\.txt"` |
+| SMB download | `stdout_regex: "getting file"` | `exit_code: 0` + separate step `ls /tmp/file` |
+
+**Tool-specific stderr warnings:**
+- `smbclient`: ALL progress messages (`getting file`, `putting file`, `NT_STATUS_*`) go to **stderr**, not stdout. Never assert `stdout_regex` on smbclient download progress. Assert `exit_code: 0` for success, then verify the downloaded file exists with a separate `ls` step.
+- `ssh`/`sshpass`: connection banners and warnings go to stderr. Assert on stdout (command output) only.
 
 **Why regex wins:**
 - Handles formatting variations (spaces, quotes, case)
