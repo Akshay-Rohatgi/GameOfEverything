@@ -10,7 +10,7 @@ Every LLM call through `goe.bedrock.call()` is instrumented to capture:
 - Input/output token counts
 - Latency (ms)
 - Model ID
-- Caller identity (e.g., "engineer", "planner.design_systems")
+- Caller identity (e.g., "architect", "planner.design_systems")
 
 Metrics are collected in an opt-in `MetricsSession` context.
 
@@ -112,5 +112,5 @@ def test_build_eval_sqli():
 
 - **Single instrumentation point**: All LLM calls flow through `goe.bedrock.call()`, making metrics collection transparent.
 - **Opt-in**: `MetricsSession` is a context var. When no session is active, calls proceed normally with no overhead.
-- **Caller identification**: Each call site passes a `caller=` string (e.g., "engineer", "planner.design_systems") for attribution.
+- **Caller identification**: Each call site passes a `caller=` string (e.g., "architect", "planner.design_systems") for attribution.
 - **No database**: Results are JSON on disk — diffable, CI-friendly, and easy to version.

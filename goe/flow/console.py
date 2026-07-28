@@ -175,8 +175,8 @@ class RunConsole:
         self._line(f"  [green]✓[/green] {agent_name} complete ({duration:.1f}s)")
 
     def crew_plan_summary(self, runtime: str, summary: str, entry: str, file_tree: str = "") -> None:
-        """Show engineer plan summary."""
-        self._line(f"\n[bold]Engineer Plan:[/bold]")
+        """Show architect plan summary."""
+        self._line(f"\n[bold]Architect Plan:[/bold]")
         self._line(f"  [cyan]Runtime:[/cyan]     {runtime}")
         self._line(f"  [cyan]Summary:[/cyan]     {summary[:120]}{'...' if len(summary) > 120 else ''}")
         self._line(f"  [cyan]Entry:[/cyan]       {entry[:120]}{'...' if len(entry) > 120 else ''}")

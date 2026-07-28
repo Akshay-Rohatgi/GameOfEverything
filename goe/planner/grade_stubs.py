@@ -13,7 +13,9 @@ if TYPE_CHECKING:
     from goe.models.system import System
     from goe.planner.plan_entities import EntityStub
 
-_SYSTEM_PROMPT_TEMPLATE = (Path(__file__).parent / "prompts" / "grade_stubs.md").read_text()
+_SYSTEM_PROMPT_TEMPLATE = (
+    Path(__file__).parent / "prompts" / "grade_stubs.md"
+).read_text(encoding="utf-8")
 
 
 def grade_stubs(

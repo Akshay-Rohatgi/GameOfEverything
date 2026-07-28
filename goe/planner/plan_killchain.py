@@ -7,7 +7,9 @@ from pathlib import Path
 
 from goe.models.system import System
 
-_SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "plan_killchain.md").read_text()
+_SYSTEM_PROMPT = (
+    Path(__file__).parent / "prompts" / "plan_killchain.md"
+).read_text(encoding="utf-8")
 
 
 def plan_killchain(request: str, systems: list[System], model: str) -> str:

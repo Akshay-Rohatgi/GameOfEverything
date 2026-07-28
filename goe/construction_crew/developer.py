@@ -8,11 +8,13 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from goe.models.entity import Entity
-    from goe.construction_crew.engineer import EngineerPlan
+    from goe.construction_crew.architect import ArchitectPlan
 
 from goe.construction_crew.atoms import load_logic_requirements, load_synthesis_guidance
 
-_SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "developer_system.md").read_text()
+_SYSTEM_PROMPT = (
+    Path(__file__).parent / "prompts" / "developer_system.md"
+).read_text(encoding="utf-8")
 _RUNTIMES_DIR = Path(__file__).resolve().parent.parent / "runtimes" / "templates"
 
 
@@ -60,7 +62,7 @@ def _load_runtime_spec(runtime_id: str) -> str:
 
 def develop(
     entity: "Entity",
-    plan: "EngineerPlan",
+    plan: "ArchitectPlan",
     incoming_edges: dict,
     edge_schemas: dict | None = None,
     system_context: str | None = None,

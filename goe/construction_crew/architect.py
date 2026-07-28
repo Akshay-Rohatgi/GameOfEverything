@@ -1,4 +1,4 @@
-"""Engineer agent — turns an entity spec into an architecture plan."""
+"""Architect agent — turns an entity spec into an architecture plan."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ if TYPE_CHECKING:
 
 from goe.construction_crew.atoms import load_atom
 
-_SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "engineer_system.md").read_text()
+_SYSTEM_PROMPT = (
+    Path(__file__).parent / "prompts" / "architect_system.md"
+).read_text(encoding="utf-8")
 
 
 class EndpointSpec(BaseModel):
@@ -37,7 +39,7 @@ class DataModel(BaseModel):
     tables: list[TableSpec] = []
 
 
-class EngineerPlan(BaseModel):
+class ArchitectPlan(BaseModel):
     model_config = ConfigDict(extra="allow")
     summary: str
     runtime: str
@@ -52,8 +54,8 @@ class EngineerPlan(BaseModel):
     notes: str = ""
 
 
-def plan(entity: "Entity", incoming_edges: dict, system_context: str | None = None) -> EngineerPlan:
-    """Call the Engineer LLM to produce an architecture plan for the entity.
+def plan(entity: "Entity", incoming_edges: dict, system_context: str | None = None) -> ArchitectPlan:
+    """Call the Architect LLM to produce an architecture plan for the entity.
 
     Args:
         system_context: Optional rendered markdown describing this entity's system, the
@@ -64,7 +66,7 @@ def plan(entity: "Entity", incoming_edges: dict, system_context: str | None = No
     from goe.config import GoEConfig
 
     cfg = GoEConfig.get()
-    model = cfg.model_for("engineer")
+    model = cfg.model_for("architect")
 
     atom_content = "\n\n".join(
         f"## Atom: {a}\n{load_atom(a)}" for a in (entity.atoms or [])
@@ -93,7 +95,7 @@ Design an architecture plan for this entity. Use the `runtime` field to determin
 - Ubuntu runtime: plan an OS-level misconfiguration or system vulnerability.
 Output ONLY valid JSON matching the schema in the system prompt."""
 
-    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}], caller="engineer")
+    raw = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": user_msg}], caller="architect")
 
     # Strip markdown fences if the model added them
     raw = raw.strip()
@@ -103,14 +105,14 @@ Output ONLY valid JSON matching the schema in the system prompt."""
 
     try:
         data = json.loads(raw)
-        return EngineerPlan.model_validate(data)
+        return ArchitectPlan.model_validate(data)
     except Exception as e:
         # Retry once with the error
         retry_msg = f"{user_msg}\n\nYour previous response failed to parse: {e}\n\nOutput ONLY valid JSON."
-        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}], caller="engineer.retry")
+        raw2 = call(model_id=model, system=_SYSTEM_PROMPT, messages=[{"role": "user", "content": retry_msg}], caller="architect.retry")
         raw2 = raw2.strip()
         if raw2.startswith("```"):
             raw2 = raw2.split("\n", 1)[1]
             raw2 = raw2.rsplit("```", 1)[0]
         data = json.loads(raw2)
-        return EngineerPlan.model_validate(data)
+        return ArchitectPlan.model_validate(data)

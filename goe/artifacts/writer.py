@@ -81,11 +81,11 @@ def _write_entity_files(entity_dir: Path, crew: "CrewResult") -> list[str]:
     (entity_dir / "procedure.yaml").write_text(proc_yaml, encoding="utf-8")
     written.append("procedure.yaml")
 
-    # Engineer plan
-    (entity_dir / "engineer_plan.json").write_text(
+    # Architect plan
+    (entity_dir / "architect_plan.json").write_text(
         json.dumps(crew.plan.model_dump(), indent=2), encoding="utf-8"
     )
-    written.append("engineer_plan.json")
+    written.append("architect_plan.json")
 
     return written
 
@@ -98,7 +98,7 @@ def save_crew_artifacts(
     """Persist the initial crew result for an entity into run_dir.
 
     Writes to: run_dir/entities/<entity_id>/{app/, db/, artifact.json,
-    procedure.yaml, engineer_plan.json}
+    procedure.yaml, architect_plan.json}
     """
     entity_dir = run_dir / "entities" / entity_id
     entity_dir.mkdir(parents=True, exist_ok=True)

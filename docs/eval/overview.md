@@ -23,7 +23,7 @@ A comprehensive evaluation system for the GoE v2 pipeline that tracks both **eff
    - `goe/bedrock.py`: Added `caller` param, extract token usage, measure latency
    - `goe/planner/_utils.py`: Thread `caller` through `call_json`
    - `goe/planner/*.py`: 4 files (design_systems, plan_entities, specify_entities, connect_edges)
-   - `goe/construction_crew/*.py`: 3 files (engineer, developer, attacker)
+   - `goe/construction_crew/*.py`: 3 files (architect, developer, attacker)
    - `goe/retry/diagnostician.py`: 1 file
 
 4. **Data Model Extensions**
@@ -112,7 +112,7 @@ def test_build_eval_sqli():
 
 2. **Opt-in via context vars**: `MetricsSession` uses `contextvars.ContextVar`, so metrics are only collected when explicitly requested. No overhead for normal pipeline runs.
 
-3. **Caller identification**: Each call site passes a string like `"engineer"` or `"planner.design_systems"` for attribution. Self-review turns and retries are tagged distinctly (`"developer.self_review"`, `"engineer.retry"`).
+3. **Caller identification**: Each call site passes a string like `"architect"` or `"planner.design_systems"` for attribution. Self-review turns and retries are tagged distinctly (`"developer.self_review"`, `"architect.retry"`).
 
 4. **Token usage from Bedrock API**: The `response["usage"]` field from Bedrock Converse API was previously discarded. Now extracted and recorded.
 
@@ -157,7 +157,7 @@ goe/planner/design_systems.py      # caller="planner.design_systems"
 goe/planner/plan_entities.py       # caller="planner.plan_entities"
 goe/planner/specify_entities.py    # caller="planner.specify_entities"
 goe/planner/connect_edges.py       # caller="planner.connect_edges"
-goe/construction_crew/engineer.py  # caller="engineer", "engineer.retry"
+goe/construction_crew/architect.py  # caller="architect", "architect.retry"
 goe/construction_crew/developer.py # caller="developer", "developer.self_review", "developer.retry"
 goe/construction_crew/attacker.py  # caller="attacker", "attacker.self_review", "attacker.fix_procedure"
 goe/retry/diagnostician.py         # caller="diagnostician"
@@ -195,7 +195,7 @@ Timestamp: 2026-06-12T14:30:00
   Avg latency per call: 1,912ms
 
   Calls by agent:
-    engineer                      :  1 calls,    2,145 tokens
+    architect                      :  1 calls,    2,145 tokens
     developer                     :  1 calls,    3,421 tokens
     developer.self_review         :  1 calls,    2,987 tokens
     attacker                      :  1 calls,    1,876 tokens

@@ -10,11 +10,13 @@ import yaml
 if TYPE_CHECKING:
     from goe.models.entity import Entity
     from goe.models.artifacts import BuildArtifact
-    from goe.construction_crew.engineer import EngineerPlan
+    from goe.construction_crew.architect import ArchitectPlan
 
 from goe.construction_crew.atoms import load_logic_requirements, load_testing_guidance
 
-_SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "attacker_system.md").read_text()
+_SYSTEM_PROMPT = (
+    Path(__file__).parent / "prompts" / "attacker_system.md"
+).read_text(encoding="utf-8")
 _RUNTIMES_DIR = Path(__file__).resolve().parent.parent / "runtimes" / "templates"
 
 
@@ -36,7 +38,7 @@ def _load_attacker_rules(runtime_id: str) -> str:
 
 def attack(
     entity: "Entity",
-    plan: "EngineerPlan",
+    plan: "ArchitectPlan",
     artifact: "BuildArtifact",
     outgoing_values: dict,
 ) -> "Procedure":

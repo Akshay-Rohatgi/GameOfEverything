@@ -35,7 +35,7 @@ artifacts/
     │   ├── llm_calls.jsonl     # one LLMTranscriptRecord per line (machine)
     │   ├── developer.md        # human-readable: system + all turns + responses
     │   ├── attacker.md
-    │   ├── engineer.md
+    │   ├── architect.md
     │   └── planner.md
     ├── entities/
     │   └── <entity_id>/
@@ -45,7 +45,7 @@ artifacts/
     │       │   └── seed.sql
     │       ├── artifact.json   # BuildArtifact metadata (port, app_dir, deps)
     │       ├── procedure.yaml  # attack Procedure
-    │       ├── engineer_plan.json
+    │       ├── architect_plan.json
     │       └── attempts/       # only present if retries occurred
     │           ├── attempt_1/  # updated app/, procedure.yaml, diagnosis.json
     │           ├── attempt_initial_to_1.diff   # unified diff of changes
@@ -95,9 +95,9 @@ the complete conversation.
   "llm": {
     "total_calls": 6,
     "total_tokens": 12345,
-    "calls_by_caller": {"engineer": {"count": 1, ...}, ...}
+    "calls_by_caller": {"architect": {"count": 1, ...}, ...}
   },
-  "conversations": ["attacker", "developer", "engineer"],
+  "conversations": ["attacker", "developer", "architect"],
   "entities": [{"id": "sqli_express", "status": "PASSED", "attempts": 1}],
   "files": ["conversations/developer.md", "entities/sqli_express/procedure.yaml", ...]
 }

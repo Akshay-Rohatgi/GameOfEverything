@@ -42,7 +42,7 @@ Per-entity details:
 ### Agent-Level Metrics
 ```
 Calls by agent:
-  engineer                      :   2 calls,    5,282 tokens,  10.6s
+  architect                      :   2 calls,    5,282 tokens,  10.6s
   developer                     :   2 calls,    6,055 tokens,  12.1s
   developer.self_review         :   2 calls,    7,773 tokens,  15.5s
   attacker                      :   2 calls,    4,506 tokens,   9.0s

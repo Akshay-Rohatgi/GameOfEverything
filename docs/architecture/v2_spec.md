@@ -108,13 +108,13 @@ Each entity is built by a **construction_crew** — an agentic sub-graph with th
                     ┌─────────────────────────────────────────────┐
                     │            construction_crew                 │
                     │                                             │
-                    │  [engineer]  →  [developer]  →  [attacker]  │
+                    │  [architect]  →  [developer]  →  [attacker]  │
                     │     opus          sonnet          sonnet     │
                     │                                             │
                     └─────────────────────────────────────────────┘
 ```
 
-### Engineer (Opus)
+### Architect (Opus)
 
 **Receives**: Entity spec, resolved incoming edge values, relevant atoms
 **Produces**: Architecture plan — what to build, how the vulnerability works, what the exploit path is
@@ -124,7 +124,7 @@ For misconfig entities (`runtime == ubuntu`): produces the config approach (what
 
 ### Developer (Sonnet)
 
-**Receives**: Engineer's plan, entity spec, resolved incoming edge values
+**Receives**: Architect's plan, entity spec, resolved incoming edge values
 **Produces**: Implementation artifacts:
 - **Web entities** (`runtime != ubuntu`): Application source files + DB schema/seed if needed
 - **Misconfig entities** (`runtime == ubuntu`): Bash configuration snippet
@@ -961,7 +961,7 @@ Once all entities validated (and chain test passes if multi-system):
 ## Cost Model (Estimated)
 
 Per entity:
-- Engineer (Opus): ~$0.10-0.30 (one call, plan output)
+- Architect (Opus): ~$0.10-0.30 (one call, plan output)
 - Developer (Sonnet): ~$0.03-0.10 (one call, code output)  
 - Attacker (Sonnet): ~$0.03-0.08 (one call, procedure output)
 - L2 test execution: ~$0.00 (deterministic, no LLM)

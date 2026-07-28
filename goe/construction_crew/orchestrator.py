@@ -1,4 +1,4 @@
-"""Construction crew orchestrator — Engineer → Developer → Attacker."""
+"""Construction crew orchestrator — Architect → Developer → Attacker."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from goe.models.entity import Entity
     from goe.models.artifacts import BuildArtifact
     from goe.models.procedure import Procedure
-    from goe.construction_crew.engineer import EngineerPlan
+    from goe.construction_crew.architect import ArchitectPlan
 
 
 @dataclass
@@ -17,7 +17,7 @@ class CrewResult:
     artifact: "BuildArtifact"
     procedure: "Procedure"
     outgoing_values: dict[str, dict[str, str]]  # edge_id → {param: concrete value}
-    plan: "EngineerPlan"
+    plan: "ArchitectPlan"
 
 
 def build(
@@ -29,7 +29,7 @@ def build(
 ) -> CrewResult:
     """Run the full construction crew for a single entity.
 
-    Sequence: Engineer (plan) → Developer (code) → Attacker (procedure).
+    Sequence: Architect (plan) → Developer (code) → Attacker (procedure).
     No retry logic here — callers (retry router) handle escalation.
 
     Args:
@@ -41,20 +41,20 @@ def build(
             edges this entity provides, to be embedded verbatim by the developer.
 
     Returns:
-        CrewResult with artifact, procedure, outgoing edge values, and engineer plan.
+        CrewResult with artifact, procedure, outgoing edge values, and architect plan.
     """
-    from goe.construction_crew import engineer, developer, attacker
+    from goe.construction_crew import architect, developer, attacker
 
-    eng_plan = engineer.plan(entity, incoming_edges, system_context=system_context)
+    architect_plan = architect.plan(entity, incoming_edges, system_context=system_context)
     artifact, outgoing_values = developer.develop(
-        entity, eng_plan, incoming_edges, edge_schemas=edge_schemas,
+        entity, architect_plan, incoming_edges, edge_schemas=edge_schemas,
         system_context=system_context, provided_values=provided_values,
     )
-    procedure = attacker.attack(entity, eng_plan, artifact, outgoing_values)
+    procedure = attacker.attack(entity, architect_plan, artifact, outgoing_values)
 
     return CrewResult(
         artifact=artifact,
         procedure=procedure,
         outgoing_values=outgoing_values,
-        plan=eng_plan,
+        plan=architect_plan,
     )

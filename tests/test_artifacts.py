@@ -69,10 +69,10 @@ def sample_procedure():
 
 
 @pytest.fixture
-def sample_engineer_plan():
-    """Minimal EngineerPlan for testing."""
-    from goe.construction_crew.engineer import EngineerPlan
-    return EngineerPlan(
+def sample_architect_plan():
+    """Minimal ArchitectPlan for testing."""
+    from goe.construction_crew.architect import ArchitectPlan
+    return ArchitectPlan(
         summary="Test plan",
         runtime="flask",
         vulnerability_placement="in /login",
@@ -82,26 +82,26 @@ def sample_engineer_plan():
 
 
 @pytest.fixture
-def sample_crew(sample_artifact, sample_procedure, sample_engineer_plan):
+def sample_crew(sample_artifact, sample_procedure, sample_architect_plan):
     """Minimal CrewResult for testing."""
     from goe.construction_crew.orchestrator import CrewResult
     return CrewResult(
         artifact=sample_artifact,
         procedure=sample_procedure,
         outgoing_values={},
-        plan=sample_engineer_plan,
+        plan=sample_architect_plan,
     )
 
 
 @pytest.fixture
-def sample_crew_no_db(sample_artifact_no_db, sample_procedure, sample_engineer_plan):
+def sample_crew_no_db(sample_artifact_no_db, sample_procedure, sample_architect_plan):
     """CrewResult without DB setup."""
     from goe.construction_crew.orchestrator import CrewResult
     return CrewResult(
         artifact=sample_artifact_no_db,
         procedure=sample_procedure,
         outgoing_values={},
-        plan=sample_engineer_plan,
+        plan=sample_architect_plan,
     )
 
 
@@ -141,7 +141,7 @@ def test_record_transcript_single_turn():
     session.record_transcript(
         call_id="a1",
         timestamp=time.time(),
-        caller="engineer",
+        caller="architect",
         model_id="test-model",
         system="sys",
         messages=messages,
@@ -154,7 +154,7 @@ def test_record_transcript_single_turn():
     rec = session.transcripts[0]
     assert rec.new_messages == [{"role": "user", "content": "hello"}]
     assert rec.response == "hi"
-    assert rec.caller == "engineer"
+    assert rec.caller == "architect"
     end_session()
 
 
@@ -302,7 +302,7 @@ def test_save_crew_artifacts_writes_all_files(tmp_path, sample_crew):
     assert (entity_dir / "db" / "seed.sql").exists()
     assert (entity_dir / "artifact.json").exists()
     assert (entity_dir / "procedure.yaml").exists()
-    assert (entity_dir / "engineer_plan.json").exists()
+    assert (entity_dir / "architect_plan.json").exists()
 
 
 def test_save_crew_artifacts_file_contents(tmp_path, sample_crew):
@@ -321,7 +321,7 @@ def test_save_crew_artifacts_file_contents(tmp_path, sample_crew):
     assert "source_files" not in art
     assert art["port"] == 5000
 
-    plan = json.loads((entity_dir / "engineer_plan.json").read_text())
+    plan = json.loads((entity_dir / "architect_plan.json").read_text())
     assert plan["runtime"] == "flask"
 
 
@@ -359,7 +359,7 @@ def test_sanitize_path_rejects_absolute():
         _sanitize_path("/etc/passwd")
 
 
-def test_save_crew_artifacts_traversal_blocked(tmp_path, sample_engineer_plan, sample_procedure):
+def test_save_crew_artifacts_traversal_blocked(tmp_path, sample_architect_plan, sample_procedure):
     """An LLM-supplied ../escape filename must not write outside entities/<id>/app/."""
     from goe.models.artifacts import BuildArtifact
     from goe.construction_crew.orchestrator import CrewResult
@@ -374,7 +374,7 @@ def test_save_crew_artifacts_traversal_blocked(tmp_path, sample_engineer_plan, s
         artifact=evil_artifact,
         procedure=sample_procedure,
         outgoing_values={},
-        plan=sample_engineer_plan,
+        plan=sample_architect_plan,
     )
 
     with pytest.raises(ValueError):
@@ -390,7 +390,7 @@ def test_save_crew_artifacts_traversal_blocked(tmp_path, sample_engineer_plan, s
 # ---------------------------------------------------------------------------
 
 def _make_crew_with_content(source_content: str, proc_content: str,
-                             sample_engineer_plan, sample_procedure_class):
+                             sample_architect_plan, sample_procedure_class):
     """Helper: build a CrewResult with given source file content."""
     from goe.models.artifacts import BuildArtifact
     from goe.construction_crew.orchestrator import CrewResult
@@ -400,10 +400,10 @@ def _make_crew_with_content(source_content: str, proc_content: str,
         port=5000,
     )
     proc = sample_procedure_class.model_validate({"sessions": [], "procedure": []})
-    return CrewResult(artifact=art, procedure=proc, outgoing_values={}, plan=sample_engineer_plan)
+    return CrewResult(artifact=art, procedure=proc, outgoing_values={}, plan=sample_architect_plan)
 
 
-def test_save_attempt_artifacts(tmp_path, sample_crew, sample_engineer_plan):
+def test_save_attempt_artifacts(tmp_path, sample_crew, sample_architect_plan):
     """save_attempt_artifacts writes under attempts/attempt_N/."""
     from goe.artifacts.writer import save_crew_artifacts, save_attempt_artifacts
 
@@ -426,7 +426,7 @@ def test_save_attempt_artifacts(tmp_path, sample_crew, sample_engineer_plan):
     assert diag["category"] == "procedure_bug"
 
 
-def test_write_attempt_diff_produces_diff(tmp_path, sample_engineer_plan):
+def test_write_attempt_diff_produces_diff(tmp_path, sample_architect_plan):
     """write_attempt_diff writes a unified diff between initial and attempt 1."""
     from goe.models.artifacts import BuildArtifact
     from goe.models.procedure import Procedure
@@ -440,8 +440,8 @@ def test_write_attempt_diff_produces_diff(tmp_path, sample_engineer_plan):
             port=5000,
         )
         proc = Procedure.model_validate({"sessions": [], "procedure": []})
-        from goe.construction_crew.engineer import EngineerPlan
-        plan = EngineerPlan(
+        from goe.construction_crew.architect import ArchitectPlan
+        plan = ArchitectPlan(
             summary="T", runtime="flask",
             vulnerability_placement="in /login",
             attack_entry_point="/login",
@@ -578,7 +578,7 @@ def test_write_manifest_rounds_trips_session_summary(tmp_path):
 
     session = start_session(capture_artifacts=True)
     session.record(LLMCallRecord(
-        call_id="x", timestamp=time.time(), caller="engineer",
+        call_id="x", timestamp=time.time(), caller="architect",
         model_id="m", input_tokens=50, output_tokens=25, latency_ms=500.0,
     ))
     end_session()

@@ -11,7 +11,9 @@ from goe.models.system import System
 from goe.planner._atom_catalog import atom_catalog, misconfig_atom_catalog
 from goe.planner._utils import call_json
 
-_SYSTEM_PROMPT_TEMPLATE = (Path(__file__).parent / "prompts" / "plan_entities.md").read_text()
+_SYSTEM_PROMPT_TEMPLATE = (
+    Path(__file__).parent / "prompts" / "plan_entities.md"
+).read_text(encoding="utf-8")
 
 
 class EntityStub(BaseModel):

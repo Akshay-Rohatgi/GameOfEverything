@@ -20,7 +20,9 @@ if TYPE_CHECKING:
     from goe.models.procedure import Procedure
     from goe.models.report import BuildOutcome
 
-_SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "chain_attacker_system.md").read_text()
+_SYSTEM_PROMPT = (
+    Path(__file__).parent / "prompts" / "chain_attacker_system.md"
+).read_text(encoding="utf-8")
 
 
 def _graph_summary(graph: "EntityGraph") -> str:

@@ -207,7 +207,7 @@ def test_metrics_session_per_entity_tracking():
     session.record(LLMCallRecord(
         call_id="e1_1",
         timestamp=time.time(),
-        caller="engineer",
+        caller="architect",
         model_id="test",
         input_tokens=100,
         output_tokens=50,
@@ -221,7 +221,7 @@ def test_metrics_session_per_entity_tracking():
     session.record(LLMCallRecord(
         call_id="e2_1",
         timestamp=time.time(),
-        caller="engineer",
+        caller="architect",
         model_id="test",
         input_tokens=120,
         output_tokens=60,
@@ -256,7 +256,7 @@ def test_eval_report_serialization():
         total_latency_ms=30000,
         avg_latency_ms=3000,
         calls_by_caller={
-            "engineer": {"count": 2, "input_tokens": 1000, "output_tokens": 200, "latency_ms": 6000}
+            "architect": {"count": 2, "input_tokens": 1000, "output_tokens": 200, "latency_ms": 6000}
         },
         entities_tested=2,
         entities_passed=2,

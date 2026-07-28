@@ -76,7 +76,7 @@ def call(
         messages: List of {"role": "user"|"assistant", "content": str} dicts.
         max_tokens: Maximum tokens to generate.
         temperature: Sampling temperature.
-        caller: Optional identifier for metrics (e.g., "engineer", "planner.design_systems").
+        caller: Optional identifier for metrics (e.g., "architect", "planner.design_systems").
 
     Returns:
         The assistant's response text.

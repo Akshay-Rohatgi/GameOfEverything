@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch
 from goe.construction_crew import developer, attacker
-from goe.construction_crew.engineer import EngineerPlan
+from goe.construction_crew.architect import ArchitectPlan
 from goe.models.entity import Entity, Runtime
 from goe.models.artifacts import BuildArtifact
 
@@ -24,8 +24,8 @@ def sample_entity():
 
 @pytest.fixture
 def sample_plan():
-    """Create a sample engineer plan."""
-    return EngineerPlan(
+    """Create a sample architect plan."""
+    return ArchitectPlan(
         summary="Flask app with SQLi",
         runtime="flask",
         app_description="Simple search app",

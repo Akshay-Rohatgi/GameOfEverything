@@ -7,7 +7,9 @@ from pathlib import Path
 from goe.models.system import System
 from goe.planner._utils import call_json
 
-_SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "design_systems.md").read_text()
+_SYSTEM_PROMPT = (
+    Path(__file__).parent / "prompts" / "design_systems.md"
+).read_text(encoding="utf-8")
 
 
 def design_systems(request: str, model: str) -> list[System]:

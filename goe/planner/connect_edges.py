@@ -15,7 +15,9 @@ if TYPE_CHECKING:
     from goe.models.entity import Entity
 
 _SYSTEM_PROMPT = render_system_prompt(
-    (Path(__file__).parent / "prompts" / "connect_edges.md").read_text()
+    (Path(__file__).parent / "prompts" / "connect_edges.md").read_text(
+        encoding="utf-8"
+    )
 )
 
 

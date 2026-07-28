@@ -4,7 +4,7 @@ Provides opt-in saving of:
 - LLM conversation history (full system + turns + responses)
 - Generated app source files (BuildArtifact.source_files + DB schema/seed)
 - Attack procedures (Procedure YAML)
-- Engineer plans (EngineerPlan JSON)
+- Architect plans (ArchitectPlan JSON)
 - Per-attempt retry artifacts with diffs between attempts
 - Per-run manifest.json summarising what ran
 

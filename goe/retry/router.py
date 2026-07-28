@@ -65,7 +65,7 @@ def retry(
     elif cat == DiagnosisCategory.implementation_bug:
         if attempt > _MAX_IMPLEMENTATION_RETRIES:
             return None
-        # Re-run developer + attacker — engineer plan is fine
+        # Re-run developer + attacker — architect plan is fine
         new_artifact, new_outgoing = developer.develop(
             entity, crew_result.plan, incoming_edges, edge_schemas=edge_schemas,
             system_context=system_context, provided_values=provided_values,

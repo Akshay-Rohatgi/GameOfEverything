@@ -453,7 +453,7 @@ def _system_chain_context(
 ) -> str:
     """Render the system + killchain context for an entity's build prompts.
 
-    Gives the engineer/developer what they were previously missing: the system this entity
+    Gives the architect/developer what they were previously missing: the system this entity
     runs on (and the services the platform already provides there), plus a summary of every
     sibling entity. For already-built co-system entities, we include concrete facts (app_dir,
     users created, paths written) so downstream entities can reference the actual filesystem

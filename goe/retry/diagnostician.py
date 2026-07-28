@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from goe.executor.runner import ProcedureResult
     from goe.container.environment import TestEnvironment
 
-_SYSTEM = """You are a senior security engineer diagnosing a failed automated penetration test.
+_SYSTEM = """You are a senior security architect diagnosing a failed automated penetration test.
 
 You have god-view access to the running Docker environment. The evidence below was gathered
 specifically for this entity's runtime and vulnerability type. Inspect the failure and categorise it.

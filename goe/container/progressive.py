@@ -48,7 +48,11 @@ class ProgressiveEnvironment:
     def setup(self) -> None:
         """Create network, target, and attacker containers. Bootstrap base packages."""
         import docker
+        from goe.container.test_environment_tool import wait_for_docker
 
+        wait_for_docker(
+            f"set up progressive environment for system '{self._system_id}'"
+        )
         self._client = docker.from_env()
 
         # Clean up any existing containers/networks from previous failed runs

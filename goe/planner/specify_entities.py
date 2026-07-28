@@ -14,7 +14,9 @@ from goe.planner._utils import call_json, render_system_prompt
 if TYPE_CHECKING:
     from goe.planner.plan_entities import EntityStub
 
-_SYSTEM_PROMPT_TEMPLATE = (Path(__file__).parent / "prompts" / "specify_entities.md").read_text()
+_SYSTEM_PROMPT_TEMPLATE = (
+    Path(__file__).parent / "prompts" / "specify_entities.md"
+).read_text(encoding="utf-8")
 
 
 def specify_entities(

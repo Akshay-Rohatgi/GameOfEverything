@@ -20,7 +20,7 @@ default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # Per-role model overrides. Keys match role names in goe/config.py.
 # Uncomment to override a specific role; otherwise [models].default is used.
 # planner        = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
-# engineer       = "us.anthropic.claude-opus-4-6-v1:0"
+# architect       = "us.anthropic.claude-opus-4-6-v1:0"
 # developer      = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # attacker       = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # diagnostician  = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
@@ -29,7 +29,7 @@ default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 [artifacts]
 # Persist workflow artifacts from every run: LLM conversation history (full
 # system prompt + every turn + responses) and all generated files (app source,
-# DB schema/seed SQL, attack procedure YAML, engineer plan).
+# DB schema/seed SQL, attack procedure YAML, architect plan).
 #
 # Environment variable overrides:
 #   GOE_SAVE_ARTIFACTS=1   — enable   (accepts: 1, true, yes, on)
@@ -40,7 +40,7 @@ default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 #   artifacts/2026-06-12T14-30-05/
 #     manifest.json          — run index: entry point, tokens, file list
 #     conversations/         — llm_calls.jsonl + per-agent .md transcripts
-#     entities/<id>/         — app/, db/, procedure.yaml, engineer_plan.json
+#     entities/<id>/         — app/, db/, procedure.yaml, architect_plan.json
 #     metrics/llm_calls.jsonl — token/latency metrics
 #
 # For eval runs (python -m goe.eval), artifacts are co-located alongside the

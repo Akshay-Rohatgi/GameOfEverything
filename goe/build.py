@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from goe.models.entity import Entity
     from goe.models.report import BuildOutcome
-    from goe.construction_crew.engineer import EngineerPlan
+    from goe.construction_crew.architect import ArchitectPlan
 
 
-def _generate_file_tree(plan: "EngineerPlan", runtime: str, app_dir: str | None = None) -> str:
+def _generate_file_tree(plan: "ArchitectPlan", runtime: str, app_dir: str | None = None) -> str:
     """Generate a tree representation of the planned file structure."""
     lines = []
 
@@ -104,7 +104,7 @@ def build_entity(
     """Run the full build pipeline for a single entity.
 
     Steps:
-      1. Construction crew: Engineer → Developer → Attacker
+      1. Construction crew: Architect → Developer → Attacker
       2. Runtime template → deploy script
       3. Spin up TestEnvironment (or use provided env), deploy app
       4. Run L2 procedure executor
@@ -121,7 +121,7 @@ def build_entity(
         edge_schemas: Optional {edge_id: {"type", "direction", "params"}} for the entity's
             provided/required edges — constrains the param keys the developer may emit.
         system_context: Optional rendered markdown describing this entity's system, the
-            platform-provided services, and sibling entities — injected into the engineer and
+            platform-provided services, and sibling entities — injected into the architect and
             developer prompts so each entity builds only its own link.
         provided_values: Optional {edge_id: {param: concrete}} of already-determined values
             for edges this entity provides (resolved hosts, materialized secrets) that the
@@ -164,10 +164,10 @@ def build_entity(
     # Phase 1 — Construction crew
     if console:
         console.crew_phase("Construction Crew")
-        console.crew_agent_start("Engineer", "designing attack plan")
+        console.crew_agent_start("Architect", "designing attack plan")
     else:
         section("PHASE 1: Construction Crew")
-        log("Running engineer...")
+        log("Running architect...")
 
     t0 = time.time()
     crew: CrewResult = crew_build(
@@ -177,7 +177,7 @@ def build_entity(
     duration = time.time() - t0
 
     if console:
-        console.crew_agent_done("Engineer + Developer + Attacker", duration)
+        console.crew_agent_done("Architect + Developer + Attacker", duration)
         file_tree = _generate_file_tree(crew.plan, entity.runtime.value, getattr(crew.artifact, "app_dir", None))
         console.crew_plan_summary(
             crew.plan.runtime,
@@ -187,7 +187,7 @@ def build_entity(
         )
     else:
         log(f"Crew finished in {duration:.1f}s")
-        section("Engineer Plan")
+        section("Architect Plan")
         log(f"Runtime:    {crew.plan.runtime}")
         log(f"Summary:    {crew.plan.summary}")
         log(f"Entry point: {crew.plan.attack_entry_point}")
