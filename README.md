@@ -16,6 +16,11 @@ uv sync
 cp goe.toml.example goe.toml
 ```
 
+For development
+```
+uv sync --extra dev
+```
+
 Set the AWS and model configuration in `goe.toml`, or provide it through the standard AWS environment variables.
 
 ## Run v2
