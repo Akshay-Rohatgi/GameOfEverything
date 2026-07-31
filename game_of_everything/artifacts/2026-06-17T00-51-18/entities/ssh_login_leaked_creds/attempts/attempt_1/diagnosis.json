@@ -1,5 +1,0 @@
-{
-  "category": "procedure_bug",
-  "description": "The assertion is checking for uid=1001 but the actual sysadmin user was created with uid=1000. The SSH login succeeds correctly (as evidenced by the stdout showing a valid sysadmin session), but the expected string in the assertion is wrong. The test expects 'uid=1001(sysadmin)' while the actual output is 'uid=1000(sysadmin)'.",
-  "evidence": "stdout: uid=1000(sysadmin) gid=1000(sysadmin) groups=1000(sysadmin) \u2014 The SSH authentication worked correctly, the user exists and is logged in, but the assertion string 'uid=1001(sysadmin) gid=1001(sysadmin) groups=1001(sysadmin)' does not match the actual uid=1000 assigned by useradd."
-}

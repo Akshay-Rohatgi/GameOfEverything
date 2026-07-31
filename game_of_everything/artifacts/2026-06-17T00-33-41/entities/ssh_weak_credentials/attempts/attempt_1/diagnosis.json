@@ -1,5 +1,0 @@
-{
-  "category": "procedure_bug",
-  "description": "The assertion checks for 'uid=1001(guest)' but the actual UID of the guest user is 1000. The SSH login succeeded correctly and the flag was retrieved, but the test assertion expected the wrong UID value.",
-  "evidence": "stdout contains 'uid=1000(guest) gid=1000(guest) groups=1000(guest)' and 'FLAG{weak_credentials_ssh_compromised}', confirming successful exploitation. The assertion failure is solely due to expecting uid=1001 instead of uid=1000."
-}

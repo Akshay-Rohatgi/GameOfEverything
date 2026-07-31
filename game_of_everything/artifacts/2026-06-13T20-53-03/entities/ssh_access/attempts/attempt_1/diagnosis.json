@@ -1,5 +1,0 @@
-{
-  "category": "procedure_bug",
-  "description": "The exploit assertion expects the admin user to have UID 1001, but the actual UID is 1000. The setup.sh creates the admin user with whatever UID the system assigns (1000 in this case), and the test assertion hardcodes 'uid=1001(admin)'. The SSH login itself succeeds correctly \u2014 the output shows 'uid=1000(admin)' which is the real UID \u2014 but the assertion string 'uid=1001(admin)' does not match.",
-  "evidence": "stdout: uid=1000(admin) gid=1000(admin) groups=1000(admin) \u2014 login succeeded but assertion 'uid=1001(admin)' failed because admin was assigned UID 1000, not 1001"
-}

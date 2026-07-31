@@ -1,0 +1,425 @@
+"""Packager — assemble built entities into a self-contained deploy package.
+
+Single-system: all entities deploy onto one box → one ``deploy.sh``, one
+``playbook.yaml``, one ``README.md``.
+
+Multi-system: entities grouped by system_id → per-system ``<sid>_deploy.sh``
+files, a ``docker-compose.yml`` (one ubuntu:22.04 service per system on a shared
+``goe_net`` network), and the same ``playbook.yaml`` / ``README.md``.
+
+When a chain procedure is provided (from the L3 chain test), it is also written
+to ``chain_playbook.yaml`` regardless of single- vs multi-system.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import yaml
+
+from goe.graph.topology import topological_sort
+
+if TYPE_CHECKING:
+    from goe.graph.models import EntityGraph
+    from goe.models.procedure import Procedure
+    from goe.models.report import BuildOutcome
+
+
+def _ordered_built(graph: "EntityGraph", built: dict[str, "BuildOutcome"]) -> list[str]:
+    """Entity IDs that were built successfully, in topological (build) order."""
+    return [eid for eid in topological_sort(graph) if eid in built]
+
+
+def _detect_port_collisions(graph: "EntityGraph", order: list[str]) -> list[str]:
+    """Return warning lines for web entities on the same system that bind the same port.
+
+    For single-system runs every entity shares one box. For multi-system runs we
+    scope the check per system_id — two boxes binding the same port is fine.
+    """
+    from goe.runtimes.registry import get_registry
+
+    registry = get_registry()
+    # seen: {system_id: {port: entity_id}}
+    seen: dict[str, dict[int, str]] = {}
+    warnings: list[str] = []
+    for eid in order:
+        entity = graph.entity_by_id(eid)
+        runtime = entity.runtime.value
+        sid = entity.system_id
+        if runtime == "ubuntu":
+            continue
+        try:
+            port = registry.port_for(runtime)
+        except Exception:
+            continue
+        if port in seen.get(sid, {}):
+            warnings.append(
+                f"Entities `{seen[sid][port]}` and `{eid}` both bind port {port} "
+                f"({runtime}) on system `{sid}`; they will collide."
+            )
+        else:
+            seen.setdefault(sid, {})[port] = eid
+    return warnings
+
+
+# Kali attacker image (built locally by the topology test harness). Hardcoded to
+# avoid importing the heavy test_environment module just for the tag.
+_ATTACKER_IMAGE = "goe-attacker:latest"
+
+
+def _build_docker_compose(
+    graph: "EntityGraph",
+    per_system_scripts: dict[str, str],
+    include_attacker: bool = False,
+) -> str:
+    """Generate a docker-compose.yml for a multi-system run.
+
+    Each system becomes a service running ubuntu:22.04. Its deploy script is
+    embedded as an inline command so ``docker-compose up`` fully configures it.
+
+    When ``include_attacker`` is set, a Kali ``attacker`` service (with ``solve.sh``
+    mounted at ``/goe/solve.sh``) is added on the same network so the solve is
+    turnkey: ``docker compose up -d && docker compose exec attacker bash /goe/solve.sh``.
+    """
+    import base64
+
+    services: dict[str, dict] = {}
+    for system in graph.systems:
+        sid = system.id
+        hostname = system.network.hostname
+        script = per_system_scripts.get(sid, "")
+        b64 = base64.b64encode(script.encode()).decode("ascii") if script else ""
+
+        deploy_cmd = (
+            f"bash -c 'echo {b64} | base64 -d > /deploy.sh && bash /deploy.sh && sleep infinity'"
+            if b64 else "sleep infinity"
+        )
+
+        port_mappings: list[str] = []
+        for p in system.network.exposed_ports:
+            port_mappings.append(f"{p}:{p}")
+
+        svc: dict = {
+            "image": "ubuntu:22.04",
+            "hostname": hostname,
+            # Set network alias so Docker DNS resolves the hostname from other
+            # containers. The `default` key matches the networks.default section.
+            "networks": {
+                "default": {"aliases": [hostname]},
+            },
+            "command": deploy_cmd,
+            "environment": ["DEBIAN_FRONTEND=noninteractive"],
+        }
+        if port_mappings:
+            svc["ports"] = port_mappings
+        services[sid] = svc
+
+    if include_attacker:
+        services["attacker"] = {
+            "image": _ATTACKER_IMAGE,
+            "hostname": "attacker",
+            "networks": {"default": {"aliases": ["attacker"]}},
+            "command": "sleep infinity",
+            "working_dir": "/goe",
+            "volumes": ["./solve.sh:/goe/solve.sh:ro"],
+            "environment": ["DEBIAN_FRONTEND=noninteractive"],
+        }
+
+    compose: dict = {
+        "version": "3.8",
+        "services": services,
+        "networks": {
+            "default": {
+                "name": "goe_net",
+                "driver": "bridge",
+            }
+        },
+    }
+    return yaml.dump(compose, default_flow_style=False, sort_keys=False)
+
+
+def _build_deploy_sh(graph: "EntityGraph", built: dict[str, "BuildOutcome"], order: list[str]) -> str:
+    from goe.packaging.grader import assemble_deploy_script, service_section
+
+    sections = [(eid, built[eid].deploy_script or "") for eid in order]
+    # Prepend declared services for the (single) system, deterministically — entity scripts no
+    # longer install them. Services first so daemons are up before entities configure their vuln.
+    for system in graph.systems:
+        svc = service_section(system)
+        if svc is not None:
+            sections.insert(0, svc)
+    combined, warnings = assemble_deploy_script(sections)
+    if warnings:
+        logging.getLogger(__name__).warning(f"Deploy script grader fixed {len(warnings)} conflict(s): {warnings}")
+    return combined
+
+
+def _build_playbook(built: dict[str, "BuildOutcome"], order: list[str]) -> str:
+    steps = []
+    for eid in order:
+        proc = built[eid].procedure
+        steps.append({
+            "entity_id": eid,
+            "procedure": proc.model_dump(mode="json") if proc is not None else None,
+        })
+    return yaml.dump(steps, default_flow_style=False, sort_keys=False)
+
+
+def _build_readme(
+    graph: "EntityGraph",
+    built: dict[str, "BuildOutcome"],
+    order: list[str],
+    request: str,
+    warnings: list[str],
+    solve_written: bool = False,
+) -> str:
+    lines: list[str] = ["# GoE Build Package", ""]
+    if request:
+        lines += ["## Request", "", f"> {request}", ""]
+
+    systems = ", ".join(s.id for s in graph.systems) or "(none)"
+    lines += ["## System", "", f"Systems: {systems}", ""]
+
+    if warnings:
+        lines += ["## ⚠ Warnings", ""]
+        lines += [f"- {w}" for w in warnings]
+        lines += [""]
+
+    lines += [
+        "## Entities",
+        "",
+        "| Entity | Runtime | Atoms | Status | Attempts |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for eid in order:
+        entity = graph.entity_by_id(eid)
+        result = built[eid].result
+        atoms = ", ".join(entity.atoms) or "—"
+        lines.append(
+            f"| {eid} | {entity.runtime.value} | {atoms} | "
+            f"{result.status.value} | {result.attempts} |"
+        )
+    lines.append("")
+
+    lines += ["## Edge Chain", ""]
+    if graph.edges:
+        for edge in graph.edges:
+            dst = edge.to_entity or "(terminal)"
+            lines.append(f"- `{edge.from_entity}` → `{dst}` ({edge.type.value})")
+    else:
+        lines.append("(no edges)")
+    lines.append("")
+
+    multi = len(graph.systems) > 1
+    if multi:
+        lines += [
+            "## Running (multi-system)",
+            "",
+            "Start all systems:",
+            "",
+            "```bash",
+            "docker-compose up -d",
+            "```",
+            "",
+            "Or deploy each system manually:",
+            "",
+        ]
+        for s in graph.systems:
+            lines.append(f"```bash\nbash {s.id}_deploy.sh  # system: {s.id} ({s.network.hostname})\n```")
+        lines.append("")
+        lines += [
+            "The end-to-end attack chain is in `chain_playbook.yaml`.",
+            "Per-entity attack steps are in `playbook.yaml`.",
+            "",
+        ]
+    else:
+        lines += [
+            "## Running",
+            "",
+            "Deploy the full single-box environment:",
+            "",
+            "```bash",
+            "bash deploy.sh",
+            "```",
+            "",
+            "Attack steps for each entity are in `playbook.yaml` "
+            "(executable via the GoE procedure runner).",
+            "",
+        ]
+
+    if solve_written:
+        lines += ["## Solving", "", "`solve.sh` is a standalone attacker solve script "
+                  "(compiled from the validated attack chain) that reproduces the exploit "
+                  "and exits 0 on success.", ""]
+        if multi:
+            lines += [
+                "Run it from the bundled Kali attacker container:",
+                "",
+                "```bash",
+                "docker-compose up -d",
+                "docker-compose exec attacker bash /goe/solve.sh",
+                "```",
+                "",
+                "(Requires the `goe-attacker:latest` image built locally.)",
+                "",
+            ]
+        else:
+            sid = graph.systems[0].id if graph.systems else "target"
+            var = "SYSTEM_" + re.sub(r"[^A-Za-z0-9_]", "_", sid).upper() + "_HOST"
+            lines += [
+                "Run it from a host with network access to the box (override the target "
+                "endpoint via env vars — defaults are the in-container hostnames):",
+                "",
+                "```bash",
+                f"{var}=<box-ip> bash solve.sh",
+                "```",
+                "",
+            ]
+    return "\n".join(lines)
+
+
+def package(
+    graph: "EntityGraph",
+    built: dict[str, "BuildOutcome"],
+    out_dir: Path,
+    request: str = "",
+    chain_procedure: "Procedure | None" = None,
+) -> Path:
+    """Assemble PASSED entities into a self-contained package under ``out_dir``.
+
+    Single-system: writes ``deploy.sh``, ``playbook.yaml``, ``README.md``.
+    Multi-system: writes ``<system_id>_deploy.sh`` per system, ``docker-compose.yml``,
+    ``playbook.yaml``, ``README.md``.
+
+    When ``chain_procedure`` is provided, also writes ``chain_playbook.yaml``.
+
+    Returns ``out_dir``.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    order = _ordered_built(graph, built)
+    warnings = _detect_port_collisions(graph, order)
+    multi = len(graph.systems) > 1
+
+    # Compile a standalone attacker solve.sh from the validated procedure: the chain
+    # procedure when present, else the sole entity's procedure (single-entity runs).
+    # Must happen before docker-compose so the attacker service is added only when a
+    # solve script exists to mount. Kept in its own warnings list since the multi
+    # branch below reassigns ``warnings``.
+    solve_warnings: list[str] = []
+    solve_written = _write_solve_script(
+        graph, built, order, out_dir, chain_procedure, solve_warnings
+    )
+
+    if multi:
+        # Per-system deploy scripts
+        grouped = graph.entities_by_system()
+        for system in graph.systems:
+            sid = system.id
+            entities = grouped.get(sid, [])
+            built_entities = [e for e in entities if e.id in built]
+            if not built_entities:
+                continue
+            sections = [
+                (entity.id, built[entity.id].deploy_script or "")
+                for entity in built_entities
+                if (built[entity.id].deploy_script or "").strip()
+            ]
+            # Install the system's declared services first (deterministically, via the
+            # ServiceRegistry) so an SMB-only system never installs SSH and the daemons stay up
+            # for every entity and cross-system reach. Same helper the chain test uses.
+            from goe.packaging.grader import service_section
+            svc = service_section(system)
+            if svc is not None:
+                sections.insert(0, svc)
+            if sections:
+                from goe.packaging.grader import assemble_deploy_script
+                combined, warnings = assemble_deploy_script(sections)
+                if warnings:
+                    logging.getLogger(__name__).warning(
+                        f"Deploy script grader fixed {len(warnings)} conflict(s) on system "
+                        f"'{sid}': {warnings}"
+                    )
+                deploy_path = out_dir / f"{sid}_deploy.sh"
+                deploy_path.write_text(combined, encoding="utf-8")
+                deploy_path.chmod(0o755)
+
+        # Per-system scripts dict for docker-compose generation
+        per_system_scripts: dict[str, str] = {}
+        for system in graph.systems:
+            sid = system.id
+            deploy_path = out_dir / f"{sid}_deploy.sh"
+            if deploy_path.exists():
+                per_system_scripts[sid] = deploy_path.read_text(encoding="utf-8")
+
+        (out_dir / "docker-compose.yml").write_text(
+            _build_docker_compose(graph, per_system_scripts, include_attacker=solve_written),
+            encoding="utf-8",
+        )
+    else:
+        # Single-system: one combined deploy.sh (unchanged from Phase 3)
+        deploy_sh = _build_deploy_sh(graph, built, order)
+        deploy_path = out_dir / "deploy.sh"
+        deploy_path.write_text(deploy_sh, encoding="utf-8")
+        deploy_path.chmod(0o755)
+
+    # Per-entity playbook (always)
+    (out_dir / "playbook.yaml").write_text(
+        _build_playbook(built, order), encoding="utf-8"
+    )
+
+    # Chain playbook (when chain test ran)
+    if chain_procedure is not None:
+        chain_data = chain_procedure.model_dump(mode="json")
+        (out_dir / "chain_playbook.yaml").write_text(
+            yaml.dump(chain_data, default_flow_style=False, sort_keys=False),
+            encoding="utf-8",
+        )
+
+    (out_dir / "README.md").write_text(
+        _build_readme(graph, built, order, request, warnings + solve_warnings, solve_written),
+        encoding="utf-8",
+    )
+
+    return out_dir
+
+
+def _write_solve_script(
+    graph: "EntityGraph",
+    built: dict[str, "BuildOutcome"],
+    order: list[str],
+    out_dir: Path,
+    chain_procedure,
+    warnings: list[str],
+) -> bool:
+    """Compile and write ``solve.sh``. Returns whether it was written.
+
+    Uses the chain procedure when available, else the sole built entity's procedure
+    (single-entity runs). Skips (with a warning) rather than emitting a broken script
+    when the procedure uses actions bash can't represent (browser / exec_target).
+    """
+    proc = chain_procedure
+    if proc is None:
+        procs = [built[eid].procedure for eid in order if built[eid].procedure is not None]
+        if len(procs) == 1:
+            proc = procs[0]
+    if proc is None:
+        return False
+
+    from goe.packaging.solve_script import UnsupportedActionError, compile_solve_script
+
+    try:
+        script = compile_solve_script(graph, proc)
+    except UnsupportedActionError as exc:
+        warnings.append(f"solve.sh not generated (action not representable in bash): {exc}")
+        logging.getLogger(__name__).warning("Packager: %s", warnings[-1])
+        return False
+
+    solve_path = out_dir / "solve.sh"
+    solve_path.write_text(script, encoding="utf-8")
+    solve_path.chmod(0o755)
+    return True

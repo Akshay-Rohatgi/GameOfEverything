@@ -1,5 +1,0 @@
-{
-  "category": "procedure_bug",
-  "description": "The test assertion expects uid=1001 for appuser, but the actual uid assigned is 1000. The app is working correctly \u2014 SSH is running, the user 'appuser' exists with the weak password 'password123', and the exploit successfully logged in and executed commands. The only failure is that the expected string 'uid=1001(appuser)' does not match the actual output 'uid=1000(appuser)' because the uid assigned during useradd was 1000 instead of 1001.",
-  "evidence": "stdout contains 'uid=1000(appuser) gid=1000(appuser) groups=1000(appuser)' \u2014 the SSH login succeeded and commands ran as appuser, but the assertion checked for uid=1001 instead of uid=1000. The user was created with uid 1000 (first available uid in this container), not 1001 as the test assumed."
-}

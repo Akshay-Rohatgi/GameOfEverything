@@ -1,5 +1,0 @@
-{"call_id": "de3d7585-c44f-46e4-a234-eaa782182755", "timestamp": 1781310018.3811562, "caller": "engineer", "model_id": "us.anthropic.claude-sonnet-4-6", "input_tokens": 1830, "output_tokens": 813, "latency_ms": 13239.768266677856}
-{"call_id": "e439f277-81bd-4428-bcb8-cc5c2e0dacaa", "timestamp": 1781310031.630315, "caller": "developer", "model_id": "us.anthropic.claude-sonnet-4-6", "input_tokens": 2501, "output_tokens": 876, "latency_ms": 8541.708707809448}
-{"call_id": "31479938-2c13-48e4-bfd5-5f0ffbb99a72", "timestamp": 1781310040.1792479, "caller": "developer.self_review", "model_id": "us.anthropic.claude-sonnet-4-6", "input_tokens": 3583, "output_tokens": 881, "latency_ms": 6889.404773712158}
-{"call_id": "ce604627-df98-41b4-baaa-b63a670d9ed5", "timestamp": 1781310047.0802214, "caller": "attacker", "model_id": "us.anthropic.claude-sonnet-4-6", "input_tokens": 2266, "output_tokens": 266, "latency_ms": 2876.011848449707}
-{"call_id": "2197023e-3acf-4ce2-a8c5-27ad79f86c35", "timestamp": 1781310049.9741788, "caller": "attacker.self_review", "model_id": "us.anthropic.claude-sonnet-4-6", "input_tokens": 2793, "output_tokens": 169, "latency_ms": 2305.635452270508}
