@@ -2,7 +2,7 @@
 
 The following documentation was removed because it described deleted v1 code,
 historical implementation states, generated run results, or unsupported v2
-capabilities. Treat the `game_of_everything/goe/` code and its tests as the
+capabilities. Treat the `goe/` code and its tests as the
 source of truth when regenerating documentation.
 
 ## Removed with the v2-only cleanup

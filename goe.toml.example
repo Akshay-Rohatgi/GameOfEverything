@@ -1,0 +1,49 @@
+# Game of Everything — local configuration
+#
+# Environment variables override values set here:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+#   GOE_DEFAULT_MODEL, GOE_MODEL_<AGENT_NAME>
+
+[aws]
+# Leave blank to fall back to the default AWS credential chain (env vars,
+# ~/.aws/credentials, instance profile, etc.).
+access_key_id = ""
+secret_access_key = ""
+region = "us-east-1"
+
+[models]
+# Default Bedrock model ID. Use the full cross-region inference profile ID:
+#   e.g. "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+
+[models.v2_overrides]
+# Per-role model overrides. Keys match role names in goe/config.py.
+# Uncomment to override a specific role; otherwise [models].default is used.
+# planner        = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# architect       = "us.anthropic.claude-opus-4-6-v1:0"
+# developer      = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# attacker       = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# diagnostician  = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# chain_attacker = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+
+[artifacts]
+# Persist workflow artifacts from every run: LLM conversation history (full
+# system prompt + every turn + responses) and all generated files (app source,
+# DB schema/seed SQL, attack procedure YAML, architect plan).
+#
+# Environment variable overrides:
+#   GOE_SAVE_ARTIFACTS=1   — enable   (accepts: 1, true, yes, on)
+#   GOE_SAVE_ARTIFACTS=0   — disable
+#   GOE_ARTIFACTS_DIR=/path — override the output root directory
+#
+# Per-run, timestamped directories are created under 'dir':
+#   artifacts/2026-06-12T14-30-05/
+#     manifest.json          — run index: entry point, tokens, file list
+#     conversations/         — llm_calls.jsonl + per-agent .md transcripts
+#     entities/<id>/         — app/, db/, procedure.yaml, architect_plan.json
+#     metrics/llm_calls.jsonl — token/latency metrics
+#
+# For eval runs (python -m goe.eval), artifacts are co-located alongside the
+# existing eval_results/<timestamp>/ files (summary.json, entity_results.json).
+enabled = false
+dir     = "artifacts"

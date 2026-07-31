@@ -1,6 +1,6 @@
 # GoE v2: Executable Architecture, Agent Context, and Test Gates
 
-This document was derived by enumerating and tracing the code under `game_of_everything/goe/`. It describes v2 only. It does not use the legacy `src/game_of_everything/` implementation as an architectural source.
+This document was derived by enumerating and tracing the code under `goe/`. It describes v2 only. It does not use the legacy `src/game_of_everything/` implementation as an architectural source.
 
 ## 1. Runtime boundaries and entry points
 
@@ -270,12 +270,12 @@ The construction crew is ordinary Python orchestration, not a framework-managed 
 
 ```mermaid
 flowchart LR
-    E["Entity"] --> X["Engineer"]
+    E["Entity"] --> X["Architect"]
     I["incoming_edges"] --> X
     S["system_context"] --> X
     A["Full selected atom text"] --> X
-    X --> EP["EngineerPlan"]
-    X -. JSON parse failure .-> XR["Engineer parse-repair call"]
+    X --> EP["ArchitectPlan"]
+    X -. JSON parse failure .-> XR["Architect parse-repair call"]
     XR --> EP
 
     E --> D["Developer"]
@@ -294,7 +294,7 @@ flowchart LR
     DRepair --> OV
 
     E --> AT["Attacker\nentity description + runtime/atoms"]
-    EPSubset["EngineerPlan subset\nentry point + success indicator + vulnerability"] --> AT
+    EPSubset["ArchitectPlan subset\nentry point + success indicator + vulnerability"] --> AT
     EP --> EPSubset
     BA --> Source["artifact.source_files only"]
     Source --> AT
@@ -308,20 +308,20 @@ flowchart LR
 
 | Agent | Runs when | Receives | Produces | Built-in call pattern |
 | --- | --- | --- | --- | --- |
-| Engineer | Every fresh crew build | Serialized entity, incoming edges, system context, full selected atom text | `EngineerPlan` | Generate; parse retry only if JSON fails. |
-| Developer | After Engineer | Entity, engineer plan, runtime spec, incoming edges, system context, edge schemas, prefilled provided values, atom logic constraints | `BuildArtifact`, `outgoing_values` | Generate, self-review, parse retry. |
-| Attacker | After Developer | Entity description, engineer attack intent, generated source/setup content, outgoing values, runtime attack rules, atom testing guidance | Typed YAML `Procedure` | Generate, self-review, parse retry. |
+| Architect | Every fresh crew build | Serialized entity, incoming edges, system context, full selected atom text | `ArchitectPlan` | Generate; parse retry only if JSON fails. |
+| Developer | After Architect | Entity, architect plan, runtime spec, incoming edges, system context, edge schemas, prefilled provided values, atom logic constraints | `BuildArtifact`, `outgoing_values` | Generate, self-review, parse retry. |
+| Attacker | After Developer | Entity description, architect attack intent, generated source/setup content, outgoing values, runtime attack rules, atom testing guidance | Typed YAML `Procedure` | Generate, self-review, parse retry. |
 
-The `EngineerPlan` contains a summary, runtime, endpoint/data design, vulnerability placement, attack entry point, success indicator, optional npm/pip package suggestions, and notes. `BuildArtifact` contains source files, primary source, deployment metadata, optional DB schema/seed, runtime/system dependencies, and app directory. A `Procedure` contains typed actions, assertions, optional browser sessions, step IDs, and output capture declarations.
+The `ArchitectPlan` contains a summary, runtime, endpoint/data design, vulnerability placement, attack entry point, success indicator, optional npm/pip package suggestions, and notes. `BuildArtifact` contains source files, primary source, deployment metadata, optional DB schema/seed, runtime/system dependencies, and app directory. A `Procedure` contains typed actions, assertions, optional browser sessions, step IDs, and output capture declarations.
 
 The orchestrator computes four separate context products before invoking this crew:
 
-| Context product | Constructed from | Delivered to | Engineering intent |
+| Context product | Constructed from | Delivered to | Architectural intent |
 | --- | --- | --- | --- |
-| `incoming_edges` | Graph concrete values plus upstream `outgoing_values` | Engineer, Developer | Reuse exact predecessor capabilities. |
+| `incoming_edges` | Graph concrete values plus upstream `outgoing_values` | Architect, Developer | Reuse exact predecessor capabilities. |
 | `edge_schemas` | Entity's declared requirements and provides in the graph | Developer | Permit values only for declared, unresolved edge parameters. |
 | `provided_values` | Already concrete params on edges this entity provides | Developer | Embed host/port/generated secret verbatim; do not invent or re-emit it. |
-| `system_context` | Entity's system, all sibling entities, and summaries from built same-system siblings | Engineer, Developer | Scope this build to one link and describe shared machine state. |
+| `system_context` | Entity's system, all sibling entities, and summaries from built same-system siblings | Architect, Developer | Scope this build to one link and describe shared machine state. |
 
 `system_context` is especially important for co-located entities. It names the platform-installed services, shows live same-system sibling facts parsed from their deploy scripts (app directory, created users, written paths, configured services), lists other entities that must not be re-created, and names the current entity's required/provided edges. It tells the agent to make its success observable on its own system because end-to-end verification belongs to L3.
 
@@ -408,9 +408,9 @@ flowchart TD
     Escalate -->|no| Retry["Retry router\ncategory limit applied to global attempt number"]
     ForcedDesign --> Retry
     Forced --> Retry
-    Retry -->|procedure_bug allowed| FixProc["Attacker.fix_procedure\nkeep artifact and engineer plan"]
-    Retry -->|implementation_bug allowed| FixImpl["Developer + Attacker\nkeep engineer plan"]
-    Retry -->|design_flaw allowed| FixDesign["Full Engineer -> Developer -> Attacker rebuild"]
+    Retry -->|procedure_bug allowed| FixProc["Attacker.fix_procedure\nkeep artifact and architect plan"]
+    Retry -->|implementation_bug allowed| FixImpl["Developer + Attacker\nkeep architect plan"]
+    Retry -->|design_flaw allowed| FixDesign["Full Architect -> Developer -> Attacker rebuild"]
     Retry -->|limit exhausted| Failed["Return BuildOutcome: FAILED"]
     FixProc --> ResetA["Reset attacker"]
     FixImpl --> ResetAll["Reset attacker and target;\nredeploy exit status ignored"]
@@ -606,7 +606,7 @@ A run is successful only if at least one entity built, no entity failed, L3 pass
 The baseline model-call inventory for a successful fresh run is:
 
 - Planner: six calls in the nominal path (system design, killchain, entity planning, stub grading, entity specification, edge connection), plus bounded parse/validation retries.
-- Per entity: Engineer once; Developer generate plus self-review; Attacker generate plus self-review. JSON/YAML parse retries add calls.
+- Per entity: Architect once; Developer generate plus self-review; Attacker generate plus self-review. JSON/YAML parse retries add calls.
 - L2 failure only: Diagnostician once per failure, plus the selected targeted/full reconstruction calls.
 - L3 only: Chain Attacker generate plus self-review; each chain failure can add a repair call.
 - Multi-section deploy assembly only: script-grader calls. L3 assembly and final packaging invoke the grader independently, so a run can make both calls.

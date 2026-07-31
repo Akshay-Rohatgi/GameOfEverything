@@ -1,11 +1,10 @@
 # Contributing to Game of Everything v2
 
-Use a focused branch and conventional commit messages (`feat:`, `fix:`, `test:`, `docs:`, or `chore:`). Keep changes scoped to the v2 codebase in `game_of_everything/goe` and its supporting atoms, Docker images, fixtures, and tests.
+Use a focused branch and conventional commit messages (`feat:`, `fix:`, `test:`, `docs:`, or `chore:`). Keep changes scoped to the v2 codebase in `goe/` and its supporting atoms, Docker images, fixtures, and tests.
 
 Before submitting a change, run:
 
 ```bash
-cd game_of_everything
 uv run pytest -m "not docker and not llm"
 ```
 

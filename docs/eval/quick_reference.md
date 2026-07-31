@@ -36,7 +36,7 @@ Total latency: 60.7s
 Avg latency per call: 6067ms
 
 Calls by agent:
-  engineer                      :   2 calls,    5,271 tokens,  26.2s
+  architect                      :   2 calls,    5,271 tokens,  26.2s
   developer                     :   2 calls,    6,232 tokens,  15.9s
   developer.self_review         :   2 calls,    8,134 tokens,  10.9s
 ```
