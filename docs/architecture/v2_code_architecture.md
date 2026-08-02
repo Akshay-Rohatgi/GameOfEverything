@@ -597,7 +597,7 @@ flowchart TD
 
 `RunState` is checkpointed as `output/.checkpoints/<run_id>/state.json` after planning and after each terminal entity outcome, then after L3. It persists the original request, full graph, completed snapshots (deploy script, serialized procedure, outgoing values, attempts), failures, and chain-test result. Resume restores completed entities into the scheduler before new work starts, which re-establishes concrete value propagation.
 
-The package contains `deploy.sh` for a single-system case, or per-system scripts and `docker-compose.yml` for multi-system cases. It always includes `playbook.yaml`; it includes `chain_playbook.yaml` when L3 produced a chain procedure. The replay CLI deploys these outputs into fresh test containers and executes the saved procedure(s), making it the post-package test path without new model calls.
+The package contains `deploy.sh` for a single-system case or per-system scripts for a multi-system case, plus `docker-compose.yml` in both cases. It always includes `playbook.yaml`; it includes `chain_playbook.yaml` when L3 produced a chain procedure. The replay CLI deploys these outputs into fresh test containers and executes the saved procedure(s), making it the post-package test path without new model calls. The local Docker deploy lifecycle starts the Compose project persistently, waits for script-backed readiness checks, and records state under `.docker/` for status and teardown.
 
 ## 10. Completion conditions and model-call inventory
 

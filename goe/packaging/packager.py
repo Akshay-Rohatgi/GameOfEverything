@@ -1,11 +1,11 @@
 """Packager — assemble built entities into a self-contained deploy package.
 
 Single-system: all entities deploy onto one box → one ``deploy.sh``, one
-``playbook.yaml``, one ``README.md``.
+``docker-compose.yml``, one ``playbook.yaml``, one ``README.md``.
 
 Multi-system: entities grouped by system_id → per-system ``<sid>_deploy.sh``
-files, a ``docker-compose.yml`` (one ubuntu:22.04 service per system on a shared
-``goe_net`` network), and the same ``playbook.yaml`` / ``README.md``.
+files, a ``docker-compose.yml`` (one ubuntu:22.04 service per system on an
+isolated project network), and the same ``playbook.yaml`` / ``README.md``.
 
 When a chain procedure is provided (from the L3 chain test), it is also written
 to ``chain_playbook.yaml`` regardless of single- vs multi-system.
@@ -75,10 +75,10 @@ def _build_docker_compose(
     per_system_scripts: dict[str, str],
     include_attacker: bool = False,
 ) -> str:
-    """Generate a docker-compose.yml for a multi-system run.
+    """Generate a docker-compose.yml for a local scenario deployment.
 
     Each system becomes a service running ubuntu:22.04. Its deploy script is
-    embedded as an inline command so ``docker-compose up`` fully configures it.
+    embedded as an inline command so ``docker compose up`` fully configures it.
 
     When ``include_attacker`` is set, a Kali ``attacker`` service (with ``solve.sh``
     mounted at ``/goe/solve.sh``) is added on the same network so the solve is
@@ -94,13 +94,19 @@ def _build_docker_compose(
         b64 = base64.b64encode(script.encode()).decode("ascii") if script else ""
 
         deploy_cmd = (
-            f"bash -c 'echo {b64} | base64 -d > /deploy.sh && bash /deploy.sh && sleep infinity'"
-            if b64 else "sleep infinity"
+            "bash -c '"
+            f"echo {b64} | base64 -d > /deploy.sh && "
+            "chmod +x /deploy.sh && bash /deploy.sh && "
+            "touch /tmp/goe-deploy-ready && exec sleep infinity'"
+            if b64
+            else "bash -c 'touch /tmp/goe-deploy-ready && exec sleep infinity'"
         )
 
         port_mappings: list[str] = []
         for p in system.network.exposed_ports:
-            port_mappings.append(f"{p}:{p}")
+            # These scenarios are intentionally vulnerable. A local deployment
+            # must not become reachable from the LAN merely by starting it.
+            port_mappings.append(f"127.0.0.1:{p}:{p}")
 
         svc: dict = {
             "image": "ubuntu:22.04",
@@ -112,6 +118,12 @@ def _build_docker_compose(
             },
             "command": deploy_cmd,
             "environment": ["DEBIAN_FRONTEND=noninteractive"],
+            "healthcheck": {
+                "test": ["CMD", "test", "-f", "/tmp/goe-deploy-ready"],
+                "interval": "2s",
+                "timeout": "1s",
+                "retries": 3600,
+            },
         }
         if port_mappings:
             svc["ports"] = port_mappings
@@ -129,11 +141,9 @@ def _build_docker_compose(
         }
 
     compose: dict = {
-        "version": "3.8",
         "services": services,
         "networks": {
             "default": {
-                "name": "goe_net",
                 "driver": "bridge",
             }
         },
@@ -221,7 +231,7 @@ def _build_readme(
             "Start all systems:",
             "",
             "```bash",
-            "docker-compose up -d",
+            "goe deploy docker .",
             "```",
             "",
             "Or deploy each system manually:",
@@ -239,10 +249,10 @@ def _build_readme(
         lines += [
             "## Running",
             "",
-            "Deploy the full single-box environment:",
+            "Deploy the full single-box environment in Docker:",
             "",
             "```bash",
-            "bash deploy.sh",
+            "goe deploy docker .",
             "```",
             "",
             "Attack steps for each entity are in `playbook.yaml` "
@@ -290,7 +300,8 @@ def package(
 ) -> Path:
     """Assemble PASSED entities into a self-contained package under ``out_dir``.
 
-    Single-system: writes ``deploy.sh``, ``playbook.yaml``, ``README.md``.
+    Single-system: writes ``deploy.sh``, ``docker-compose.yml``, ``playbook.yaml``,
+    ``README.md``.
     Multi-system: writes ``<system_id>_deploy.sh`` per system, ``docker-compose.yml``,
     ``playbook.yaml``, ``README.md``.
 
@@ -348,24 +359,25 @@ def package(
                 deploy_path.write_text(combined, encoding="utf-8")
                 deploy_path.chmod(0o755)
 
-        # Per-system scripts dict for docker-compose generation
-        per_system_scripts: dict[str, str] = {}
-        for system in graph.systems:
-            sid = system.id
-            deploy_path = out_dir / f"{sid}_deploy.sh"
-            if deploy_path.exists():
-                per_system_scripts[sid] = deploy_path.read_text(encoding="utf-8")
-
-        (out_dir / "docker-compose.yml").write_text(
-            _build_docker_compose(graph, per_system_scripts, include_attacker=solve_written),
-            encoding="utf-8",
-        )
     else:
         # Single-system: one combined deploy.sh (unchanged from Phase 3)
         deploy_sh = _build_deploy_sh(graph, built, order)
         deploy_path = out_dir / "deploy.sh"
         deploy_path.write_text(deploy_sh, encoding="utf-8")
         deploy_path.chmod(0o755)
+
+    # Every package gets the same persistent local deployment path. Scripts are
+    # embedded in the Compose model so the package stays self-contained.
+    per_system_scripts: dict[str, str] = {}
+    for system in graph.systems:
+        script_name = f"{system.id}_deploy.sh" if multi else "deploy.sh"
+        deploy_path = out_dir / script_name
+        if deploy_path.exists():
+            per_system_scripts[system.id] = deploy_path.read_text(encoding="utf-8")
+    (out_dir / "docker-compose.yml").write_text(
+        _build_docker_compose(graph, per_system_scripts, include_attacker=solve_written),
+        encoding="utf-8",
+    )
 
     # Per-entity playbook (always)
     (out_dir / "playbook.yaml").write_text(

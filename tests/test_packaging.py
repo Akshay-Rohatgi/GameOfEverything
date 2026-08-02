@@ -44,6 +44,22 @@ def test_package_writes_three_files(tmp_path):
     assert (out / "deploy.sh").exists()
     assert (out / "playbook.yaml").exists()
     assert (out / "README.md").exists()
+    assert (out / "docker-compose.yml").exists()
+
+
+def test_single_system_compose_waits_for_provisioning(tmp_path):
+    graph = _graph()
+    built = {"sqli_entity": _outcome("sqli_entity", "echo ready")}
+    out = package(graph, built, tmp_path / "pkg")
+
+    compose = yaml.safe_load((out / "docker-compose.yml").read_text())
+    target = compose["services"]["target_system"]
+    assert target["healthcheck"]["test"] == [
+        "CMD", "test", "-f", "/tmp/goe-deploy-ready"
+    ]
+    assert "touch /tmp/goe-deploy-ready" in target["command"]
+    assert "name" not in compose["networks"]["default"]
+    assert all(mapping.startswith("127.0.0.1:") for mapping in target["ports"])
 
 
 def test_deploy_topo_order_and_postprocess(tmp_path):

@@ -227,8 +227,8 @@ class TestMultiSystemPackaging:
         # No collision — different systems even if same port
         assert warnings == []
 
-    def test_single_system_still_emits_deploy_sh(self, tmp_path):
-        """Single-system path must remain unchanged."""
+    def test_single_system_emits_deploy_sh_and_compose(self, tmp_path):
+        """Single-system packages support both direct scripts and Docker deployment."""
         from goe.packaging.packager import package
 
         graph = _single_graph()
@@ -237,7 +237,7 @@ class TestMultiSystemPackaging:
         }
         out = package(graph, built, tmp_path / "out")
         assert (out / "deploy.sh").exists()
-        assert not (out / "docker-compose.yml").exists()
+        assert (out / "docker-compose.yml").exists()
 
 
 # ---------------------------------------------------------------------------

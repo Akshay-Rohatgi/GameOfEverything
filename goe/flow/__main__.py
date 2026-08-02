@@ -67,12 +67,141 @@ def main() -> None:
              "or just port for 1:1 mapping. Auto-detects if none given.",
     )
 
+    deploy_p = sub.add_parser("deploy", help="Deploy an existing output package")
+    deploy_sub = deploy_p.add_subparsers(dest="provider", required=True)
+    docker_p = deploy_sub.add_parser(
+        "docker", help="Deploy scenario containers to the local Docker daemon"
+    )
+    docker_p.add_argument("out_dir", type=Path, help="Output package or run ID")
+    docker_p.add_argument(
+        "--project-name",
+        default=None,
+        help="Docker Compose project name (generated from the run ID when omitted)",
+    )
+    docker_p.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Seconds to wait for provisioning to finish (default: 600)",
+    )
+
+    status_p = sub.add_parser("status", help="Show local Docker deployment status")
+    status_p.add_argument("deployment", type=Path, help="Output package or run ID")
+    status_p.add_argument(
+        "--provider", choices=("docker",), default=None,
+        help="Deployment provider (optional on this branch)",
+    )
+
+    destroy_p = sub.add_parser("destroy", help="Destroy a local Docker deployment")
+    destroy_p.add_argument("deployment", type=Path, help="Output package or run ID")
+    destroy_p.add_argument(
+        "--provider", choices=("docker",), default=None,
+        help="Deployment provider (optional on this branch)",
+    )
+    destroy_p.add_argument("--yes", action="store_true", help="Destroy without prompting")
+
     args = parser.parse_args()
 
     if args.command == "run":
         _run(args)
     elif args.command == "test":
         _test(args)
+    elif args.command == "deploy":
+        _deploy_docker(args)
+    elif args.command == "status":
+        _deployment_status(args)
+    elif args.command == "destroy":
+        _destroy_deployment(args)
+
+
+def _resolve_deployment_dir(value: Path) -> Path:
+    direct = Path(value).expanduser()
+    if direct.is_dir():
+        return direct.resolve()
+    by_run_id = Path("output") / direct
+    if by_run_id.is_dir():
+        return by_run_id.resolve()
+    return direct.resolve()
+
+
+def _docker_deployment_progress(message: str) -> None:
+    print(f"[docker] {message}...")
+
+
+def _deploy_docker(args) -> None:
+    from goe.deploy.docker import DockerDeploymentError, deploy
+
+    out_dir = _resolve_deployment_dir(args.out_dir)
+    try:
+        manifest = deploy(
+            out_dir,
+            project_name=args.project_name,
+            timeout=args.timeout,
+            progress=_docker_deployment_progress,
+        )
+    except (DockerDeploymentError, FileNotFoundError, ValueError) as exc:
+        print(f"Docker deployment failed: {exc}", file=sys.stderr)
+        if (out_dir / ".docker" / "manifest.json").is_file():
+            print(
+                f"State was preserved. Inspect with: goe status {out_dir} --provider docker",
+                file=sys.stderr,
+            )
+            print(
+                f"Clean up with: goe destroy {out_dir} --provider docker",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    print("\nDocker deployment ready")
+    print(f"  Project:  {manifest.project_name}")
+    for service, current in manifest.services.items():
+        state = current.get("State", "unknown")
+        health = current.get("Health") or "n/a"
+        print(f"  {service}: {state}, health={health}")
+    print(f"  Status:   goe status {out_dir} --provider docker")
+    print(f"  Teardown: goe destroy {out_dir} --provider docker")
+
+
+def _deployment_status(args) -> None:
+    from goe.deploy.docker import DockerDeploymentError, status
+
+    out_dir = _resolve_deployment_dir(args.deployment)
+    try:
+        manifest, services = status(out_dir)
+    except (DockerDeploymentError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Unable to read Docker deployment status: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Docker deployment {manifest.run_id}: {manifest.state.value}")
+    print(f"  Project: {manifest.project_name}")
+    if manifest.error:
+        print(f"  Error: {manifest.error}")
+    for current in services:
+        service = current.get("Service") or current.get("Name") or "unknown"
+        state = current.get("State", "unknown")
+        health = current.get("Health") or "n/a"
+        print(f"  {service}: {state}, health={health}")
+
+
+def _destroy_deployment(args) -> None:
+    from goe.deploy.docker import DockerDeploymentError, destroy, load_manifest
+
+    out_dir = _resolve_deployment_dir(args.deployment)
+    try:
+        manifest = load_manifest(out_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Unable to load Docker deployment: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if not args.yes:
+        print(f"Destroy local Docker deployment {manifest.run_id} ({manifest.project_name})?")
+        if input("Continue? [y/N]: ").strip().lower() not in {"y", "yes"}:
+            print("Destroy cancelled.")
+            return
+    try:
+        result = destroy(out_dir, progress=_docker_deployment_progress)
+    except (DockerDeploymentError, FileNotFoundError, RuntimeError) as exc:
+        print(f"Docker destroy failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Docker deployment {result.run_id} is {result.state.value}.")
 
 
 def _run(args) -> None:
