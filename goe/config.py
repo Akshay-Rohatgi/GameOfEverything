@@ -51,8 +51,35 @@ class GoEConfig:
         return os.getenv("AWS_SECRET_ACCESS_KEY", self._data.get("aws", {}).get("secret_access_key", ""))
 
     @property
+    def aws_session_token(self) -> str:
+        return os.getenv("AWS_SESSION_TOKEN", self._data.get("aws", {}).get("session_token", ""))
+
+    @property
     def aws_region(self) -> str:
         return os.getenv("AWS_REGION", self._data.get("aws", {}).get("region", "us-east-1"))
+
+    @property
+    def aws_profile(self) -> str:
+        return os.getenv("AWS_PROFILE", self._data.get("aws", {}).get("profile", ""))
+
+    def _aws_deploy(self, key: str, default=""):
+        return self._data.get("deploy", {}).get("aws", {}).get(key, default)
+
+    @property
+    def deploy_aws_region(self) -> str:
+        return os.getenv("GOE_AWS_REGION", self._aws_deploy("region", self.aws_region))
+
+    @property
+    def deploy_aws_profile(self) -> str:
+        return os.getenv("GOE_AWS_PROFILE", self._aws_deploy("profile", self.aws_profile))
+
+    @property
+    def deploy_aws_instance_type(self) -> str:
+        return os.getenv("GOE_AWS_INSTANCE_TYPE", self._aws_deploy("instance_type", "t3.small"))
+
+    @property
+    def deploy_aws_attacker_cidr(self) -> str:
+        return os.getenv("GOE_ATTACKER_CIDR", self._aws_deploy("attacker_cidr", ""))
 
     @property
     def default_model(self) -> str:

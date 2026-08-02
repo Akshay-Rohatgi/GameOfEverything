@@ -1,0 +1,17 @@
+#!/bin/bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+hostnamectl set-hostname "${hostname}"
+mkdir -p /var/lib/goe
+printf '%s\n' '${system_id}' > /var/lib/goe/system_id
+
+apt-get update -qq
+apt-get install -y -qq awscli iproute2 snapd
+
+if ! command -v amazon-ssm-agent >/dev/null 2>&1; then
+  snap install amazon-ssm-agent --classic
+fi
+
+systemctl enable --now amazon-ssm-agent 2>/dev/null || \
+  systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service

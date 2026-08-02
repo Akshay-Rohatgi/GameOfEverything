@@ -8,6 +8,7 @@ Game of Everything (GoE) builds and validates intentionally vulnerable cybersecu
 - [uv](https://docs.astral.sh/uv/)
 - Docker
 - AWS credentials with access to the configured Amazon Bedrock model
+- Terraform 1.5 or later (only when deploying generated scenarios to AWS)
 
 ## Setup
 
@@ -38,8 +39,18 @@ uv run python -m goe.build --spec tests/fixtures/entities/sqli_express.yaml
 # Re-test a generated output directory without model calls.
 uv run goe test output/<run_id>/
 
+# Deploy a validated package to AWS (one EC2 instance per system).
+uv run goe deploy aws output/<run_id>/ --attacker-cidr 203.0.113.5/32
+
+# Inspect or tear down that deployment using its local Terraform state.
+uv run goe status output/<run_id>/
+uv run goe destroy output/<run_id>/
+
 # Run the fast test suite.
 uv run pytest -m "not docker and not llm"
 ```
 
 See [the v2 specification](docs/architecture/v2_spec.md), [entity graph model](docs/architecture/entity_graph_model.md), and [code architecture](docs/architecture/v2_code_architecture.md) for the architecture and workflow details.
+
+See [AWS deployment](docs/aws_deployment.md) before creating cloud resources. It covers
+network exposure, credentials, local state, failure recovery, teardown, and costs.
