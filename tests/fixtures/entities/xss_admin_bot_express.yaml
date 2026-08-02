@@ -1,0 +1,9 @@
+id: xss_admin_bot_express_entity
+description: "Express app with stored XSS and an admin bot — attacker posts a script payload that exfiltrates the admin's session cookie to a listener on the attacker container. Steal the admin session cookie by injecting an XSS payload that fires when the admin bot visits the submissions page."
+system_id: target_system
+runtime: express
+requires: []
+provides:
+  - admin_session_cookie
+atoms:
+  - xss_admin_bot

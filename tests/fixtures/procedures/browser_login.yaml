@@ -1,0 +1,38 @@
+# Fixture: browser_login
+# Tests: sessions, navigate, fill_and_submit, url_contains, selector_visible assertions
+# Target: simple_express app (has /login + /dashboard)
+sessions:
+  - id: attacker_browser
+    type: browser
+    base_url: "http://${target_host}:${target_port}"
+
+procedure:
+  - step_id: go_to_login
+    session: attacker_browser
+    action:
+      type: navigate
+      path: "/login"
+    expect:
+      selector_visible: "#login-form"
+    timeout: 10
+
+  - step_id: submit_login
+    session: attacker_browser
+    action:
+      type: fill_and_submit
+      fields:
+        "#username": "admin"
+        "#password": "admin123"
+      submit: "button[type=submit]"
+    expect:
+      url_contains: "/dashboard"
+    timeout: 10
+
+  - step_id: check_dashboard
+    session: attacker_browser
+    action:
+      type: navigate
+      path: "/dashboard"
+    expect:
+      selector_visible: ".dashboard"
+    timeout: 10

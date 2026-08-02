@@ -1,0 +1,9 @@
+id: cmdi_php_entity
+description: "PHP/Apache app with OS command injection in a network diagnostic endpoint — attacker executes arbitrary commands and reads /etc/passwd. Execute arbitrary OS commands via command injection in the host parameter, confirm by reading /etc/passwd."
+system_id: target_system
+runtime: apache_php
+requires: []
+provides:
+  - rce_as_www_data
+atoms:
+  - cmd_injection

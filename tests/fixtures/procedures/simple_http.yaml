@@ -1,0 +1,27 @@
+# Fixture: simple_http
+# Tests: http_request action, status assertion, body_contains assertion
+# Target: simple_express app on port 3000
+procedure:
+  - step_id: post_item
+    action:
+      type: http_request
+      method: POST
+      url: "http://${target_host}:${target_port}/api/items"
+      headers:
+        Content-Type: application/json
+      body: '{"name": "test_item", "value": 42}'
+    expect:
+      status: 201
+    timeout: 10
+
+  - step_id: verify_body
+    action:
+      type: http_request
+      method: POST
+      url: "http://${target_host}:${target_port}/api/items"
+      headers:
+        Content-Type: application/json
+      body: '{"marker": "hello_world"}'
+    expect:
+      body_contains: "hello_world"
+    timeout: 10

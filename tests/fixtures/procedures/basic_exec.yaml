@@ -1,0 +1,32 @@
+# Fixture: basic_exec
+# Tests: exec_attacker, exit_code assertion, stdout_contains, stdout_regex
+# No deploy needed — just verifies the attacker container has tools and can
+# reach the target over the bridge network.
+procedure:
+  - step_id: attacker_whoami
+    action:
+      type: exec_attacker
+      command: "whoami"
+    expect:
+      stdout_contains: "root"
+
+  - step_id: nmap_version
+    action:
+      type: exec_attacker
+      command: "nmap --version"
+    expect:
+      stdout_contains: "Nmap"
+
+  - step_id: target_reachable
+    action:
+      type: exec_attacker
+      command: "getent hosts ${target_host}"
+    expect:
+      exit_code: 0
+
+  - step_id: curl_target
+    action:
+      type: exec_attacker
+      command: "curl -sf --max-time 5 http://${target_host}:${target_port}/ || curl -sf --max-time 5 http://${target_host}:${target_port}/health || echo 'port_check_done'"
+    expect:
+      exit_code: 0

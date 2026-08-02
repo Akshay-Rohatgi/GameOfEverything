@@ -1,0 +1,279 @@
+"""Deploy script grader — validates and fixes conflicts in concatenated entity scripts.
+
+When multiple entities' deploy scripts are stitched together, conflicts can arise:
+- Password overwrites (entity 2 runs chpasswd after entity 1 set the password)
+- Duplicate user creation
+- Service conflicts (multiple entities starting the same daemon)
+- Port conflicts
+
+This LLM-based grader detects and fixes these issues before deployment.
+"""
+
+from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def service_section(system) -> "tuple[str, str] | None":
+    """Return the ``(id, deploy_script)`` section for a system's declared services, or None.
+
+    The services are installed deterministically by the ServiceRegistry — the same layer
+    ProgressiveEnvironment.provision() uses during the build — so entity scripts never install
+    services themselves. Callers prepend this section (services first) so the daemons are up
+    before any entity configures its vulnerability, and so the packaged and chain-tested scripts
+    are byte-identical.
+    """
+    if not getattr(system, "services", None):
+        return None
+    from goe.services.registry import get_registry
+
+    registry = get_registry()
+    # Skip pseudo-services (web/database) that the web runtime layer deploys, keeping only
+    # real daemons the ServiceRegistry knows how to install (ssh, smb, mysql, …).
+    specs = [s for s in system.services if registry.has_recipe(s.id)]
+    if not specs:
+        return None
+    script = registry.deploy_all(specs).strip()
+    if not script:
+        return None
+    return (f"{system.id}__services", script)
+
+
+def assemble_deploy_script(sections: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    """Concatenate ordered (entity_id, section) deploy scripts into one final script.
+
+    This is the single entry point every assembly path uses (single-system packaging,
+    multi-system packaging, and the chain test) so the script that gets tested is
+    byte-identical to the script that gets packaged.
+
+    Steps:
+      1. Concatenate sections with ``# --- <entity_id> ---`` headers.
+      2. When there is more than one section, run the LLM grader to resolve
+         cross-entity conflicts (duplicate ``useradd``, password overwrites). A single
+         section has no cross-entity conflicts, so the grader is skipped.
+      3. Post-process (shebang, ``set -e``, blank-line normalisation).
+
+    Args:
+        sections: Ordered ``(entity_id, deploy_script_section)`` pairs. Order matters —
+            the grader keeps the FIRST occurrence on conflict, so the credential-providing
+            entity must come first (callers pass topo build order).
+
+    Returns:
+        ``(final_script, warnings)`` where ``warnings`` lists conflicts the grader fixed.
+    """
+    from goe.packaging.postprocessor import apply_post_processors
+
+    entity_sections: dict[str, str] = {}
+    blocks: list[str] = []
+    for eid, script in sections:
+        stripped = (script or "").strip()
+        entity_sections[eid] = stripped
+        blocks.append(f"# --- {eid} ---\n{stripped}\n")
+
+    combined = "\n".join(blocks)
+    warnings: list[str] = []
+
+    # Conflicts only arise when multiple entities are stitched onto one system.
+    if len(sections) > 1:
+        combined, warnings = grade_and_fix_script(combined, entity_sections, verbose=False)
+
+    return apply_post_processors(combined) + "\n", warnings
+
+
+def _is_valid_bash(script: str) -> tuple[bool, str]:
+    """Validate bash syntax using bashlex parser.
+
+    Args:
+        script: The bash script to validate
+
+    Returns:
+        (is_valid, error_message) tuple
+    """
+    try:
+        import bashlex
+        bashlex.parse(script)
+        return True, ""
+    except ImportError:
+        # bashlex not available, fall back to basic checks
+        logger.warning("[ScriptGrader] bashlex not available, using basic validation")
+        # Check for obvious truncation patterns
+        if script.count("'") % 2 != 0 or script.count('"') % 2 != 0:
+            return False, "Unmatched quotes detected"
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _detect_suspicious_truncation(original: str, fixed: str) -> bool:
+    """Check if fixed script lost significant content AND has syntax errors.
+
+    Note: We don't just check size loss, as legitimate conflict resolution
+    (removing duplicate users/passwords) can remove 30-40% of content.
+    Only flag as truncation if BOTH size loss is significant AND syntax is broken.
+    """
+    if len(fixed) < len(original) * 0.7:  # Lost >30% of content
+        loss_pct = 100 - int(len(fixed) / len(original) * 100)
+        logger.warning(
+            f"[ScriptGrader] Fixed script is {len(original) - len(fixed)} chars shorter "
+            f"({loss_pct}% content loss) — checking syntax..."
+        )
+        # Only flag as truncation if syntax is also broken
+        is_valid, _ = _is_valid_bash(fixed)
+        return not is_valid
+    return False
+
+
+def grade_and_fix_script(
+    concatenated_script: str,
+    entity_sections: dict[str, str],
+    verbose: bool = False,
+) -> tuple[str, list[str]]:
+    """Grade a concatenated deploy script and fix conflicts.
+
+    Args:
+        concatenated_script: The full stitched script from all entities
+        entity_sections: Dict mapping entity_id → its script section (for context)
+        verbose: Log detailed grading output
+
+    Returns:
+        (fixed_script, warnings) tuple
+        - fixed_script: The corrected script with conflicts resolved
+        - warnings: List of issues found and fixed
+    """
+    from goe.bedrock import call
+    from goe.config import GoEConfig
+
+    cfg = GoEConfig.get()
+    model = cfg.model_for("developer")  # Use developer model tier
+
+    system_prompt = """You are a deployment script validator for multi-entity cybersecurity challenges.
+
+Your job: Review a concatenated bash deployment script from multiple entities and fix conflicts.
+
+## Common Conflicts to Fix
+
+1. **Password overwrites**: If user "alice" is created with password "pass1" in section A, and section B runs `chpasswd` to set "pass2", DELETE the second chpasswd line. The first password must be preserved for the attack chain to work.
+
+2. **Duplicate user creation**: If `useradd alice` appears multiple times, keep only the FIRST occurrence. Delete subsequent ones.
+
+3. **Duplicate package installs**: If `apt-get install -y sudo` appears in multiple sections, keep all of them (idempotent, safe).
+
+4. **Service restarts**: If multiple sections restart the same service (sshd, apache2), keep all restarts (later entities may need to reload config).
+
+5. **File overwrites**: If section A writes `/etc/config` and section B overwrites it completely (not appends), this is likely a bug — keep the first write, DELETE the second.
+
+## CRITICAL: Base64-Encoded Files
+
+**DO NOT truncate or partially remove base64-encoded echo commands.**
+
+Base64 file writes look like:
+```bash
+echo 'VGhpc0lzQVZlcnlMb25nQmFzZTY0U3RyaW5n...[potentially 1000s of chars]...' | base64 -d > /path/to/file
+```
+
+When removing a duplicate file write with base64 encoding:
+- You MUST remove the ENTIRE LINE including the full base64 string and closing quote
+- OR keep it entirely
+- NEVER output a partial line like `echo 'VGhpc0...` with no closing quote
+
+If you cannot safely remove a long base64 echo statement (>2000 chars):
+- Leave it in the script (duplicates are better than syntax errors)
+- OR replace the entire statement with: `# Duplicate file write removed: /path/to/file`
+
+Base64 strings can be very long (5000+ characters on a single line). You must output the entire line or none of it.
+
+## Output Format
+
+Return ONLY the fixed bash script. No explanation, no markdown fences, just the corrected script text.
+
+## Critical Rules
+
+- Preserve ALL apt-get installs (idempotent, safe to repeat)
+- For user management: first occurrence wins (useradd, chpasswd)
+- For config files: first write wins unless second is clearly an append (>>)
+- Preserve all service start/restart commands
+- Keep all `set -e`, `#!/bin/bash` directives from the original
+- **NEVER truncate base64 echo statements — remove entirely or keep entirely**
+- **ALWAYS preserve section header comments** (`# --- entity_id ---`) exactly as-is — never remove them
+- If no issues found, return the original script unchanged"""
+
+    # Build context showing entity boundaries
+    entity_context = "## Entity Sections\n\n"
+    for eid, section in entity_sections.items():
+        lines = section.strip().split("\n")[:5]  # First 5 lines as sample
+        entity_context += f"### {eid}\n```bash\n" + "\n".join(lines) + "\n...\n```\n\n"
+
+    user_msg = f"""{entity_context}## Full Concatenated Script
+
+```bash
+{concatenated_script}
+```
+
+Grade and fix this script. Remove conflicting commands (especially duplicate user creation and password overwrites). Return ONLY the fixed script."""
+
+    if verbose:
+        logger.info("[ScriptGrader] Grading concatenated deploy script...")
+
+    fixed_script = call(
+        model_id=model,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_msg}],
+        caller="packaging.grader",
+    )
+
+    # Strip markdown fences if LLM added them
+    fixed_script = fixed_script.strip()
+    if fixed_script.startswith("```"):
+        lines = fixed_script.split("\n")
+        fixed_script = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+
+    # Validate the fixed script before accepting it
+    is_valid, error = _is_valid_bash(fixed_script)
+    is_truncated = _detect_suspicious_truncation(concatenated_script, fixed_script)
+
+    if not is_valid or is_truncated:
+        logger.error(
+            f"[ScriptGrader] Fixed script failed validation "
+            f"(valid={is_valid}, truncated={is_truncated}). "
+            f"Error: {error}. Reverting to original script."
+        )
+        return concatenated_script, [
+            f"Grader output rejected (syntax error: {error or 'truncation detected'})"
+        ]
+
+    # Detect what changed
+    warnings = _diff_summary(concatenated_script, fixed_script)
+
+    if warnings:
+        logger.warning(f"[ScriptGrader] Fixed {len(warnings)} conflict(s): {warnings}")
+    elif verbose:
+        logger.info("[ScriptGrader] No conflicts detected")
+
+    return fixed_script, warnings
+
+
+def _diff_summary(original: str, fixed: str) -> list[str]:
+    """Generate a summary of what changed between original and fixed scripts."""
+    if original.strip() == fixed.strip():
+        return []
+
+    warnings = []
+    orig_lines = set(original.strip().split("\n"))
+    fixed_lines = set(fixed.strip().split("\n"))
+
+    removed = orig_lines - fixed_lines
+    for line in removed:
+        line = line.strip()
+        if "chpasswd" in line:
+            warnings.append(f"Removed duplicate password set: {line[:60]}")
+        elif "useradd" in line:
+            warnings.append(f"Removed duplicate user creation: {line[:60]}")
+        elif line.startswith("echo") and ">" in line and ">>" not in line:
+            warnings.append(f"Removed file overwrite: {line[:60]}")
+
+    if not warnings:
+        warnings.append("Script modified (see deploy.sh for details)")
+
+    return warnings

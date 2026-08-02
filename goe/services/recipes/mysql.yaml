@@ -1,0 +1,48 @@
+id: mysql
+description: "MariaDB 10.x database server with reliable Docker startup"
+apt_packages:
+  - mariadb-server
+  - mariadb-client
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server mariadb-client 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Bind to all interfaces so other containers can connect
+  sed -i 's/bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
+  # Ensure runtime directory exists and is owned by mysql
+  mkdir -p /run/mysqld
+  chown mysql:mysql /run/mysqld
+start: |
+  # Start mysqld_safe in background (handles crash recovery, restarts)
+  mysqld_safe &
+
+  # Readiness wait with explicit timeout
+  echo "Waiting for MySQL to be ready..."
+  for i in $(seq 1 30); do
+    if mysqladmin ping -h localhost --silent 2>/dev/null; then
+      echo "MySQL is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  # Final health check — fail the deployment if not ready
+  if ! mysqladmin ping -h localhost --silent 2>/dev/null; then
+    echo "FATAL: MySQL failed to start after 30s"
+    exit 1
+  fi
+healthcheck: "mysqladmin ping -h localhost --silent"
+stop: "mysqladmin shutdown 2>/dev/null || true"
+ports: [3306]
+restart_after_snapshot: true
+config_vars:
+  root_password:
+    default: ""
+    description: "Root user password (empty = no password, passwordless root)"
+    # Runs `mysql -e ...` against the live server, so it must run after start.
+    after_start: true
+    apply: |
+      if [ -n "{value}" ]; then
+        mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '{value}'; FLUSH PRIVILEGES;" 2>/dev/null || true
+        mysql -e "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{value}'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;" 2>/dev/null || true
+      fi

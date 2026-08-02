@@ -1,0 +1,8 @@
+id: xss_reflected_php_entity
+description: PHP web application with reflected XSS vulnerability in search parameter
+system_id: target_system
+runtime: apache_php
+requires: []
+provides: []
+atoms:
+  - xss_reflected

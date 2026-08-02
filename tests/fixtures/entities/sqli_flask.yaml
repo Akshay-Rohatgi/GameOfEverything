@@ -1,0 +1,9 @@
+id: sqli_flask_entity
+description: "Flask app with UNION-based SQL injection in a search endpoint — attacker extracts credentials from the users table. Dump username and password from users table via UNION-based SQLi in search parameter."
+system_id: target_system
+runtime: flask
+requires: []
+provides:
+  - credentials
+atoms:
+  - sqli_union

@@ -1,0 +1,28 @@
+# Fixture: step_chaining
+# Tests: exec_target (god-view), output capture (regex + stdout), interpolation
+# of ${steps.<id>.<output>} in downstream commands.
+# Step 1 plants a secret token, step 2 reads it back, step 3 uses the captured
+# value in its command — verifying end-to-end output propagation.
+procedure:
+  - step_id: plant_token
+    action:
+      type: exec_target
+      command: "echo 'SECRET_TOKEN_abc123' > /tmp/goe_token.txt && echo planted"
+    expect:
+      stdout_contains: "planted"
+
+  - step_id: read_token
+    action:
+      type: exec_target
+      command: "cat /tmp/goe_token.txt"
+    expect:
+      stdout_contains: "SECRET_TOKEN"
+    outputs:
+      token: 'regex("SECRET_TOKEN_(\w+)")'
+
+  - step_id: use_token
+    action:
+      type: exec_target
+      command: "echo 'Got token: ${steps.read_token.token}'"
+    expect:
+      stdout_contains: "abc123"

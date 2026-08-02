@@ -1,0 +1,58 @@
+systems:
+  - id: target_system
+    os: ubuntu_22_04
+    services:
+      - web
+    network:
+      hostname: target
+      exposed_ports:
+        - 5000
+      internal_ports: []
+
+entities:
+  - id: flask_cmdi
+    description: Flask app with command injection that provides a reverse shell
+    system_id: target_system
+    requires:
+      - edge_id: operator_to_flask
+        optional: false
+    provides:
+      - cmdi_to_suid
+    runtime: flask
+    atoms:
+      - cmdi_os
+
+  - id: suid_privesc
+    description: Misconfigured SUID binary for privilege escalation
+    system_id: target_system
+    requires:
+      - edge_id: cmdi_to_suid
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+edges:
+  - id: operator_to_flask
+    from_entity: operator
+    to_entity: flask_cmdi
+    type: network_reach
+    params:
+      host:
+        structural: target
+        concrete: null
+      port:
+        structural: "5000"
+        concrete: null
+
+  - id: cmdi_to_suid
+    from_entity: flask_cmdi
+    to_entity: suid_privesc
+    type: shell_as
+    params:
+      user:
+        structural: www-data
+        concrete: null
+      host:
+        structural: target
+        concrete: null

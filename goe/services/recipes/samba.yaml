@@ -1,0 +1,54 @@
+id: samba
+description: "Samba file sharing server (SMB/CIFS)"
+apt_packages:
+  - samba
+  - smbclient
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y samba smbclient 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Create default share directory
+  mkdir -p /srv/samba/share
+  chmod 777 /srv/samba/share
+
+  # Basic smb.conf with guest access
+  cat > /etc/samba/smb.conf <<'SMBEOF'
+  [global]
+    workgroup = WORKGROUP
+    server string = Samba Server
+    security = user
+    map to guest = Bad User
+    guest account = nobody
+
+  [share]
+    path = /srv/samba/share
+    browseable = yes
+    writable = yes
+    guest ok = yes
+    read only = no
+    force user = nobody
+  SMBEOF
+start: |
+  # Start Samba daemons
+  smbd -D
+  nmbd -D
+
+  # Readiness check
+  echo "Waiting for Samba to be ready..."
+  for i in $(seq 1 15); do
+    if smbclient -L localhost -N >/dev/null 2>&1; then
+      echo "Samba is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! smbclient -L localhost -N >/dev/null 2>&1; then
+    echo "FATAL: Samba failed to start after 15s"
+    exit 1
+  fi
+healthcheck: "smbclient -L localhost -N >/dev/null 2>&1"
+stop: "pkill -f smbd; pkill -f nmbd; true"
+ports: [139, 445]
+restart_after_snapshot: true
+config_vars: {}

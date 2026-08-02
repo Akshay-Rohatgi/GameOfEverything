@@ -1,0 +1,53 @@
+id: ftp
+description: "vsftpd FTP server"
+apt_packages:
+  - vsftpd
+  - netcat
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y vsftpd netcat 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Basic vsftpd config for anonymous and local user access
+  cat > /etc/vsftpd.conf <<'FTPEOF'
+  listen=YES
+  anonymous_enable=YES
+  local_enable=YES
+  write_enable=YES
+  anon_upload_enable=YES
+  anon_mkdir_write_enable=YES
+  dirmessage_enable=YES
+  xferlog_enable=YES
+  connect_from_port_20=YES
+  secure_chroot_dir=/var/run/vsftpd/empty
+  pam_service_name=vsftpd
+  pasv_enable=YES
+  pasv_min_port=21100
+  pasv_max_port=21110
+  FTPEOF
+
+  # Create FTP root directory
+  mkdir -p /var/ftp/pub /var/run/vsftpd/empty
+  chmod 777 /var/ftp/pub
+start: |
+  # Start vsftpd
+  /usr/sbin/vsftpd /etc/vsftpd.conf &
+
+  # Readiness check
+  echo "Waiting for FTP to be ready..."
+  for i in $(seq 1 15); do
+    if nc -z localhost 21 2>/dev/null; then
+      echo "FTP is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! nc -z localhost 21 2>/dev/null; then
+    echo "FATAL: FTP failed to start after 15s"
+    exit 1
+  fi
+healthcheck: "nc -z localhost 21"
+stop: "pkill -f vsftpd || true"
+ports: [21, 21100, 21101, 21102, 21103, 21104, 21105, 21106, 21107, 21108, 21109, 21110]
+restart_after_snapshot: true
+config_vars: {}

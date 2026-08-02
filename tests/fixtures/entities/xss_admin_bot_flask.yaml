@@ -1,0 +1,8 @@
+id: xss_admin_bot_flask_entity
+description: Flask web application with stored XSS and automated admin bot for session theft
+system_id: target_system
+runtime: flask
+requires: []
+provides: []
+atoms:
+  - xss_admin_bot

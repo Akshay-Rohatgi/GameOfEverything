@@ -1,0 +1,84 @@
+systems:
+  - id: smb_server
+    os: ubuntu_22_04
+    services:
+      - smb
+    network:
+      hostname: smbserver
+      exposed_ports:
+        - 445
+        - 139
+      internal_ports: []
+  - id: ssh_server
+    os: ubuntu_22_04
+    services:
+      - ssh
+    network:
+      hostname: sshserver
+      exposed_ports:
+        - 22
+      internal_ports: []
+
+entities:
+  - id: smb_key_share
+    description: Anonymous SMB share serves an SSH private key
+    system_id: smb_server
+    requires:
+      - edge_id: op_to_smb
+        optional: false
+    provides:
+      - smb_to_ssh_key
+    runtime: ubuntu
+    atoms: []
+  - id: ssh_login
+    description: SSH server authorizes the key retrieved from the SMB share
+    system_id: ssh_server
+    requires:
+      - edge_id: op_to_ssh
+        optional: false
+      - edge_id: smb_to_ssh_key
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+edges:
+  - id: op_to_smb
+    from_entity: operator
+    to_entity: smb_key_share
+    type: network_reach
+    params:
+      host:
+        structural: smbserver
+        concrete: null
+      port:
+        structural: "445"
+        concrete: null
+  - id: op_to_ssh
+    from_entity: operator
+    to_entity: ssh_login
+    type: network_reach
+    params:
+      host:
+        structural: sshserver
+        concrete: null
+      port:
+        structural: "22"
+        concrete: null
+  - id: smb_to_ssh_key
+    from_entity: smb_key_share
+    to_entity: ssh_login
+    type: creds_for
+    params:
+      user:
+        structural: lowpriv_user
+        concrete: null
+      host:
+        structural: sshserver
+        concrete: null
+      cred_type:
+        structural: ssh_key
+        concrete: null
+      secret:
+        structural: ssh_private_key
+        concrete: null

@@ -1,0 +1,77 @@
+systems:
+  - id: web_system
+    os: ubuntu_22_04
+    services:
+      - web
+    network:
+      hostname: webserver
+      exposed_ports:
+        - 80
+      internal_ports:
+        - 5000
+
+  - id: db_system
+    os: ubuntu_22_04
+    services:
+      - database
+      - ssh
+    network:
+      hostname: dbserver
+      exposed_ports:
+        - 22
+      internal_ports:
+        - 3306
+
+entities:
+  - id: sqli_webapp
+    description: Flask app with SQL injection leaking db credentials
+    system_id: web_system
+    requires:
+      - edge_id: op_to_webapp
+        optional: false
+    provides:
+      - webapp_to_db_creds
+    runtime: flask
+    atoms:
+      - sqli_union
+
+  - id: ssh_pivot
+    description: SSH pivot to db server using leaked credentials
+    system_id: db_system
+    requires:
+      - edge_id: webapp_to_db_creds
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+edges:
+  - id: op_to_webapp
+    from_entity: operator
+    to_entity: sqli_webapp
+    type: network_reach
+    params:
+      host:
+        structural: webserver
+        concrete: null
+      port:
+        structural: "80"
+        concrete: null
+
+  - id: webapp_to_db_creds
+    from_entity: sqli_webapp
+    to_entity: ssh_pivot
+    type: creds_for
+    params:
+      user:
+        structural: db_admin
+        concrete: null
+      host:
+        structural: dbserver
+        concrete: null
+      cred_type:
+        structural: password
+        concrete: null
+      secret:
+        structural: db_admin_password
+        concrete: null

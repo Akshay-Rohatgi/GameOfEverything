@@ -1,0 +1,35 @@
+id: apache
+description: "Apache HTTP Server (standalone, not for PHP apps)"
+apt_packages:
+  - apache2
+  - curl
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y apache2 curl 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Ensure apache directories exist
+  mkdir -p /var/www/html /var/log/apache2
+  echo "Apache is running" > /var/www/html/index.html
+start: |
+  # Start Apache in foreground mode
+  apachectl start
+
+  # Readiness check
+  echo "Waiting for Apache to be ready..."
+  for i in $(seq 1 15); do
+    if curl -sf http://localhost/ >/dev/null 2>&1; then
+      echo "Apache is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! curl -sf http://localhost/ >/dev/null 2>&1; then
+    echo "FATAL: Apache failed to start after 15s"
+    exit 1
+  fi
+healthcheck: "curl -sf http://localhost/ >/dev/null"
+stop: "apachectl stop || true"
+ports: [80]
+restart_after_snapshot: true
+config_vars: {}

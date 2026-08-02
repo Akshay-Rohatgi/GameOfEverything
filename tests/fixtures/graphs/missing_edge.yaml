@@ -1,0 +1,45 @@
+systems:
+  - id: target_system
+    os: ubuntu_22_04
+    services:
+      - web
+    network:
+      hostname: target
+      exposed_ports:
+        - 3000
+      internal_ports: []
+
+entities:
+  - id: entity_a
+    description: Entry point
+    system_id: target_system
+    requires:
+      - edge_id: op_to_a
+        optional: false
+    provides:
+      - a_to_b
+    runtime: ubuntu
+    atoms: []
+
+  - id: entity_b
+    description: Depends on a_to_b which is missing from edges
+    system_id: target_system
+    requires:
+      - edge_id: nonexistent_edge
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+edges:
+  - id: op_to_a
+    from_entity: operator
+    to_entity: entity_a
+    type: network_reach
+    params:
+      host:
+        structural: target
+        concrete: null
+      port:
+        structural: "3000"
+        concrete: null

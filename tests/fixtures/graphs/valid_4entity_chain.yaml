@@ -1,0 +1,120 @@
+systems:
+  - id: target_system
+    os: ubuntu_22_04
+    services:
+      - web
+      - ssh
+    network:
+      hostname: target
+      exposed_ports:
+        - 3000
+        - 22
+      internal_ports: []
+
+entities:
+  - id: entity_a
+    description: Initial web entry point with XSS
+    system_id: target_system
+    requires:
+      - edge_id: op_to_a
+        optional: false
+    provides:
+      - a_to_b
+    runtime: express
+    atoms:
+      - xss_stored
+
+  - id: entity_b
+    description: Use admin token to access file upload
+    system_id: target_system
+    requires:
+      - edge_id: a_to_b
+        optional: false
+    provides:
+      - b_to_c
+    runtime: express
+    atoms:
+      - file_upload_bypass
+
+  - id: entity_c
+    description: Execute commands via uploaded webshell
+    system_id: target_system
+    requires:
+      - edge_id: b_to_c
+        optional: false
+    provides:
+      - c_to_d
+    runtime: express
+    atoms:
+      - cmd_injection
+
+  - id: entity_d
+    description: Read sensitive config file
+    system_id: target_system
+    requires:
+      - edge_id: c_to_d
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+edges:
+  - id: op_to_a
+    from_entity: operator
+    to_entity: entity_a
+    type: network_reach
+    params:
+      host:
+        structural: target
+        concrete: null
+      port:
+        structural: "3000"
+        concrete: null
+
+  - id: a_to_b
+    from_entity: entity_a
+    to_entity: entity_b
+    type: token_for
+    params:
+      service:
+        structural: web_app
+        concrete: null
+      host:
+        structural: target
+        concrete: null
+      scope:
+        structural: admin
+        concrete: null
+      token:
+        structural: admin_session_cookie
+        concrete: null
+
+  - id: b_to_c
+    from_entity: entity_b
+    to_entity: entity_c
+    type: file_write
+    params:
+      path:
+        structural: webshell_path
+        concrete: null
+      host:
+        structural: target
+        concrete: null
+      as_user:
+        structural: www-data
+        concrete: null
+
+  - id: c_to_d
+    from_entity: entity_c
+    to_entity: entity_d
+    type: file_read
+    params:
+      path:
+        structural: config_file_path
+        concrete: null
+      host:
+        structural: target
+        concrete: null
+      as_user:
+        structural: www-data
+        concrete: null

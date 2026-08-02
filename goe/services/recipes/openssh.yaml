@@ -1,0 +1,55 @@
+id: openssh
+description: "OpenSSH server for password/key-based authentication"
+apt_packages:
+  - openssh-server
+  - sshpass
+  - netcat
+install: |
+  apt-get update -qq 2>&1 | grep -v "^Get:" || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server sshpass netcat 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
+configure: |
+  # Ensure sshd config directory and host keys exist
+  mkdir -p /var/run/sshd /root/.ssh
+  chmod 700 /root/.ssh
+
+  # Generate host keys if missing
+  ssh-keygen -A 2>/dev/null || true
+
+  # Default secure config (permit_root_login and password_auth set by config_vars)
+  sed -i 's/#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+  sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+  sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+start: |
+  # Start sshd in foreground mode managed by the container init
+  # -D = don't daemonize, -e = log to stderr for debugging
+  /usr/sbin/sshd -D -e &
+
+  # Readiness check: wait for port 22 to be listening
+  echo "Waiting for SSH to be ready..."
+  for i in $(seq 1 15); do
+    if nc -z localhost 22 2>/dev/null; then
+      echo "SSH is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! nc -z localhost 22 2>/dev/null; then
+    echo "FATAL: SSH failed to start after 15s"
+    exit 1
+  fi
+healthcheck: "nc -z localhost 22"
+stop: "pkill -f '/usr/sbin/sshd' || true"
+ports: [22]
+restart_after_snapshot: true
+config_vars:
+  permit_root_login:
+    default: "no"
+    description: "Allow root login via SSH (yes/no/prohibit-password)"
+    apply: |
+      sed -i "s/^PermitRootLogin.*/PermitRootLogin {value}/" /etc/ssh/sshd_config
+  password_auth:
+    default: "yes"
+    description: "Allow password authentication (yes/no)"
+    apply: |
+      sed -i "s/^PasswordAuthentication.*/PasswordAuthentication {value}/" /etc/ssh/sshd_config

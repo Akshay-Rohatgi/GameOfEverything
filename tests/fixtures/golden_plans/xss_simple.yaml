@@ -1,0 +1,15 @@
+# Golden plan for a simple stored XSS scenario
+# Single entity, no edges (terminal scenario)
+request: "web application with stored XSS vulnerability"
+
+expected_systems:
+  - web_server
+
+expected_entities:
+  - description: "Web application with stored XSS"
+    runtime: "express"  # Could be any web runtime
+    atoms:
+      - xss_stored
+
+# Terminal scenario - no entity-to-entity edges expected
+expected_edges: []
