@@ -44,6 +44,41 @@ def test_package_writes_three_files(tmp_path):
     assert (out / "deploy.sh").exists()
     assert (out / "playbook.yaml").exists()
     assert (out / "README.md").exists()
+    assert (out / "aws_spec.json").exists()
+
+
+def test_aws_spec_uses_operator_reachability_for_public_systems(tmp_path):
+    graph = _smb_ssh_graph()
+    built = {
+        "smb_key_share": _outcome("smb_key_share", "echo smb"),
+        "ssh_login": _outcome("ssh_login", "echo ssh"),
+    }
+    from goe.packaging import grader
+    from goe.deploy.spec import load_deployment_spec
+
+    with patch.object(grader, "grade_and_fix_script", side_effect=lambda c, s, **k: (c, [])):
+        out = package(graph, built, tmp_path / "pkg")
+
+    spec = load_deployment_spec(out)
+    assert spec.entry_system_ids == ["smb_server", "ssh_server"]
+    assert {system.id for system in spec.systems if system.public} == {
+        "smb_server", "ssh_server"
+    }
+    assert {system.script for system in spec.systems} == {
+        "smb_server_deploy.sh", "ssh_server_deploy.sh"
+    }
+
+
+def test_aws_spec_falls_back_to_operator_only_initial_entity(tmp_path):
+    from goe.deploy.spec import build_deployment_spec
+    from goe.models.edge import EdgeType
+
+    graph = _graph().model_copy(deep=True)
+    graph.edge_by_id("operator_to_sqli").type = EdgeType.creds_for
+    spec = build_deployment_spec(graph, tmp_path / "pkg")
+
+    assert spec.entry_system_ids == ["target_system"]
+    assert spec.systems[0].public is True
 
 
 def test_deploy_topo_order_and_postprocess(tmp_path):

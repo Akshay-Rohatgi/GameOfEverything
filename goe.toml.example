@@ -9,7 +9,18 @@
 # ~/.aws/credentials, instance profile, etc.).
 access_key_id = ""
 secret_access_key = ""
+# session_token = ""  # Only needed for temporary static credentials
 region = "us-east-1"
+# profile = "sandbox"
+
+[deploy.aws]
+# Defaults for `goe deploy aws output/<run_id>`. The attacker CIDR should be
+# your current public IPv4 address with a /32 suffix. It is intentionally blank
+# so deployment cannot accidentally expose ports without an explicit choice.
+region = "us-east-1"
+instance_type = "t3.small"
+attacker_cidr = ""
+# profile = "sandbox"
 
 [models]
 # Default Bedrock model ID. Use the full cross-region inference profile ID:

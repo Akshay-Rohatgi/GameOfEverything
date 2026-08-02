@@ -3,7 +3,7 @@ name = "game_of_everything"
 version = "0.1.0"
 description = "Game of Everything v2 scenario generation framework"
 authors = [{ name = "Your Name", email = "you@example.com" }]
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     # GoE v2 core dependencies
     "boto3>=1.34",

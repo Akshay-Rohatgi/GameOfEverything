@@ -63,6 +63,11 @@ flowchart TD
 - `entities`: a vulnerable application or OS-level misconfiguration. An entity belongs to one system, has a runtime, vulnerability atoms, and names of capabilities it requires and provides.
 - `edges`: directed capability handoffs. An edge has an ID, source entity (or `operator`), target entity (or `None`), an `EdgeType`, declared parameter names, and optional fan-out semantics.
 
+For AWS deployment, packaging derives a smaller `aws_spec.json` contract from
+the graph. It contains system topology, port policy, public-entry inference, and
+package-relative deploy-script names, but not concrete edge secrets. The AWS
+lifecycle consumes this contract rather than depending on checkpoint layout.
+
 An edge parameter preserves two levels of meaning:
 
 ```text

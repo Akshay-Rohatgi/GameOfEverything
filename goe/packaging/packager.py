@@ -385,6 +385,11 @@ def package(
         encoding="utf-8",
     )
 
+    # Keep AWS deployment independent from the transient checkpoint tree.  The
+    # spec references package-relative scripts and excludes graph edge secrets.
+    from goe.deploy.spec import write_deployment_spec
+    write_deployment_spec(graph, out_dir)
+
     return out_dir
 
 
