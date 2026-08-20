@@ -39,12 +39,12 @@ RUN apt-get update && \
 # so pinned versions stay downloadable. To upgrade: bump MONGOSH_VERSION.
 # Needed by: mongodb_disable_auth, database_expose atoms.
 ARG MONGOSH_VERSION=2.3.1
-ARG TARGETARCH
-RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") && \
-    wget -q "https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-${ARCH}.tgz" \
-    -O /tmp/mongosh.tgz \
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then MONGOSH_ARCH="arm64"; else MONGOSH_ARCH="x64"; fi && \
+    wget -q "https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-${MONGOSH_ARCH}.tgz" \
+        -O /tmp/mongosh.tgz \
     && tar -xzf /tmp/mongosh.tgz -C /tmp \
-    && mv "/tmp/mongosh-${MONGOSH_VERSION}-linux-${ARCH}/bin/mongosh" /usr/local/bin/mongosh \
+    && mv "/tmp/mongosh-${MONGOSH_VERSION}-linux-${MONGOSH_ARCH}/bin/mongosh" /usr/local/bin/mongosh \
     && chmod +x /usr/local/bin/mongosh \
     && rm -rf /tmp/mongosh* \
     && mongosh --version
