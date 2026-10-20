@@ -1,6 +1,8 @@
 # Game of Everything v2
 
-Game of Everything (GoE) builds and validates intentionally vulnerable cybersecurity scenarios from natural-language requests. v2 models each scenario as an entity graph, builds the entities with direct Amazon Bedrock calls, validates their exploit procedures in Docker, and packages the result for use as a training environment.
+Game of Everything (GoE) builds and validates intentionally vulnerable cybersecurity scenarios from natural-language requests. v2 models each scenario as an entity graph, builds the entities with direct Amazon Bedrock calls, validates their exploit procedures in Docker, and packages the result for use as a training environment. 
+
+Game of Everything was presented at [BSides LV 2026](https://bsideslv.org/talks#11f14a5d-7fd9-93aa-83c2-a3515226b64e) ([live demo](https://www.youtube.com/watch?t=4233&v=GweNsxSuR4o&feature=youtu.be)) and the slides are available [here](./GoE-BSides.pdf).
 
 ## Requirements
 
