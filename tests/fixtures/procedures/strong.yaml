@@ -1,0 +1,30 @@
+procedure:
+  - step_id: reach
+    action:
+      type: http_request
+      method: GET
+      url: "http://${target_host}:${target_port}/"
+    expect:
+      all:
+        - status: 200
+        - body_contains: "St Dismas Staff Intranet"
+  - step_id: read_policy
+    action:
+      type: http_request
+      method: GET
+      url: "http://${target_host}:${target_port}/policies/it-sec-014"
+    expect:
+      body_contains: "capitalised department word followed by the year"
+    outputs:
+      rule: "body"
+  - step_id: authenticate
+    action:
+      type: http_request
+      method: GET
+      url: "http://${target_host}:${target_port}/portal"
+      headers:
+        Authorization: "Basic ${steps.read_policy.rule}"
+    expect:
+      all:
+        - status: 200
+        - body_contains: "${edge.portal_flag.value}"
