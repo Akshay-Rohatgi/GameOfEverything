@@ -71,3 +71,21 @@ def test_dependency_map_4entity():
     assert deps["entity_b"] == {"entity_a"}
     assert deps["entity_c"] == {"entity_b"}
     assert deps["entity_d"] == {"entity_c"}
+
+
+def test_dependency_map_fanout():
+    """Fan-out consumers (to_entity is None) depend on the producer via `requires`."""
+    graph = EntityGraph.from_yaml(FIXTURES / "valid_fanout.yaml")
+    deps = dependency_map(graph)
+    assert deps["rce_foothold"] == set()
+    assert deps["credential_harvest"] == {"rce_foothold"}
+    assert deps["persistence"] == {"rce_foothold"}
+
+
+def test_topological_sort_fanout_builds_producer_first():
+    """Regression: a fan-out producer must be ordered before its consumers, else the
+    scheduler builds a consumer first and the orchestrator has no parent snapshot."""
+    graph = EntityGraph.from_yaml(FIXTURES / "valid_fanout.yaml")
+    order = topological_sort(graph)
+    assert order.index("rce_foothold") < order.index("credential_harvest")
+    assert order.index("rce_foothold") < order.index("persistence")

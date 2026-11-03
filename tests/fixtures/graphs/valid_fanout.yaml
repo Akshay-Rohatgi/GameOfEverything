@@ -1,0 +1,77 @@
+systems:
+  - id: target_system
+    os: ubuntu_22_04
+    services:
+      - web
+    network:
+      hostname: target
+      exposed_ports:
+        - 3000
+      internal_ports: []
+
+entities:
+  - id: rce_foothold
+    description: Remote code execution giving a foothold on the host
+    system_id: target_system
+    requires:
+      - edge_id: operator_to_rce
+        optional: false
+    provides:
+      - rce_shell
+    runtime: express
+    atoms:
+      - rce_atom
+
+  # Two consumers both fan out from the single rce_shell edge. Neither is the
+  # edge's `to_entity` (that is null); they attach via `requires`.
+  - id: credential_harvest
+    description: Harvest stored credentials using the foothold
+    system_id: target_system
+    requires:
+      - edge_id: rce_shell
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+  - id: persistence
+    description: Install persistence using the foothold
+    system_id: target_system
+    requires:
+      - edge_id: rce_shell
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+edges:
+  - id: operator_to_rce
+    from_entity: operator
+    to_entity: rce_foothold
+    type: network_reach
+    params:
+      host:
+        structural: target
+        concrete: null
+      port:
+        structural: "3000"
+        concrete: null
+
+  - id: rce_shell
+    from_entity: rce_foothold
+    to_entity: null
+    fan_out: true
+    type: creds_for
+    params:
+      user:
+        structural: root
+        concrete: null
+      host:
+        structural: target
+        concrete: null
+      cred_type:
+        structural: password
+        concrete: null
+      secret:
+        structural: root_password
+        concrete: null

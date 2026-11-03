@@ -88,8 +88,19 @@ class GoEConfig:
             self._data.get("models", {}).get("default", "us.anthropic.claude-sonnet-4-6-20251001-v1:0"),
         )
 
+    # Built-in per-role model defaults. Let a role ship a non-Sonnet default
+    # (e.g. the cheap/fast Haiku tier for the small, constrained OS-assignment
+    # call) while env vars and [models.v2_overrides] still take precedence.
+    _ROLE_DEFAULTS: dict[str, str] = {
+        "os_planner": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    }
+
     def model_for(self, role: str) -> str:
-        """Return the configured model for a given construction_crew role."""
+        """Return the configured model for a given construction_crew role.
+
+        Resolution order: GOE_MODEL_<ROLE> env → [models.v2_overrides].<role> →
+        built-in role default (_ROLE_DEFAULTS) → [models].default.
+        """
         env_key = f"GOE_MODEL_{role.upper()}"
         env_val = os.getenv(env_key)
         if env_val:
@@ -97,6 +108,9 @@ class GoEConfig:
         override = self._data.get("models", {}).get("v2_overrides", {}).get(role)
         if override:
             return override
+        role_default = self._ROLE_DEFAULTS.get(role)
+        if role_default:
+            return role_default
         return self.default_model
 
     @property

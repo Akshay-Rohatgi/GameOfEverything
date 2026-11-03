@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from goe.graph.models import EntityGraph, ValidationResult, Violation
 from goe.graph.validator import validate
+from goe.planner.assign_os import assign_os
 from goe.planner.connect_edges import connect_edges
 from goe.planner.design_systems import design_systems
 from goe.planner.grade_stubs import grade_stubs
@@ -109,6 +110,20 @@ def plan(request: str, verbose: bool = False, console=None, os_override: str | N
     _log(f"[planner] designed {len(systems)} system(s)")
     if console:
         console.plan_result(f"Designed {len(systems)} system(s)")
+
+    # Step 0.25: Assign a (possibly diverse) OS per host for multi-host setups.
+    # Skipped when --os forces one distro everywhere (explicit choice wins) and a
+    # no-op for single-host graphs. Runs before killchain/entity/edge steps so they
+    # all see the final per-host OS. Haiku-tier via the dedicated os_planner role.
+    if os_override is None and len(systems) > 1:
+        if console:
+            console.plan_step("Assigning OSes", "choosing a distro per host")
+        _log("[planner] Step 0.25: assigning OSes across hosts...")
+        systems = assign_os(request, systems, model=cfg.model_for("os_planner"))
+        os_summary = ", ".join(f"{s.id}={s.os}" for s in systems)
+        _log(f"[planner] OS assignment: {os_summary}")
+        if console:
+            console.plan_result(f"Assigned OSes: {os_summary}")
 
     # Step 0.5: Plan killchain
     if console:

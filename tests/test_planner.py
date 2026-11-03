@@ -153,3 +153,61 @@ class TestPlannerFailure:
 
         assert not result.success
         assert len(result.final_violations) > 0
+
+
+class TestPlannerOsAssignment:
+    """Step 0.25: Haiku OS assignment runs for multi-host, is skipped by --os."""
+
+    def _mock(self, parts, os_map):
+        """Build a bedrock mock that also answers the assign_os call from os_map."""
+        def mock_call(model_id, system, messages, **kwargs):
+            content = messages[0]["content"]
+            if "Assign one operating system" in content:
+                return json.dumps(os_map)
+            if "infrastructure systems" in content:
+                return parts["systems"]
+            elif "Decompose this scenario" in content:
+                return parts["stubs"]
+            elif "Fully specify ALL entities" in content:
+                return json.dumps([json.loads(e) for e in parts["entities_json"]])
+            elif "wire these entities" in content or "Create the Edge" in content:
+                return parts["edges"]
+            return "{}"
+        return mock_call
+
+    def test_multihost_applies_assigned_oses(self):
+        parts = _load_graph_as_parts(FIXTURES / "valid_multisystem.yaml")
+        mock = self._mock(parts, {"web_system": "ubuntu", "db_system": "debian"})
+
+        with patch("goe.bedrock.call", side_effect=mock):
+            result = plan("web pivots to a separate db host")
+
+        assert result.success
+        by_id = {s.id: s.os for s in result.graph.systems}
+        assert by_id == {"web_system": "ubuntu", "db_system": "debian"}
+
+    def test_os_override_forces_all_and_skips_assignment(self):
+        parts = _load_graph_as_parts(FIXTURES / "valid_multisystem.yaml")
+        assign_called = {"hit": False}
+
+        def mock_call(model_id, system, messages, **kwargs):
+            content = messages[0]["content"]
+            if "Assign one operating system" in content:
+                assign_called["hit"] = True
+                return json.dumps({"web_system": "ubuntu", "db_system": "debian"})
+            if "infrastructure systems" in content:
+                return parts["systems"]
+            elif "Decompose this scenario" in content:
+                return parts["stubs"]
+            elif "Fully specify ALL entities" in content:
+                return json.dumps([json.loads(e) for e in parts["entities_json"]])
+            elif "wire these entities" in content or "Create the Edge" in content:
+                return parts["edges"]
+            return "{}"
+
+        with patch("goe.bedrock.call", side_effect=mock_call):
+            result = plan("web pivots to a separate db host", os_override="debian")
+
+        assert result.success
+        assert not assign_called["hit"], "assign_os must be skipped when --os is set"
+        assert {s.os for s in result.graph.systems} == {"debian"}
