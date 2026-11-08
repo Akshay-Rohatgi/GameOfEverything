@@ -1,0 +1,50 @@
+id: mongodb
+description: "MongoDB server (Debian via official MongoDB apt repo, no-systemd Docker startup)"
+# MongoDB server is NOT in Debian's own repositories, so it cannot be installed from
+# the profile's package list. The repo + key setup below is inherently distro-specific
+# (Debian bookworm here); a Red Hat profile (Week 8) will need its own repo/yum path.
+# This is the sanctioned use of the recipe `install:` escape hatch for "extra repos/keys
+# the package list can't express". NOTE: unverified in CI — mongod on Debian has known
+# pitfalls (CPU AVX requirement for 5.0+, arm64 availability); confirm on a live run.
+packages: []
+install: |
+  # Add MongoDB's official apt repository and signing key (Debian 12 "bookworm").
+  MONGO_MAJOR=7.0
+  curl -fsSL "https://pgp.mongodb.com/server-${MONGO_MAJOR}.asc" \
+    | gpg --dearmor -o /usr/share/keyrings/mongodb-server-${MONGO_MAJOR}.gpg
+  echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-${MONGO_MAJOR}.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/${MONGO_MAJOR} main" \
+    > /etc/apt/sources.list.d/mongodb-org-${MONGO_MAJOR}.list
+  apt-get update -y
+  # Install the daemon AND the mongosh shell: the shell is needed on the target
+  # itself for seeding collections and for target-side verification steps. (The
+  # legacy `mongo` shell was removed in MongoDB 6.0+, so mongosh is the client.)
+  DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org-server mongodb-mongosh
+configure: |
+  # Package ships /etc/mongod.conf (bindIp 127.0.0.1, no auth). Ensure the data and
+  # log dirs exist and are owned by the mongodb service user the package creates.
+  mkdir -p /var/lib/mongodb /var/log/mongodb
+  chown -R mongodb:mongodb /var/lib/mongodb /var/log/mongodb 2>/dev/null || true
+start: |
+  # Start mongod WITHOUT systemd — these containers have no init. --fork daemonizes.
+  # Run as the mongodb user so it can write its dbPath.
+  su mongodb -s /bin/bash -c "mongod --config /etc/mongod.conf --fork" 2>/dev/null \
+    || mongod --config /etc/mongod.conf --fork
+
+  echo "Waiting for MongoDB to be ready..."
+  for i in $(seq 1 30); do
+    if (exec 3<>/dev/tcp/127.0.0.1/27017) 2>/dev/null; then
+      echo "MongoDB is ready after ${i}s"
+      break
+    fi
+    sleep 1
+  done
+
+  if ! (exec 3<>/dev/tcp/127.0.0.1/27017) 2>/dev/null; then
+    echo "FATAL: MongoDB failed to start after 30s"
+    exit 1
+  fi
+healthcheck: "(exec 3<>/dev/tcp/127.0.0.1/27017) 2>/dev/null"
+stop: "pkill -u mongodb mongod 2>/dev/null; pkill mongod 2>/dev/null; true"
+ports: [27017]
+restart_after_snapshot: true
+config_vars: {}

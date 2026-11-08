@@ -39,7 +39,7 @@ type: exec_attacker
 command: "curl -s http://${target_host}:${target_port}/..."
 ```
 
-**Shell (target container — use for ubuntu/misconfig entities to verify exploitation):**
+**Shell (target container — use for `system`/misconfig entities to verify exploitation):**
 ```yaml
 type: exec_target
 command: "find / -perm -4000 -user root 2>/dev/null"
@@ -131,6 +131,7 @@ Always use these variables (provided at runtime):
 - Keep the procedure to the minimum steps needed to demonstrate the exploit
 - Do not add unnecessary navigation or setup steps
 - **POST redirect pattern**: Express apps commonly respond to POST with `302 Found` (Post/Redirect/Get). If a POST step stores data (XSS payload, comment, form submission), assert `status: 302` — NOT 200. Then add a separate GET step to verify the stored data is reflected.
+- **MySQL/MariaDB host matching**: a user granted as `'user'@'%'` is a DIFFERENT account from `'user'@'localhost'`. Bare `localhost` makes the client use the Unix socket, which matches only the `@'localhost'` account — so an exposed/remote account (`@'%'`) will NOT authenticate that way and the login is denied. Always connect over TCP: use `mysql -h 127.0.0.1 --protocol=TCP ...` (or the target's bridge hostname for cross-host steps), never `-h localhost` or a hostless `mysql`, when exploiting an exposed `@'%'` account.
 
 ## Output Format
 

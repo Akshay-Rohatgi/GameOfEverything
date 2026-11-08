@@ -2,9 +2,16 @@
 id: samba_insecure_share
 description: Configures an insecure Samba share that is world-readable and writable.
 required_vars: [share_name, path]
+requires_service: samba
 ---
 # Atom: Insecure Samba Share
 Configures a world-readable/writable share to leak sensitive information.
+
+> **Samba is provided by the platform.** The `samba` service recipe (declared via
+> `requires_service`) installs the correct package for the target distro, writes a
+> baseline `/etc/samba/smb.conf`, and starts `smbd`/`nmbd`. The entity script MUST NOT
+> install or start Samba. It applies only the vulnerability: the world-writable share
+> directory and the insecure share block appended to `smb.conf`, then reloads.
 
 ### Logic Requirements:
 1. Create the target directory: `mkdir -p <path>`

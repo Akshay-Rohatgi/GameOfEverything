@@ -159,10 +159,21 @@ def _load_misconfig_atom_entries() -> list[dict]:
                     edge_contract = line[:80]
                     break
 
+        # Config keys the planner should pin on the entity. `required_vars` are the
+        # atom's parameters; `requires_service_by.var` is the one that selects which
+        # service recipe gets installed, so it MUST be pinned for the bridge to work.
+        required_vars = fm.get("required_vars") or []
+        service_var = None
+        rsb = fm.get("requires_service_by")
+        if isinstance(rsb, dict):
+            service_var = rsb.get("var")
+
         entries.append({
             "id": atom_id,
             "description": description,
             "edge_contract": edge_contract,
+            "required_vars": [str(v) for v in required_vars],
+            "service_var": service_var,
         })
     return entries
 
@@ -179,13 +190,27 @@ def misconfig_atom_catalog() -> str:
         return "(none)"
 
     lines = [
-        "| Atom | Description | Edge Contract |",
-        "|------|-------------|---------------|",
+        "| Atom | Description | Edge Contract | Pin in config |",
+        "|------|-------------|---------------|---------------|",
     ]
     for e in entries:
         desc = e["description"].replace("|", "\\|")[:80]
         contract = (e["edge_contract"] or "—").replace("|", "\\|")
-        lines.append(f"| `{e['id']}` | {desc} | {contract} |")
+        # Describe what to pin: each required var, with the service-selecting one starred.
+        vars_ = e.get("required_vars") or []
+        svc_var = e.get("service_var")
+        if vars_:
+            pin = ", ".join(f"`{v}`*" if v == svc_var else f"`{v}`" for v in vars_)
+        else:
+            pin = "—"
+        lines.append(f"| `{e['id']}` | {desc} | {contract} | {pin} |")
+    lines.append("")
+    lines.append(
+        "`*` marks the key that selects which **service recipe** is installed — it MUST be "
+        "pinned in the entity's `config` (e.g. `{\"db_type\": \"postgres\"}`) so the right "
+        "service is deployed. Pin the other listed keys too (credentials, names) to make the "
+        "build deterministic."
+    )
     return "\n".join(lines)
 
 

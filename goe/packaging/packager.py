@@ -4,8 +4,9 @@ Single-system: all entities deploy onto one box → one ``deploy.sh``, one
 ``playbook.yaml``, one ``README.md``.
 
 Multi-system: entities grouped by system_id → per-system ``<sid>_deploy.sh``
-files, a ``docker-compose.yml`` (one ubuntu:22.04 service per system on a shared
-``goe_net`` network), and the same ``playbook.yaml`` / ``README.md``.
+files, a ``docker-compose.yml`` (one service per system, image chosen from each
+system's distro profile, on a shared ``goe_net`` network), and the same
+``playbook.yaml`` / ``README.md``.
 
 When a chain procedure is provided (from the L3 chain test), it is also written
 to ``chain_playbook.yaml`` regardless of single- vs multi-system.
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from goe.distros import get_profile
 from goe.graph.topology import topological_sort
 
 if TYPE_CHECKING:
@@ -49,7 +51,7 @@ def _detect_port_collisions(graph: "EntityGraph", order: list[str]) -> list[str]
         entity = graph.entity_by_id(eid)
         runtime = entity.runtime.value
         sid = entity.system_id
-        if runtime == "ubuntu":
+        if runtime == "system":
             continue
         try:
             port = registry.port_for(runtime)
@@ -103,7 +105,7 @@ def _build_docker_compose(
             port_mappings.append(f"{p}:{p}")
 
         svc: dict = {
-            "image": "ubuntu:22.04",
+            "image": get_profile(system.os).image,
             "hostname": hostname,
             # Set network alias so Docker DNS resolves the hostname from other
             # containers. The `default` key matches the networks.default section.

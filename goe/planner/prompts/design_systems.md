@@ -6,7 +6,7 @@ Schema for each system:
 ```json
 {
   "id": "snake_case_identifier",
-  "os": "ubuntu_22_04",
+  "os": "ubuntu",
   "services": ["list", "of", "service", "names"],
   "network": {
     "hostname": "short_hostname",
@@ -31,7 +31,7 @@ Rules:
     - MySQL-specific exploit → `["web", "mysql"]`
     - Separate DB server → system 1: `["web"]`, system 2: `["mysql", "ssh"]`
 - For single-machine scenarios, use one system with `id: target_system` and `hostname: target`
-- Common OS is `ubuntu_22_04` unless the request specifies otherwise
+- `os` must be one of: `"ubuntu"` or `"debian"`. Default to `"ubuntu"` unless the request names a specific distro (e.g. "on Debian" → `"debian"`)
 
 **Port-to-runtime mapping** (for web apps):
 - Express web apps bind to port **3000**
@@ -50,7 +50,7 @@ If the scenario involves web vulnerabilities, expose the appropriate web port. I
 ```json
 [{
   "id": "target_system",
-  "os": "ubuntu_22_04",
+  "os": "ubuntu",
   "services": ["web"],
   "network": {
     "hostname": "target",
@@ -69,7 +69,7 @@ If the scenario involves web vulnerabilities, expose the appropriate web port. I
 [
   {
     "id": "web_system",
-    "os": "ubuntu_22_04",
+    "os": "ubuntu",
     "services": ["web"],
     "network": {
       "hostname": "webserver",
@@ -79,7 +79,7 @@ If the scenario involves web vulnerabilities, expose the appropriate web port. I
   },
   {
     "id": "db_system",
-    "os": "ubuntu_22_04",
+    "os": "ubuntu",
     "services": ["ssh", "mysql"],
     "network": {
       "hostname": "dbserver",

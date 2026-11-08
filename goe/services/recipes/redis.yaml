@@ -1,17 +1,21 @@
 id: redis
 description: "Redis in-memory data store"
-apt_packages:
+packages:
   - redis-server
   - redis-tools
-install: |
-  apt-get update -qq 2>&1 | grep -v "^Get:" || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking\|^Setting up" || true
 configure: |
   # Bind to all interfaces
   sed -i 's/bind 127.0.0.1/bind 0.0.0.0/' /etc/redis/redis.conf
   sed -i 's/^protected-mode yes/protected-mode no/' /etc/redis/redis.conf
   # Ensure supervised is set to no (for manual daemonize)
   sed -i 's/^supervised .*/supervised no/' /etc/redis/redis.conf
+  # Allow CONFIG SET of protected params (dir/dbfilename) and DEBUG commands.
+  # Redis >= 7 (e.g. Debian 12 ships 7.0) protects these by default, which blocks
+  # the standard file-write primitive (CONFIG SET dir -> SSH authorized_keys
+  # injection). Enabling them is consistent with this recipe's intentionally
+  # exploitable posture (it already binds 0.0.0.0 with protected-mode off).
+  grep -q '^enable-protected-configs' /etc/redis/redis.conf || echo 'enable-protected-configs yes' >> /etc/redis/redis.conf
+  grep -q '^enable-debug-command' /etc/redis/redis.conf || echo 'enable-debug-command yes' >> /etc/redis/redis.conf
 start: |
   # Get password from config if set
   REDIS_PASS=$(grep "^requirepass" /etc/redis/redis.conf | awk '{print $2}' || true)

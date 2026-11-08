@@ -2,35 +2,36 @@
 id: mongodb_disable_auth
 description: Configures MongoDB to run without authentication and to bind to all network interfaces, exposing all databases to unauthenticated remote access.
 required_vars: []
+requires_service: mongodb
 ---
 # Atom: MongoDB Disable Auth
 MongoDB has historically shipped with authentication disabled by default. This atom ensures `authorization` is disabled in `mongod.conf` and that MongoDB listens on all interfaces, allowing any host to connect and read or write any database.
 
+> **MongoDB is provided by the platform.** The `mongodb` service recipe (declared via
+> `requires_service`) installs the correct server package for the target distro and
+> starts `mongod` without systemd. The entity script MUST NOT install MongoDB or add a
+> package repository. It applies only the vulnerability: binding to all interfaces and
+> disabling auth, then bouncing `mongod` so the new bind address takes effect (a `bindIp`
+> change requires a restart — there is no live reload for it).
+
 ### Logic Requirements:
-1. Install MongoDB: `apt-get install -y mongodb` (or `mongodb-org` for the official package)
-2. Configure `mongod.conf` to bind to all interfaces and disable auth:
+1. Edit `/etc/mongod.conf` so MongoDB binds to all interfaces and auth is off:
    - Set `net.bindIp: 0.0.0.0`
-   - Set `security.authorization: disabled` (or remove the security section entirely)
-3. Start MongoDB: `mongod --config /etc/mongod.conf --fork --logpath /var/log/mongod.log` (or `service mongod start`)
+   - Set `security.authorization: disabled` (or remove the `security` section entirely)
+2. Restart `mongod` so the new `bindIp` takes effect — WITHOUT a distro init system (no `systemctl`): stop the running daemon and relaunch it detached as the `mongodb` user.
 
 ### Common Patterns:
-- **Edit mongod.conf:**
-  ```yaml
-  # /etc/mongod.conf
-  net:
-    port: 27017
-    bindIp: 0.0.0.0
-  security:
-    authorization: disabled
-  ```
-- **Inline Flag (Docker-friendly, no config file):**
+- **Open the bind address and disable auth in the config the recipe installed:**
   ```bash
-  mongod --bind_ip_all --noauth --fork --logpath /var/log/mongod.log
+  sed -i 's/^\( *bindIp:\).*/\1 0.0.0.0/' /etc/mongod.conf
+  # Ensure auth is not enabled (remove any security.authorization: enabled)
+  sed -i 's/^\( *authorization:\).*/\1 disabled/' /etc/mongod.conf
   ```
-- **Minimal sed replacement if config file exists:**
+- **Bounce mongod without systemd (the recipe's start model):**
   ```bash
-  sed -i 's/bindIp: 127.0.0.1/bindIp: 0.0.0.0/' /etc/mongod.conf
-  sed -i 's/authorization: enabled/authorization: disabled/' /etc/mongod.conf
+  pkill mongod 2>/dev/null; sleep 2
+  su mongodb -s /bin/bash -c "mongod --config /etc/mongod.conf --fork" \
+    || mongod --config /etc/mongod.conf --fork
   ```
 
 ### Testing Guidance:
@@ -40,4 +41,4 @@ MongoDB has historically shipped with authentication disabled by default. This a
 4. Verify no authentication is required: `mongosh --host 127.0.0.1 admin --eval "db.getUsers()"` — should succeed without credentials.
 
 ### Synthesis Guidance:
-In Docker, prefer the inline `mongod` invocation with `--bind_ip_all --noauth` to avoid distribution-specific config file locations. Ensure MongoDB starts at container launch. Combine with `sensitive_file` or `exposed_env_vars` to plant credentials inside MongoDB collections for attackers to discover. Note: `mongosh` is the modern Mongo shell; use `mongo` for older versions.
+Install/start of `mongod` is owned by the `mongodb` recipe; the entity must not duplicate it or add the MongoDB apt repo. The atom edits the recipe-installed `/etc/mongod.conf` (bind all + auth off) and restarts the daemon. Combine with `sensitive_file` or `exposed_env_vars` to plant credentials inside MongoDB collections for attackers to discover. Note: `mongosh` is the modern Mongo shell; use `mongo` for older versions.

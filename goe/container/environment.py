@@ -6,26 +6,40 @@ Docker lifecycle code that already works in v1.
 
 from __future__ import annotations
 
+from goe.distros import get_profile
 from goe.runtimes.registry import get_registry
 
-# Base images for runtimes that have no web-runtime template (not built from a
-# BuildArtifact). Web-runtime images live in goe/runtimes/templates/*.yaml as
-# `target_image` and are looked up via RuntimeRegistry.image_for().
+# Base images for runtimes that have no web-runtime template and no distro
+# profile (not built from a BuildArtifact). Web-runtime images live in
+# goe/runtimes/templates/*.yaml as `target_image` (looked up via
+# RuntimeRegistry.image_for()); the OS-level `system` runtime resolves its image
+# from the selected distro profile instead (see _image_for).
 _BASE_IMAGES: dict[str, str] = {
-    "ubuntu": "ubuntu:22.04",
     "preset": "goe-preset-target:latest",
 }
 
 
-def _image_for(runtime: str) -> str:
-    """Resolve the Docker image for a runtime: template-backed first, then base images."""
+def _image_for(runtime: str, os: str = "ubuntu") -> str:
+    """Resolve the Docker image for a runtime.
+
+    Order: web-runtime template → OS-level distro profile (for the `system`
+    runtime, keyed by `os`) → remaining base images (e.g. preset).
+
+    The runtime string is normalized first, so a legacy "ubuntu" runtime (from an
+    old checkpoint or a direct caller) still resolves to the OS-level `system` path.
+    """
+    from goe.models.entity import normalize_runtime
+
+    runtime = normalize_runtime(runtime)
     registry = get_registry()
     if registry.has_runtime(runtime):
         return registry.image_for(runtime)
+    if runtime == "system":
+        return get_profile(os).image
     if runtime in _BASE_IMAGES:
         return _BASE_IMAGES[runtime]
     raise ValueError(
-        f"Unknown runtime {runtime!r}: no runtime template and no base image. "
+        f"Unknown runtime {runtime!r}: no runtime template, distro profile, or base image. "
         f"Templates: {registry.available_runtimes()}; base: {list(_BASE_IMAGES)}"
     )
 
@@ -33,8 +47,8 @@ def _image_for(runtime: str) -> str:
 class TestEnvironment:
     """Wraps v1 TestEnvironmentTool with a clean interface for the v2 executor."""
 
-    def __init__(self, runtime: str = "ubuntu", scope: str = "", enable_browser: bool = True, expose_ports: dict[int, int] | None = None):
-        image = _image_for(runtime)
+    def __init__(self, runtime: str = "system", scope: str = "", enable_browser: bool = True, expose_ports: dict[int, int] | None = None, os: str = "ubuntu"):
+        image = _image_for(runtime, os)
         from goe.container.test_environment_tool import TestEnvironmentTool
         self._tool = TestEnvironmentTool(
             scope=scope,

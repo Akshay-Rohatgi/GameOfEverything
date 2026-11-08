@@ -45,16 +45,18 @@ def _noop(_: str) -> None:
 def _validate_package(out_dir: Path, spec: AwsDeploymentSpec) -> None:
     if not spec.entry_system_ids:
         raise DeploymentError("AWS deployment requires at least one public entry-point system")
-    supported = {"ubuntu_22_04"}
+    # AWS AMI selection is ubuntu-only for now (local Docker supports more
+    # distros via goe.distros; AWS AMI mapping for others is a later step).
+    aws_supported = {"ubuntu"}
     for system in spec.systems:
         if system.public and not system.exposed_ports:
             raise DeploymentError(
                 f"public entry-point system {system.id} must declare at least one exposed port"
             )
-        if system.os not in supported:
+        if system.os not in aws_supported:
             raise DeploymentError(
-                f"system {system.id} uses unsupported AWS OS {system.os!r}; "
-                "only ubuntu_22_04 is currently supported"
+                f"system {system.id} uses OS {system.os!r}, which has no AWS AMI mapping yet; "
+                f"AWS deployment currently supports: {sorted(aws_supported)}"
             )
         script = out_dir / system.script
         if not script.is_file():

@@ -32,6 +32,16 @@ class AwsSystemSpec(BaseModel):
     exposed_ports: list[int]
     internal_ports: list[int]
 
+    @field_validator("os", mode="before")
+    @classmethod
+    def _coerce_os(cls, value):
+        """Coerce to a canonical distro name (e.g. ubuntu_22_04 -> ubuntu)."""
+        from goe.distros import normalize_os
+
+        if isinstance(value, str):
+            return normalize_os(value)
+        return value
+
     @field_validator("id")
     @classmethod
     def _id_is_safe(cls, value: str) -> str:

@@ -41,8 +41,15 @@ def attack(
     plan: "ArchitectPlan",
     artifact: "BuildArtifact",
     outgoing_values: dict,
+    system_context: str | None = None,
 ) -> "Procedure":
-    """Call the Attacker LLM to produce a Procedure that exploits the vulnerability."""
+    """Call the Attacker LLM to produce a Procedure that exploits the vulnerability.
+
+    ``system_context`` carries the rendered system + target-OS block (see
+    ``goe.flow.orchestrator._system_chain_context``). The attacker writes the commands
+    that run on the target over SSH, so it must know the distro to avoid Ubuntu-isms
+    (e.g. ``systemctl`` on a non-systemd container, Ubuntu-only package/tool names).
+    """
     from goe.bedrock import call
     from goe.config import GoEConfig
     from goe.models.procedure import Procedure
@@ -58,11 +65,11 @@ def attack(
     )
 
     runtime_id = entity.runtime.value
-    is_ubuntu = runtime_id == "ubuntu"
+    is_system = runtime_id == "system"
     attacker_rules = _load_attacker_rules(runtime_id)
     rules_section = f"\n## Runtime-Specific Rules\n\n{attacker_rules}\n" if attacker_rules else ""
 
-    if is_ubuntu:
+    if is_system:
         runtime_note = (
             "The target host is ${target_host}. "
             "Use `exec_target` steps to run shell commands directly on the target and verify the misconfiguration. "
@@ -87,11 +94,13 @@ These constraints define how exploitation must work:
 
 """ if logic_reqs else ""
 
+    context_section = f"{system_context}\n" if system_context else ""
+
     user_msg = f"""## Entity Spec
 
 Description: {entity.description}
 
-## Architecture Plan
+{context_section}## Architecture Plan
 
 - Attack entry point: {plan.attack_entry_point}
 - Success indicator: {plan.success_indicator}

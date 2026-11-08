@@ -14,7 +14,7 @@ from goe.services import get_registry
 def test_all_recipes_have_required_fields():
     """Test that all recipes have the minimum required fields."""
     registry = get_registry()
-    required_fields = ["id", "description", "install", "start", "healthcheck", "ports"]
+    required_fields = ["id", "description", "packages", "start", "healthcheck", "ports"]
 
     for service_id in registry.available_services():
         recipe = registry.get_recipe(service_id)

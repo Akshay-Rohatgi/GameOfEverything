@@ -70,7 +70,10 @@ def retry(
             entity, crew_result.plan, incoming_edges, edge_schemas=edge_schemas,
             system_context=system_context, provided_values=provided_values,
         )
-        new_procedure = attacker.attack(entity, crew_result.plan, new_artifact, new_outgoing)
+        new_procedure = attacker.attack(
+            entity, crew_result.plan, new_artifact, new_outgoing,
+            system_context=system_context,
+        )
         return CrewResult(
             artifact=new_artifact,
             procedure=new_procedure,

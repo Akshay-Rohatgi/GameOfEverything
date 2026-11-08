@@ -38,6 +38,7 @@ The stubs you receive have already been graded for runtime/atom compatibility, b
     "system_id": "same_as_stub",
     "runtime": "same_as_stub",
     "atoms": ["same_as_stub"],
+    "config": {"db_type": "postgres"},
     "requires": [
       {"edge_id": "edge_id_that_targets_this_entity", "optional": false}
     ],
@@ -45,6 +46,22 @@ The stubs you receive have already been graded for runtime/atom compatibility, b
   }
 ]
 ```
+
+## Rules for `config` (parameterized atoms)
+
+Some atoms are generic and must be pinned to a concrete choice — see the **Pin in config**
+column of the misconfig atom table. For every atom on an entity that lists config keys:
+
+- Fill `config` with a concrete value for each listed key, chosen to fit the scenario.
+- The key marked `*` selects which **service recipe** gets installed deterministically
+  (e.g. `database_expose` → `{"db_type": "postgres"}`), so it is REQUIRED — omit it and the
+  database/service won't be installed and the vulnerability will not work.
+- Pin credential/name keys too (e.g. `weak_service_password` →
+  `{"service": "mysql", "username": "root", "password": "Password123"}`) so the value is
+  decided once and reused consistently across the chain, not re-invented at build time.
+- Use only values the installed services support — valid `db_type`/`service` values are
+  those shown in that atom's patterns (e.g. `mysql`, `postgres`, `redis`). Entities whose
+  atoms list no config keys omit `config` (or leave it `{}`).
 
 ## Rules for `requires`
 

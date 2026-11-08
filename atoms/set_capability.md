@@ -7,14 +7,16 @@ required_vars: [binary_path, capability]
 Linux capabilities partition root privileges into discrete units. Assigning dangerous capabilities (e.g. `cap_setuid+ep`) to a binary owned or executable by a low-priv user allows privilege escalation without a visible SUID bit.
 
 ### Logic Requirements:
-1. Ensure `libcap2-bin` is installed (provides `setcap`): `apt-get install -y libcap2-bin`
-2. Set the capability on the binary: `setcap <capability> <binary_path>`
-3. Optionally make the binary world-executable if it is not already: `chmod a+x <binary_path>`
+1. `setcap`/`getcap` are provided by the platform base image (the capability tooling is pre-installed). Do NOT install a package-manager package for them.
+2. Ensure the target binary (`<binary_path>`) exists. If the scenario's binary is not already present, install the package providing it using the target distro's package manager (see the **Target OS** section) — never hardcode `apt`/`apt-get`.
+3. Set the capability on the binary: `setcap <capability> <binary_path>`
+4. Optionally make the binary world-executable if it is not already: `chmod a+x <binary_path>`
 
 ### Common Patterns:
 - **Python with cap_setuid (full UID control):**
   ```bash
-  apt-get install -y libcap2-bin python3
+  # setcap is already available (base image); install the target binary only if
+  # missing, via the target distro's package manager (see Target OS).
   setcap cap_setuid+ep /usr/bin/python3.11
   # Exploit: python3 -c "import os; os.setuid(0); os.system('/bin/bash')"
   ```

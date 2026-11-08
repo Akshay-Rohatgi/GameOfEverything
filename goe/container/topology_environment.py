@@ -1,7 +1,8 @@
 """TopologyEnvironment — multi-system Docker environment for L3 chain testing.
 
-Sets up a shared flat bridge network with one ubuntu:22.04 target container per
-system and one shared Kali attacker container. Each system container is given a
+Sets up a shared flat bridge network with one target container per system (image
+chosen from each system's distro profile, e.g. ubuntu:22.04 or debian:12) and one
+shared Kali attacker container. Each system container is given a
 Docker network alias equal to its hostname so Docker DNS resolves it from the
 attacker and other containers.
 
@@ -22,15 +23,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_BASE_TARGET_IMAGE = "ubuntu:22.04"
 _CHAIN_NETWORK_NAME = "goe_chain_net"
 _ATTACKER_CONTAINER_PREFIX = "goe_chain_attacker"
 
-# Bootstrap installed into each target before the deploy script runs:
-# apt update + curl, netcat, and common build/network tools.
-# Bootstrap command imported from central registry
-from goe.container.bootstrap import get_bootstrap_command
-_BOOTSTRAP_CMD = get_bootstrap_command("ubuntu")
+# Each system's base image and bootstrap command are resolved per-system from
+# its distro profile (System.os) at container-creation time.
+from goe.distros import get_profile
 
 
 class TopologyEnvironment:
@@ -123,8 +121,10 @@ class TopologyEnvironment:
                     self.port_map[system.id] = system_port_map
                 if port_bindings:
                     logger.info(f"  port mappings: {port_bindings}")
+            profile = get_profile(system.os)
+            logger.info(f"  base image: {profile.image} (os={system.os})")
             container = self._docker.containers.run(
-                _BASE_TARGET_IMAGE,
+                profile.image,
                 command="sleep infinity",
                 name=cname,
                 hostname=hostname,
@@ -137,7 +137,7 @@ class TopologyEnvironment:
             self._network.disconnect(container)
             self._network.connect(container, aliases=[hostname])
             # Bootstrap apt tools so the self-installing deploy scripts work
-            self._bootstrap(container, system.id)
+            self._bootstrap(container, system.id, profile.bootstrap_command())
             self._containers[system.id] = container
 
         # Build attacker image (cached after first build) then start it
@@ -209,8 +209,9 @@ class TopologyEnvironment:
             if system.id in self.port_map:
                 port_bindings = {f"{cp}/tcp": hp for cp, hp in self.port_map[system.id].items()}
 
+            profile = get_profile(system.os)
             container = self._docker.containers.run(
-                _BASE_TARGET_IMAGE,
+                profile.image,
                 command="sleep infinity",
                 name=cname,
                 hostname=hostname,
@@ -223,7 +224,7 @@ class TopologyEnvironment:
             self._network.disconnect(container)
             self._network.connect(container, aliases=[hostname])
             # Re-bootstrap
-            self._bootstrap(container, system.id)
+            self._bootstrap(container, system.id, profile.bootstrap_command())
             self._containers[system.id] = container
 
         # Re-deploy all system scripts
@@ -339,8 +340,8 @@ class TopologyEnvironment:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _bootstrap(self, container, system_id: str) -> None:
-        ec, out_tuple = container.exec_run(["bash", "-c", _BOOTSTRAP_CMD], demux=True)
+    def _bootstrap(self, container, system_id: str, bootstrap_cmd: str) -> None:
+        ec, out_tuple = container.exec_run(["bash", "-c", bootstrap_cmd], demux=True)
         ec = ec or 0
         if ec != 0:
             stderr = (out_tuple[1] or b"").decode("utf-8", errors="replace") if out_tuple else ""

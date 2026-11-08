@@ -17,15 +17,21 @@ if TYPE_CHECKING:
 class ProbeContext:
     """Metadata extracted from entity/artifact for probe selection."""
 
-    runtime: str  # "express", "flask", "apache_php", "ubuntu"
+    runtime: str  # "express", "flask", "apache_php", "system"
     atoms: list[str]  # atom IDs
     has_db: bool  # artifact.db_setup is not None
     db_type: str | None  # "sqlite3", "mysql", "mariadb", None
     app_dir: str  # "/opt/webapp" or ""
-    port: int | None  # None for ubuntu entities
+    port: int | None  # None for OS-level ("system") entities
     source_files: list[str]  # filenames in artifact
     failed_step: str | None  # step_id that failed
-    system_deps: list[str]  # extra apt packages
+    system_deps: list[str]  # extra system packages
+
+    def __post_init__(self):
+        # Normalize legacy runtime spellings (e.g. "ubuntu" -> "system") so a raw
+        # string from an old caller selects the same probes as a coerced Entity.
+        from goe.models.entity import normalize_runtime
+        self.runtime = normalize_runtime(self.runtime)
 
 
 @dataclass
@@ -80,7 +86,7 @@ WEB_RUNTIME_PROBES = [
         id="webapp_log",
         label="Web App Log (last 50 lines)",
         command="tail -50 /var/log/webapp.log 2>/dev/null || echo '(no log)'",
-        relevance=lambda ctx: ctx.runtime != "ubuntu",
+        relevance=lambda ctx: ctx.runtime != "system",
         priority=2,
     ),
     Probe(
@@ -94,7 +100,7 @@ WEB_RUNTIME_PROBES = [
         id="app_dir_listing",
         label="App Directory Listing",
         command="ls -la {app_dir}/ 2>/dev/null | head -20 || echo '(directory not found)'",
-        relevance=lambda ctx: ctx.runtime != "ubuntu" and ctx.app_dir,
+        relevance=lambda ctx: ctx.runtime != "system" and ctx.app_dir,
         priority=4,
     ),
 ]
@@ -162,7 +168,7 @@ UBUNTU_PROBES = [
         id="users_and_groups",
         label="Users and Groups",
         command="cat /etc/passwd | grep -v nologin | grep -v '/bin/false' | head -20",
-        relevance=lambda ctx: ctx.runtime == "ubuntu",
+        relevance=lambda ctx: ctx.runtime == "system",
         priority=2,
     ),
 ]

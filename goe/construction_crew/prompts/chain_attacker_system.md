@@ -57,7 +57,7 @@ seconds: 2
 
 Each system in the graph has:
 - `${system.<system_id>.host}` — hostname (Docker network alias, resolvable from attacker)
-- `${system.<system_id>.port}` — primary exposed port (empty string for SSH-only / ubuntu systems)
+- `${system.<system_id>.port}` — primary exposed port (empty string for SSH-only / OS-level systems)
 
 Use the exact `system_id` values from the graph (e.g. `${system.web_system.host}`).
 

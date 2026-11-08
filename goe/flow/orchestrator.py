@@ -94,6 +94,7 @@ def run(
     resume_dir: Path | None = None,
     verbose: bool = False,
     console=None,
+    os_override: str | None = None,
 ) -> RunResult:
     """Drive the full single-system flow. Returns a RunResult."""
     from goe.build import build_entity
@@ -110,7 +111,7 @@ def run(
 
         if console:
             console.planning()
-        plan_result = plan(request, verbose=verbose, console=console)
+        plan_result = plan(request, verbose=verbose, console=console, os_override=os_override)
         if not plan_result.success or plan_result.graph is None:
             if console:
                 console.plan_failed(plan_result.final_violations)
@@ -171,7 +172,7 @@ def run(
         for system in graph.systems:
             system_entities = [e for e in graph.entities if e.system_id == system.id]
             if len(system_entities) > 1 or system.services:
-                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}_{system.id}")
+                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}_{system.id}", os=system.os)
                 penv.setup()
                 # Register before provision() so the finally tears it down even
                 # if service provisioning fails partway through.
@@ -201,6 +202,7 @@ def run(
                 if parent_id and penv.current_snapshot != parent_id:
                     penv.restore(parent_id)
 
+                _penv_system = graph.system_by_id(entity.system_id)
                 outcome = build_entity(
                     entity,
                     incoming_edges=incoming,
@@ -211,9 +213,11 @@ def run(
                     system_context=system_context,
                     provided_values=provided_values,
                     console=console,
+                    os=_penv_system.os if _penv_system else "ubuntu",
                 )
             else:
                 # Single-entity systems (no services): per-entity isolation
+                _entity_system = graph.system_by_id(entity.system_id)
                 outcome = build_entity(
                     entity,
                     incoming_edges=incoming,
@@ -223,6 +227,7 @@ def run(
                     system_context=system_context,
                     provided_values=provided_values,
                     console=console,
+                    os=_entity_system.os if _entity_system else "ubuntu",
                 )
 
             if outcome.result.status == EntityStatus.PASSED:
@@ -446,6 +451,59 @@ def _extract_build_summary(entity: "Entity", outcome: "BuildOutcome") -> dict:
     return summary
 
 
+def _os_context(system) -> list[str]:
+    """Render the target-OS section of the build context for one system.
+
+    The construction-crew agents previously saw no distro information at all, so they
+    emitted Ubuntu-style commands regardless of ``System.os`` (``systemctl``, Ubuntu-only
+    package names and paths). This grounds them in the system's real ``DistroProfile``:
+    which distro + base image, which package manager, which init model, and — when the
+    target is not Ubuntu — an explicit instruction not to assume Ubuntu. Every fact is
+    read from the profile so the guidance stays correct as new OSes are registered.
+    """
+    from goe.distros import get_profile
+
+    try:
+        profile = get_profile(system.os)
+    except (ValueError, AttributeError):
+        # Unknown/missing os: say nothing rather than assert a wrong distro.
+        return []
+
+    lines = [
+        "### Target OS",
+        "",
+        f"This system runs **{profile.name}** ({profile.family}-family, "
+        f"base image `{profile.image}`). Generate every command, path and package "
+        f"name for **{profile.name}**.",
+        f"- Package manager: `{profile.package_manager}`. The platform installs the "
+        "declared services and base packages for you; do not reinstall them. If you "
+        f"genuinely need an extra tool, install it with `{profile.package_manager}` and "
+        f"name the package as it exists on {profile.name}.",
+    ]
+
+    if profile.has_systemd:
+        lines.append(
+            "- Init system: systemd is available — manage services with `systemctl`."
+        )
+    else:
+        lines.append(
+            "- Init system: there is **no systemd** in these containers. Start a service "
+            "as a background process (e.g. `nohup <cmd> &`) or via `service <name> start`; "
+            "do NOT use `systemctl` — it will fail."
+        )
+
+    if profile.name != "ubuntu":
+        lines.append(
+            f"- Do NOT assume Ubuntu. Avoid Ubuntu-only specifics that do not apply to "
+            f"{profile.name}: the `/etc/update-motd.d` MOTD system, a default `ubuntu` "
+            "user, PPAs (`add-apt-repository`), and Ubuntu-only package names. Use the "
+            f"paths, users and package names that are correct on {profile.name}."
+        )
+
+    lines.append("")
+    return lines
+
+
 def _system_chain_context(
     graph: "EntityGraph",
     entity: "Entity",
@@ -472,6 +530,7 @@ def _system_chain_context(
             "and do NOT add services this system does not declare.",
             "",
         ]
+        lines += _os_context(system)
 
     siblings = [e for e in graph.entities if e.id != entity.id]
     if siblings:

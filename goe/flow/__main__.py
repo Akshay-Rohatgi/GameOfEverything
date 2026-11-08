@@ -17,6 +17,13 @@ import sys
 from pathlib import Path
 
 
+def _available_distros() -> list[str]:
+    """Distro names the --os flag accepts (from the DistroProfile registry)."""
+    from goe.distros import available_distros
+
+    return available_distros()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="goe", description="Game of Everything")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -26,6 +33,12 @@ def main() -> None:
     run_p.add_argument(
         "--resume", type=Path, default=None,
         help="Resume from a checkpoint dir (output/.checkpoints/<run_id>/)",
+    )
+    run_p.add_argument(
+        "--os", dest="os_override", default=None,
+        choices=_available_distros(),
+        help="Force every system's OS to this distro (overrides what the planner "
+             "infers from the request). Makes OS a deterministic build input.",
     )
     run_p.add_argument(
         "--verbose", "-v", action="store_true",
@@ -256,6 +269,12 @@ def _run(args) -> None:
         print("error: provide a request or --resume <checkpoint_dir>", file=sys.stderr)
         sys.exit(2)
 
+    if args.os_override is not None and args.resume is not None:
+        print(
+            "warning: --os is ignored with --resume (the checkpointed graph's OS is reused)",
+            file=sys.stderr,
+        )
+
     console = RunConsole()
     command = " ".join(sys.argv)
     with artifact_run("run", command, capture=args.artifacts) as (run_dir, _session):
@@ -264,6 +283,7 @@ def _run(args) -> None:
             resume_dir=args.resume,
             verbose=args.verbose,
             console=console,
+            os_override=args.os_override,
         )
         if run_dir is not None and result.output_dir is not None:
             # Copy all package outputs, including the provider-neutral scripts,
@@ -302,7 +322,7 @@ def _deploy_with_exposed_ports(result, port_specs: list[str]) -> None:
         return
 
     # Detect runtime from graph
-    runtime = "ubuntu"
+    runtime = "system"
     if result.graph:
         runtimes = {e.runtime.value for e in result.graph.entities}
         if len(runtimes) == 1:
@@ -312,7 +332,7 @@ def _deploy_with_exposed_ports(result, port_specs: list[str]) -> None:
         expose_ports = _parse_port_specs(port_specs)
     else:
         port: int | None = None
-        if runtime != "ubuntu":
+        if runtime != "system":
             from goe.runtimes.registry import get_registry
             try:
                 port = get_registry().port_for(runtime)
@@ -533,12 +553,12 @@ def _test_single(args, out_dir: Path, playbook_path: Path) -> None:
             from goe.flow.checkpoint import load_state
             state = load_state(ckpt_path)
             runtimes = {e.runtime.value for e in state.graph.entities}
-            runtime = runtimes.pop() if len(runtimes) == 1 else "ubuntu"
+            runtime = runtimes.pop() if len(runtimes) == 1 else "system"
         else:
-            runtime = "ubuntu"
+            runtime = "system"
 
     port: int | None = None
-    if runtime != "ubuntu":
+    if runtime != "system":
         from goe.runtimes.registry import get_registry
         try:
             port = get_registry().port_for(runtime)

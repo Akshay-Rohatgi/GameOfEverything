@@ -28,11 +28,12 @@ Your job: given an architecture plan, implement the complete source code exactly
 ```
 
 `db_setup` is optional — omit if the app needs no database.
-`system_deps` is a list of **apt packages** to install before the runtime. Omit if none needed.
+`system_deps` is a list of **system packages** to install before the runtime, named for the
+target distro's package manager (see the **Target OS** section). Omit if none needed.
 `outgoing_edge_values` maps each outgoing edge ID to a **dict of all its declared params**,
 each set to the concrete value you actually built (see "Edge Values" below).
 
-### Misconfig/system entities (`runtime` = `ubuntu`)
+### OS-level/misconfig entities (`runtime` = `system`)
 
 ```json
 {
@@ -49,7 +50,7 @@ each set to the concrete value you actually built (see "Edge Values" below).
 ```
 
 `setup.sh` is a self-contained bash script that configures the misconfiguration from scratch.
-`port` must be `null` for ubuntu entities — there is no web server.
+`port` must be `null` for `system` entities — there is no web server.
 `outgoing_edge_values` maps each outgoing edge ID to a **dict of all its declared params**.
 
 ## Edge Values — CRITICAL FOR ENTITY CHAINING
@@ -125,15 +126,19 @@ The Runtime Spec you receive may include a `developer_rules` field. These are ma
 - **Choose ONE seeding approach** — either seed inline at app startup (using `:memory:` or a file DB opened at startup) OR provide `db_setup` with schema/seed SQL, never both. If you seed inline in the app code, set `db_setup` to null/omit it entirely.
 - Keep it to a single source file
 - Do not add any input validation or sanitization near the vulnerability
-- **For ubuntu entities:** install only the packages unique to THIS entity's vulnerability:
-  - Sudo config? → `apt-get install -y sudo`
+- **For `system` entities:** install only the packages unique to THIS entity's vulnerability.
+  Use the target distro's package manager and package names — the **Target OS** section of the
+  build context states which package manager to use and how to invoke it. Do NOT hardcode a
+  specific manager; follow the Target OS section.
+  - Sudo config? → install the `sudo` package with the target's package manager
   - SUID/privesc helper binaries → install only what your vuln needs
   - **Declared system services (see the System & Chain Context) are ALREADY installed and
     running** — e.g. if the system declares `smb`/`ssh`, samba/openssh are present with a default
     config. Edit their config for your vulnerability and reload/restart THAT service to apply it.
-    But do NOT `apt-get install` a declared service, and do NOT install a service this system does
+    But do NOT re-install a declared service, and do NOT install a service this system does
     NOT declare — an SMB-share entity must never install `openssh-server` or set up SSH login.
-  - **`systemctl` is NOT available in Docker containers.** Use direct process commands instead:
+  - **No systemd (see the Target OS init model).** `systemctl` is NOT available in these
+    containers — use direct process commands instead:
     - Samba: `smbcontrol smbd reload-config` (config reload) or `pkill smbd && smbd -D` (full restart)
     - SSH: `kill -HUP $(pgrep sshd)` (config reload without dropping connections)
     - Apache: `apache2ctl graceful`
@@ -142,6 +147,7 @@ The Runtime Spec you receive may include a `developer_rules` field. These are ma
     service; otherwise install it.
   - **Tool availability in setup.sh:** Your script runs inside a Docker container. Do not assume
     any tool beyond bash and coreutils exists. If your script calls `ssh-keygen`, `openssl`,
-    `python3`, `crontab`, `at`, `mysql`, `gcc`, or any other non-trivial binary — `apt-get install -y`
-    the relevant package at the top of setup.sh before using it. `apt-get install` is idempotent;
-    installing a package that is already present is a no-op and costs nothing.
+    `python3`, `crontab`, `at`, `mysql`, `gcc`, or any other non-trivial binary — install the
+    relevant package with the target's package manager (see the **Target OS** section) at the top
+    of setup.sh before using it, naming the package as it exists on the target distro. Such installs
+    are idempotent; installing a package that is already present is a no-op and costs nothing.

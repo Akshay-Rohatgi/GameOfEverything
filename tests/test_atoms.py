@@ -7,6 +7,8 @@ from goe.construction_crew.atoms import (
     load_logic_requirements,
     load_synthesis_guidance,
     load_testing_guidance,
+    required_services,
+    resolve_required_services,
 )
 
 
@@ -118,3 +120,65 @@ def test_load_testing_guidance_real():
     # Should find content if the atom exists and has that section
     if result:
         assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# Atom -> service bridge: static (requires_service) + dynamic (requires_service_by)
+# ---------------------------------------------------------------------------
+
+class TestRequiredServices:
+    """Static, fixed-service declarations."""
+
+    def test_fixed_service_atom(self):
+        assert required_services("postgres_rce") == ["postgres"]
+
+    def test_fixed_service_atom_samba(self):
+        assert required_services("samba_insecure_share") == ["samba"]
+
+    def test_tool_atom_has_no_service(self):
+        # install_package is a plain-package tool atom, not service-backed.
+        assert required_services("install_package") == []
+
+    def test_generic_atom_has_no_static_service(self):
+        # database_expose uses the dynamic mapping only — nothing static.
+        assert required_services("database_expose") == []
+
+
+class TestResolveRequiredServices:
+    """Dynamic resolution keyed off the planner-pinned entity config."""
+
+    def test_generic_resolves_to_pinned_engine(self):
+        assert resolve_required_services("database_expose", {"db_type": "postgres"}) == ["postgres"]
+        assert resolve_required_services("database_expose", {"db_type": "mysql"}) == ["mysql"]
+        assert resolve_required_services("database_expose", {"db_type": "redis"}) == ["redis"]
+
+    def test_alias_values_map_to_same_recipe(self):
+        # postgresql -> postgres, mariadb -> mysql
+        assert resolve_required_services("database_expose", {"db_type": "postgresql"}) == ["postgres"]
+        assert resolve_required_services("database_expose", {"db_type": "mariadb"}) == ["mysql"]
+
+    def test_mapped_mongodb_resolves(self):
+        # mongodb now has a recipe -> both spellings resolve to it.
+        assert resolve_required_services("database_expose", {"db_type": "mongodb"}) == ["mongodb"]
+        assert resolve_required_services("database_expose", {"db_type": "mongo"}) == ["mongodb"]
+
+    def test_unmapped_value_degrades_gracefully(self):
+        # mssql has no recipe -> no service added, no error.
+        assert resolve_required_services("database_expose", {"db_type": "mssql"}) == []
+
+    def test_unpinned_config_yields_nothing(self):
+        assert resolve_required_services("database_expose", {}) == []
+        assert resolve_required_services("database_expose", None) == []
+
+    def test_weak_password_selects_by_service_var(self):
+        assert resolve_required_services("weak_service_password", {"service": "mysql"}) == ["mysql"]
+        assert resolve_required_services("weak_service_password", {"service": "ftp"}) == ["ftp"]
+
+    def test_weak_password_ssh_needs_no_recipe(self):
+        # sshd ships in the base image; ssh is intentionally not in the map.
+        assert resolve_required_services("weak_service_password", {"service": "ssh"}) == []
+
+    def test_fixed_service_atom_ignores_config(self):
+        # A welded atom returns its static service regardless of config.
+        assert resolve_required_services("postgres_rce", {"db_type": "mysql"}) == ["postgres"]
+        assert resolve_required_services("postgres_rce", None) == ["postgres"]

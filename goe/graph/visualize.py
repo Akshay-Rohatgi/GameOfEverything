@@ -62,7 +62,7 @@ def render(graph: "EntityGraph") -> str:
             continue
 
         tag = ""
-        if entity.runtime != Runtime.ubuntu:
+        if entity.runtime != Runtime.system:
             vulns = "/".join(entity.atoms) if entity.atoms else ""
             tag = f"  [{entity.runtime.value} · {vulns}]" if vulns else f"  [{entity.runtime.value}]"
 
@@ -117,7 +117,7 @@ def _to_graph_easy_input(graph: "EntityGraph") -> str:
         entity = graph.entity_by_id(entity_id)
         if entity is None:
             return entity_id
-        if entity.runtime != Runtime.ubuntu:
+        if entity.runtime != Runtime.system:
             vulns = "/".join(entity.atoms) if entity.atoms else ""
             suffix = f"·{vulns}" if vulns else ""
             return f"{entity.id}\\n({entity.runtime.value}{suffix})"

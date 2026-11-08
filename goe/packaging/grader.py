@@ -35,7 +35,8 @@ def service_section(system) -> "tuple[str, str] | None":
     specs = [s for s in system.services if registry.has_recipe(s.id)]
     if not specs:
         return None
-    script = registry.deploy_all(specs).strip()
+    from goe.distros import get_profile
+    script = registry.deploy_all(specs, profile=get_profile(system.os)).strip()
     if not script:
         return None
     return (f"{system.id}__services", script)

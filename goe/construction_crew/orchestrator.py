@@ -50,7 +50,10 @@ def build(
         entity, architect_plan, incoming_edges, edge_schemas=edge_schemas,
         system_context=system_context, provided_values=provided_values,
     )
-    procedure = attacker.attack(entity, architect_plan, artifact, outgoing_values)
+    procedure = attacker.attack(
+        entity, architect_plan, artifact, outgoing_values,
+        system_context=system_context,
+    )
 
     return CrewResult(
         artifact=artifact,

@@ -56,7 +56,7 @@ def test_propagation_and_packaging(output_root):
     graph = _graph()
     seen_incoming: dict[str, dict] = {}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None, os="ubuntu"):
         seen_incoming[entity.id] = dict(incoming_edges or {})
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
@@ -92,7 +92,7 @@ def test_incomplete_edge_param_fails_run(output_root):
     rather than silently substituting the structural placeholder downstream."""
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None, os="ubuntu"):
         if entity.id == "sqli_entity":
             # Leak only the username — 'secret' and 'cred_type' never propagate.
             return _passed_outcome("sqli_entity", {"sqli_to_ssh": {"user": "admin"}})
@@ -133,7 +133,7 @@ def test_chain_test_failure_gates_success(output_root):
     """A failed chain test must make RunResult.success=False even if all entities built."""
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None, os="ubuntu"):
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
         return _passed_outcome("ssh_entity", {})
@@ -160,7 +160,7 @@ def test_chain_test_failure_gates_success(output_root):
 def test_failed_entity_skips_dependents(output_root):
     graph = _graph()
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None, os="ubuntu"):
         if entity.id == "sqli_entity":
             return BuildOutcome(
                 result=EntityResult(
@@ -199,7 +199,7 @@ def test_mixed_runtime_same_system_uses_progressive_env(output_root):
 
     envs_passed = []
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None, os="ubuntu"):
         envs_passed.append((entity.id, env))
         if entity.id == "flask_cmdi":
             return _passed_outcome("flask_cmdi", dict(_SHELL_VALS))
@@ -226,7 +226,7 @@ def test_checkpoint_resume_skips_completed(output_root):
     graph = _graph()
     call_count = {"n": 0}
 
-    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None):
+    def fake_build(entity, incoming_edges=None, scope="", verbose=False, env=None, edge_schemas=None, system_context=None, provided_values=None, console=None, os="ubuntu"):
         call_count["n"] += 1
         if entity.id == "sqli_entity":
             return _passed_outcome("sqli_entity", dict(_SQLI_CREDS))
@@ -267,3 +267,33 @@ def test_checkpoint_resume_skips_completed(output_root):
     # sqli_entity still packaged from the restored snapshot.
     assert resumed.output_dir is not None
     assert (resumed.output_dir / "deploy.sh").read_text().count("# ---") == 1
+
+
+# --- Target-OS context (Wk4: OS-aware construction crew) --------------------
+# _os_context renders the distro block injected into the architect/developer/attacker
+# prompts. It must be sourced from the real DistroProfile and must only warn against
+# Ubuntu-isms when the target is NOT Ubuntu. No network/LLM.
+
+from types import SimpleNamespace
+
+
+def test_os_context_debian_warns_against_ubuntuisms():
+    lines = orchestrator._os_context(SimpleNamespace(os="debian"))
+    text = "\n".join(lines)
+    assert "debian" in text and "debian:12" in text          # sourced from profile
+    assert "no systemd" in text.lower()                       # non-systemd init model
+    assert "Do NOT assume Ubuntu" in text                     # Ubuntu-ism guard present
+    assert "/etc/update-motd.d" in text
+
+
+def test_os_context_ubuntu_has_no_ubuntuism_warning():
+    lines = orchestrator._os_context(SimpleNamespace(os="ubuntu"))
+    text = "\n".join(lines)
+    assert "ubuntu:22.04" in text                             # still grounds the distro
+    assert "Do NOT assume Ubuntu" not in text                 # but no false-positive guard
+
+
+def test_os_context_unknown_os_is_silent():
+    # An unknown/missing os must not assert a wrong distro — render nothing.
+    assert orchestrator._os_context(SimpleNamespace(os="plan9")) == []
+    assert orchestrator._os_context(SimpleNamespace()) == []

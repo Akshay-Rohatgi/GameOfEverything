@@ -30,6 +30,8 @@ class ServiceRegistry:
         "smb": "samba",
         "cifs": "samba",
         "mariadb": "mysql",
+        "mongod": "mongodb",
+        "mongo": "mongodb",
         "httpd": "apache",
         "vsftpd": "ftp",
         "php-fpm": "php_fpm",
@@ -63,17 +65,25 @@ class ServiceRegistry:
             )
         return self._recipes[resolved]
 
-    def deploy_all(self, specs: list[ServiceSpec]) -> str:
+    def deploy_all(self, specs: list[ServiceSpec], profile=None) -> str:
         """Generate a bash script that installs, configures, and starts all services.
 
         Args:
             specs: List of ServiceSpec objects with id and optional config overrides
+            profile: DistroProfile for the target system. The install command is
+                rendered from the recipe's declared packages via the profile, so
+                package names and the package manager match the target distro.
+                Defaults to the ubuntu profile for backward compatibility.
 
         Returns:
             Bash script with service deployment in dependency-safe order
         """
         if not specs:
             return ""
+
+        if profile is None:
+            from goe.distros import get_profile
+            profile = get_profile("ubuntu")
 
         lines = [
             "#!/bin/bash",
@@ -89,10 +99,19 @@ class ServiceRegistry:
             lines.append(f"# {recipe['description']}")
             lines.append("")
 
-            # Install
+            # Install — rendered from the recipe's declared packages through the
+            # distro profile (resolves package names + picks the package manager).
+            packages = recipe.get("packages") or recipe.get("apt_packages") or []
+            if packages:
+                lines.append("# Install")
+                lines.append(profile.update_cmd())
+                lines.append(profile.install_cmd(packages))
+                lines.append("")
+            # Back-compat: a recipe may still supply a custom install block for
+            # steps the package list can't express (extra repos, keys, etc.).
             install_script = recipe.get("install", "").strip()
             if install_script:
-                lines.append("# Install")
+                lines.append("# Install (custom)")
                 lines.append(install_script)
                 lines.append("")
 

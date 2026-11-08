@@ -2,58 +2,26 @@
 id: ftp_anon_upload
 description: Configures vsftpd (or similar FTP daemon) to allow anonymous login with upload and directory creation permissions, creating an unauthenticated file upload vector.
 required_vars: [upload_dir]
+requires_service: ftp
 ---
 # Atom: FTP Anonymous Upload
 An FTP server is configured to accept anonymous logins and permit file uploads. Attackers can upload arbitrary files (e.g. web shells, scripts) without credentials. Combined with a web server serving the same directory, this becomes a direct remote code execution vector.
 
+> **vsftpd is provided by the platform.** The `ftp` service recipe (declared via `requires_service`) installs vsftpd for the target distro, writes `/etc/vsftpd.conf` with anonymous login and upload enabled (`anonymous_enable`, `write_enable`, `anon_upload_enable`, `anon_mkdir_write_enable`), creates a world-writable anon root at `/var/ftp/pub`, and starts the daemon. The entity script MUST NOT install, reconfigure (do not rewrite `/etc/vsftpd.conf`), or start vsftpd — doing so previously caused a double-install. It only prepares the upload target and any web-shell pivot.
+
 ### Logic Requirements:
-1. Install vsftpd: `apt-get install -y vsftpd`
-2. Create the upload directory: `mkdir -p <upload_dir>`
-3. Set appropriate permissions (vsftpd anon upload requires the directory NOT be owned by ftp but be writable by ftp):
-   ```bash
-   chown root:root <upload_dir>
-   chmod 777 <upload_dir>
-   ```
-4. Write the vsftpd configuration to `/etc/vsftpd.conf`:
-   ```ini
-   anonymous_enable=YES
-   local_enable=NO
-   write_enable=YES
-   anon_upload_enable=YES
-   anon_mkdir_write_enable=YES
-   anon_root=<upload_dir>
-   dirmessage_enable=YES
-   xferlog_enable=YES
-   listen=YES
-   ```
-5. Start vsftpd: `vsftpd /etc/vsftpd.conf &` (or `service vsftpd start`)
+1. The platform's `ftp` recipe has already enabled anonymous upload against `/var/ftp/pub`. Do not install vsftpd, rewrite `/etc/vsftpd.conf`, or start the daemon.
+2. If the scenario needs uploaded files to be served/executed (web-shell pivot), make the anonymously-writable directory the one the web server serves — e.g. point the web document root at the anon upload directory, or place `<upload_dir>` where both vsftpd (anon write) and the web server (read/execute) reach it.
 
 ### Common Patterns:
-- **Basic Anon Upload Config:**
-  ```bash
-  apt-get install -y vsftpd
-  mkdir -p /srv/ftp/uploads
-  chown root:ftp /srv/ftp/uploads
-  chmod 730 /srv/ftp/uploads
-  cat > /etc/vsftpd.conf << 'EOF'
-  listen=YES
-  anonymous_enable=YES
-  write_enable=YES
-  anon_upload_enable=YES
-  anon_mkdir_write_enable=YES
-  anon_root=/srv/ftp
-  EOF
-  vsftpd /etc/vsftpd.conf &
-  ```
-- **FTP + Web Shell Vector (combined with web server):**
-  Set `anon_root` to the web server's document root or a directory served by the web server.
+- **Web-Shell Vector (combined with a web server):**
+  Point the web server's document root at the FTP anon upload directory so a file uploaded over anonymous FTP is reachable (and, for PHP, executed) over HTTP.
 
 ### Testing Guidance:
 1. Verify vsftpd is running: `pgrep vsftpd` or `ss -tlnp | grep 21`
-2. Connect anonymously: `ftp -n 127.0.0.1` then `user anonymous ""` — should log in successfully.
-3. Test upload: `echo "test" | ftp -n 127.0.0.1 <<< $'user anonymous ""\nput /etc/hostname uploads/test.txt'`
-4. Alternatively: `curl -T /etc/hostname ftp://127.0.0.1/<upload_dir>/test.txt --user anonymous:`
-5. Verify the file landed: `ls -l <upload_dir>/test.txt`
+2. Upload anonymously: `curl -T /etc/hostname ftp://127.0.0.1/test.txt --user anonymous:` — should succeed.
+3. Verify the file landed in the anon root: `ls -l /var/ftp/pub/`
+4. (Web pivot) Fetch the uploaded file over HTTP from the web-served directory to confirm the RCE vector.
 
 ### Synthesis Guidance:
-vsftpd has strict permission requirements for anonymous upload directories — the directory must NOT be owned by the `ftp` user (to prevent it from being a writable root), but a subdirectory (`uploads/`) should be writable. The generated script should create both the anon root (owned by root) and an uploads subdirectory (writable by ftp/other). In Docker, start vsftpd in the foreground or with `&` — not via systemctl unless systemd is available.
+vsftpd install/config/start is owned by the `ftp` recipe — the entity must not duplicate it. The atom's job is the *vector*: ensure anonymously-uploaded files land somewhere exploitable (e.g. a web-served directory). KNOWN LIMITATION: the recipe's anon root is fixed at `/var/ftp/pub`; a scenario needing a custom `upload_dir` (e.g. shared with a PHP web root) requires the `ftp` recipe to expose an `anon_root` config_var — a distro-independent recipe enhancement, deferred.

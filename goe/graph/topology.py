@@ -89,11 +89,25 @@ def reachable_from_operator(graph: "EntityGraph") -> set[str]:
 
 
 def dependency_map(graph: "EntityGraph") -> dict[str, set[str]]:
-    """Return {entity_id: set of entity_ids it depends on via non-operator edges}."""
+    """Return {entity_id: set of entity_ids it depends on via non-operator edges}.
+
+    Two edge shapes carry a dependency:
+    - A direct edge (``to_entity`` set): ``to_entity`` depends on ``from_entity``.
+    - A fan-out edge (``to_entity is None``, ``fan_out``): its consumers are the
+      entities that list the edge in ``requires``; each depends on ``from_entity``.
+      This mirrors ``reachable_from_operator`` — without it, a fan-out consumer
+      looks provider-less and the scheduler can build it before its producer.
+    """
     deps: dict[str, set[str]] = {e.id: set() for e in graph.entities}
 
     for edge in graph.edges:
-        if edge.from_entity != "operator" and edge.to_entity:
+        if edge.from_entity == "operator":
+            continue
+        if edge.to_entity:
             deps.setdefault(edge.to_entity, set()).add(edge.from_entity)
+        elif edge.fan_out:
+            for entity in graph.entities:
+                if any(req.edge_id == edge.id for req in entity.requires):
+                    deps[entity.id].add(edge.from_entity)
 
     return deps

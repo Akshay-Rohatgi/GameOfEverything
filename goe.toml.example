@@ -31,6 +31,7 @@ default = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # Per-role model overrides. Keys match role names in goe/config.py.
 # Uncomment to override a specific role; otherwise [models].default is used.
 # planner        = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
+# os_planner     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"  # per-host OS assignment; defaults to Haiku
 # architect       = "us.anthropic.claude-opus-4-6-v1:0"
 # developer      = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"
 # attacker       = "us.anthropic.claude-sonnet-4-6-20251001-v1:0"

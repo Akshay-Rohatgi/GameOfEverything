@@ -7,7 +7,7 @@ required_vars: [username, allowed_command]
 A misconfigured sudoers rule allows a low-privilege user to run commands as root without knowing the root password—a classic and frequently exploited privilege escalation vector.
 
 ### Logic Requirements:
-1. Ensure `sudo` is installed: `apt-get install -y sudo`
+1. Ensure `sudo` is installed, using the target distro's package manager (see the **Target OS** section).
 2. Append a NOPASSWD rule to `/etc/sudoers.d/<username>` (never edit `/etc/sudoers` directly):
    `echo "<username> ALL=(ALL) NOPASSWD: <allowed_command>" > /etc/sudoers.d/<username>`
 3. Set correct permissions on the drop-in file: `chmod 440 /etc/sudoers.d/<username>`

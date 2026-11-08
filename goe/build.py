@@ -16,7 +16,7 @@ def _generate_file_tree(plan: "ArchitectPlan", runtime: str, app_dir: str | None
     lines = []
 
     # Start with app directory
-    if runtime == "ubuntu":
+    if runtime == "system":
         lines.append("[dim]/opt/[/dim]")
         lines.append("└── setup.sh")
     else:
@@ -90,6 +90,40 @@ def _generate_file_tree(plan: "ArchitectPlan", runtime: str, app_dir: str | None
     return "\n".join(lines)
 
 
+def _lint_summary(findings) -> str:
+    """One-line-per-finding summary of distro lint findings, for diagnosis text."""
+    return "; ".join(f"[{f.where}] {f.token}: {f.message}" for f in findings)
+
+
+def _apply_distro_lint(result, deploy_script, procedure, os):
+    """Enforce distro-correctness on an otherwise-passing build.
+
+    The agents are told the target distro, but that is advisory — this is the deterministic
+    backstop. If the generated deploy script / procedure carries Ubuntu-isms that are wrong
+    for ``os`` (e.g. ``systemctl`` on a non-systemd container, a canonical package name the
+    distro renames), flip an otherwise-PASSING result to failed so the retry loop regenerates
+    it with a precise, deterministic diagnosis. A build that already failed keeps its own
+    diagnosis (the lint is only the *sole* reason to fail here), so we never mask a real bug.
+
+    Returns (result, findings, forced) where ``forced`` is True only when the lint is what
+    turned a passing build into a failing one.
+    """
+    from goe.construction_crew import distro_lint
+    from goe.distros import get_profile
+
+    try:
+        profile = get_profile(os)
+    except Exception:
+        return result, [], False  # unknown os: do not assert a distro
+
+    findings = distro_lint.lint(profile, deploy_script, procedure)
+    forced = bool(findings) and result.passed
+    if forced:
+        from goe.executor.runner import ProcedureResult
+        result = ProcedureResult(passed=False, error="distro lint: " + _lint_summary(findings))
+    return result, findings, forced
+
+
 def build_entity(
     entity: "Entity",
     incoming_edges: dict | None = None,
@@ -100,6 +134,7 @@ def build_entity(
     system_context: str | None = None,
     provided_values: dict | None = None,
     console=None,  # RunConsole | None
+    os: str = "ubuntu",
 ) -> "BuildOutcome":
     """Run the full build pipeline for a single entity.
 
@@ -233,11 +268,11 @@ def build_entity(
 
     _owns_env = env is None
     if _owns_env:
-        env = TestEnvironment(runtime=runtime, scope=scope or f"build_{entity.id[:16]}")
+        env = TestEnvironment(runtime=runtime, scope=scope or f"build_{entity.id[:16]}", os=os)
         env.setup()
 
     def _make_deploy_script(artifact) -> str:
-        if runtime == "ubuntu":
+        if runtime == "system":
             return artifact.source_files[artifact.primary_source]
         return registry.deploy(runtime, artifact)
 
@@ -265,7 +300,7 @@ def build_entity(
                 dump("deploy stderr", stderr)
 
         # Phase 3 — L2 test
-        port = None if runtime == "ubuntu" else registry.port_for(runtime)
+        port = None if runtime == "system" else registry.port_for(runtime)
         ctx = {
             "target_host": env.get_target_host(),
             "attacker_host": env.get_attacker_host(),
@@ -294,6 +329,13 @@ def build_entity(
             result = run_procedure(crew.procedure, env, ctx)
             forced_deploy_failure = False
 
+        # Distro lint — a clean build that still carries Ubuntu-isms for this `os` is
+        # flipped to failed so the retry loop regenerates it (see _apply_distro_lint).
+        result, lint_findings, forced_lint_failure = _apply_distro_lint(
+            result, deploy_script, crew.procedure, os)
+        if forced_lint_failure:
+            log(f"Distro lint flagged {len(lint_findings)} issue(s): {_lint_summary(lint_findings)}")
+
         if console:
             # Show test steps with console UI
             passed_steps = sum(1 for s in result.steps if s.passed)
@@ -319,7 +361,19 @@ def build_entity(
         diagnosis_history = []  # Track diagnosis categories to detect stuck loops
         while not result.passed:
             attempt += 1
-            if forced_deploy_failure:
+            if forced_lint_failure:
+                # Deterministic: the distro lint found an Ubuntu-ism wrong for this distro.
+                # A deploy-script hit is an implementation_bug (regenerate dev + attacker);
+                # a procedure-only hit is a procedure_bug (regenerate the attacker).
+                deploy_hit = any(f.where == "deploy_script" for f in lint_findings)
+                diagnosis = Diagnosis(
+                    category=(DiagnosisCategory.implementation_bug if deploy_hit
+                              else DiagnosisCategory.procedure_bug),
+                    description="Distro lint: " + _lint_summary(lint_findings),
+                    evidence=result.error or "",
+                )
+                forced_lint_failure = False
+            elif forced_deploy_failure:
                 # Deterministic: a non-zero deploy exit is a design_flaw by
                 # definition — don't ask the LLM to second-guess a broken deploy.
                 diagnosis = Diagnosis(
@@ -399,6 +453,12 @@ def build_entity(
             if console:
                 console.crew_test_start(attempt=attempt + 1)
             result = run_procedure(crew.procedure, env, ctx)
+
+            # Re-lint the regenerated crew so a retry can't slip an Ubuntu-ism through.
+            result, lint_findings, forced_lint_failure = _apply_distro_lint(
+                result, _make_deploy_script(crew.artifact), crew.procedure, os)
+            if forced_lint_failure:
+                log(f"Distro lint flagged {len(lint_findings)} issue(s) on retry: {_lint_summary(lint_findings)}")
 
             if console:
                 passed_steps = sum(1 for s in result.steps if s.passed)

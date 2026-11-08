@@ -92,10 +92,10 @@ def develop(
     model = cfg.model_for("developer")
     review_model = cfg.model_for("developer_review")
 
-    is_ubuntu = entity.runtime.value == "ubuntu"
-    runtime_spec = "" if is_ubuntu else _load_runtime_spec(entity.runtime.value)
+    is_system = entity.runtime.value == "system"
+    runtime_spec = "" if is_system else _load_runtime_spec(entity.runtime.value)
 
-    spec_section = "" if is_ubuntu else f"""## Runtime Spec
+    spec_section = "" if is_system else f"""## Runtime Spec
 
 ```yaml
 {runtime_spec}
@@ -103,7 +103,7 @@ def develop(
 
 """
 
-    if is_ubuntu:
+    if is_system:
         implement_line = "Implement the bash setup script exactly as specified in the architecture plan."
     else:
         implement_line = "Implement the application exactly as specified in the architecture plan."
@@ -156,6 +156,24 @@ You MUST use these exact values in your implementation and must NOT regenerate t
 
     context_section = f"{system_context}\n" if system_context else ""
 
+    # Planner-pinned atom config (db_type/service/credentials). These are authoritative:
+    # the deterministic service layer has already installed the recipe matching the pinned
+    # service, so the script MUST build for exactly these values — picking a different
+    # engine or credential would mismatch what is actually installed and running.
+    pinned_config = getattr(entity, "config", None) or {}
+    config_section = f"""## Pinned Atom Config (ALREADY DETERMINED — build for exactly these)
+
+```json
+{json.dumps(pinned_config, indent=2)}
+```
+
+The matching service (e.g. the `db_type`/`service` below) is ALREADY installed and started
+by the platform's service recipe. Implement the vulnerability for exactly these values — do
+NOT substitute a different engine, user, or password, and do NOT install or start the service
+yourself.
+
+""" if pinned_config else ""
+
     user_msg = f"""## Entity Spec
 
 ```json
@@ -168,7 +186,7 @@ You MUST use these exact values in your implementation and must NOT regenerate t
 {plan.model_dump_json(indent=2)}
 ```
 
-{spec_section}{schema_section}{prefilled_section}## Incoming Edge Values
+{spec_section}{config_section}{schema_section}{prefilled_section}## Incoming Edge Values
 
 ```json
 {json.dumps(incoming_edges, indent=2)}
@@ -224,7 +242,7 @@ Compare your implementation against the proven patterns below:
 
 """ if synthesis_guidance else ""
 
-    if is_ubuntu:
+    if is_system:
         review_msg = f"""{guidance_section}Review your bash setup script against these correctness checks before finalising:
 
 1. **One link only**: Does the script build ONLY this entity's vulnerability on its own system? Remove any service, account, or `authorized_keys` that belongs to another entity/system per the System & Chain Context (e.g. an SMB-share entity must not install openssh-server or create the SSH login). Do not install/restart services the platform already provides.

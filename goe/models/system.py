@@ -33,6 +33,21 @@ class System(BaseModel):
     services: list[ServiceSpec]
     network: NetworkConfig
 
+    @field_validator("os", mode="before")
+    @classmethod
+    def _coerce_os(cls, v):
+        """Coerce the OS to a canonical distro name (e.g. ubuntu_22_04 -> ubuntu).
+
+        Delegates to the single normalizer in goe.distros; rejects OSes with no
+        registered DistroProfile so bad values fail at graph-load time rather
+        than at container-creation time.
+        """
+        from goe.distros import normalize_os
+
+        if isinstance(v, str):
+            return normalize_os(v)
+        return v
+
     @field_validator("services", mode="before")
     @classmethod
     def _coerce_strings(cls, v):

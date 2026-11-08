@@ -25,8 +25,9 @@ class ProgressiveEnvironment:
     the procedure executor.
     """
 
-    def __init__(self, system_id: str, scope: str = ""):
+    def __init__(self, system_id: str, scope: str = "", os: str = "ubuntu"):
         self._system_id = system_id
+        self._os = os
         self._scope = scope or f"prog_{system_id[:12]}"
         self._client = None  # docker.DockerClient (lazy)
         self._network = None
@@ -64,10 +65,12 @@ class ProgressiveEnvironment:
         self._network = self._client.networks.create(net_name, driver="bridge")
         logger.info(f"[ProgressiveEnvironment] Created network {net_name}")
 
-        # Start target container (ubuntu:22.04)
+        # Start target container (image resolved from the system's distro profile)
+        from goe.distros import get_profile
+        profile = get_profile(self._os)
         target_name = f"goe_prog_target_{self._scope}"
         self._target_container = self._client.containers.run(
-            "ubuntu:22.04",
+            profile.image,
             command="sleep infinity",
             name=target_name,
             hostname="target",
@@ -75,12 +78,11 @@ class ProgressiveEnvironment:
             detach=True,
             remove=False,
         )
-        logger.info(f"[ProgressiveEnvironment] Started target {target_name}")
+        logger.info(f"[ProgressiveEnvironment] Started target {target_name} ({profile.image})")
 
         # Bootstrap base packages
         logger.info("[ProgressiveEnvironment] Bootstrapping target...")
-        from goe.container.bootstrap import get_bootstrap_command
-        self._exec_in_target(get_bootstrap_command("ubuntu"))
+        self._exec_in_target(profile.bootstrap_command())
 
         # Build and start attacker container (kali-based goe-attacker:latest)
         self._ensure_attacker_image()
@@ -120,8 +122,10 @@ class ProgressiveEnvironment:
 
         logger.info(f"[ProgressiveEnvironment] Provisioning {len(specs)} service(s) for system {system.id}")
 
-        # Generate and execute service deployment script
-        deploy_script = registry.deploy_all(specs)
+        # Generate and execute service deployment script (profile-driven install
+        # so package names/manager match this system's distro).
+        from goe.distros import get_profile
+        deploy_script = registry.deploy_all(specs, profile=get_profile(self._os))
         exit_code, stdout, stderr = self._exec_in_target(deploy_script)
 
         if exit_code != 0:

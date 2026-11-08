@@ -22,7 +22,7 @@ class EntityStub(BaseModel):
     id: str
     description: str
     system_id: str
-    runtime: str = "ubuntu"
+    runtime: str = "system"
     atoms: list[str] = Field(default_factory=list)
 
 

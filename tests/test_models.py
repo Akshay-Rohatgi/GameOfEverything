@@ -42,7 +42,7 @@ class TestSystem:
     def test_basic(self): # Test if the System can be created with basic parameters
         s = System(
             id="webserver",
-            os="ubuntu_22.04",
+            os="ubuntu",
             services=["nginx", "node"],
             network=NetworkConfig(hostname="webserver", exposed_ports=[80], internal_ports=[]),
         )
@@ -51,7 +51,7 @@ class TestSystem:
     def test_round_trip(self): # Test that serializing and deserializing gives the same object
         s = System(
             id="db",
-            os="ubuntu_22.04",
+            os="ubuntu",
             services=["postgresql"],
             network=NetworkConfig(hostname="db", exposed_ports=[], internal_ports=[5432]),
         )
@@ -67,9 +67,9 @@ class TestRuntime:
         assert Runtime.express.value == "express"
         assert Runtime.flask.value == "flask"
         assert Runtime.apache_php.value == "apache_php"
-        assert Runtime.ubuntu.value == "ubuntu"
+        assert Runtime.system.value == "system"
 
-    def test_default_is_ubuntu(self):
+    def test_default_is_system(self):
         e = Entity(
             id="sys",
             description="System entity",
@@ -77,7 +77,20 @@ class TestRuntime:
             requires=[],
             provides=[],
         )
-        assert e.runtime == Runtime.ubuntu
+        assert e.runtime == Runtime.system
+
+    def test_legacy_ubuntu_runtime_coerces_to_system(self):
+        # Old checkpoints/fixtures/planner output used "ubuntu" for OS-level entities;
+        # it must still load and normalize to the distro-neutral `system`.
+        e = Entity(
+            id="sys",
+            description="System entity",
+            system_id="s1",
+            runtime="ubuntu",
+            requires=[],
+            provides=[],
+        )
+        assert e.runtime == Runtime.system
 
 
 class TestRequirement:
@@ -99,7 +112,7 @@ class TestEntity:
             requires=[Requirement(edge_id="op_to_app")],
             provides=["app_to_db_creds"],
         )
-        assert e.runtime == Runtime.ubuntu
+        assert e.runtime == Runtime.system
         assert e.atoms == []
 
     def test_web_app_entity(self): # Test that a web-app entity carries its runtime

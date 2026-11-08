@@ -1,51 +1,25 @@
 """Central registry for container bootstrap configurations.
 
-Defines standard package sets for target containers to ensure consistency
-between ProgressiveEnvironment (L2 testing) and TopologyEnvironment (L3 testing).
+Thin shim over ``goe.distros``: the base package set and the apt bootstrap
+command now live on each ``DistroProfile`` so they stay consistent across
+ProgressiveEnvironment (L2 testing) and TopologyEnvironment (L3 testing) and
+vary correctly per OS.
 """
 
-# Base packages for all ubuntu target containers
-UBUNTU_BASE_PACKAGES = [
-    # Core utilities
-    "curl",
-    "wget",
-    "ca-certificates",
-    "gnupg",
-    "lsb-release",
+from goe.distros import APT_BASE_PACKAGES, get_profile
 
-    # Networking tools
-    "iproute2",
-    "net-tools",
-    "iputils-ping",
-
-    # Process management
-    "procps",
-
-    # Common attack surface packages (pre-installed on real servers)
-    "sudo",
-    "openssh-server",
-    "sshpass",
-]
-
+# Back-compat alias — the package set is defined on the distro profiles now.
+UBUNTU_BASE_PACKAGES = list(APT_BASE_PACKAGES)
 
 
 def get_bootstrap_command(target_type: str = "ubuntu") -> str:
-    """Get the apt-get command to bootstrap a target container.
+    """Get the command to bootstrap a target container for the given OS.
 
     Args:
-        target_type: Type of target ("ubuntu" for now, could expand)
+        target_type: Canonical distro name or alias (e.g. "ubuntu", "debian",
+            "ubuntu_22_04"). Resolved via the distro profile registry.
 
     Returns:
-        Bash command string to install base packages
+        Bash command string to install base packages.
     """
-    if target_type == "ubuntu":
-        packages = " ".join(UBUNTU_BASE_PACKAGES)
-        return (
-            "apt-get update -y && "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y "
-            f"{packages}"
-        )
-
-    raise ValueError(f"Unknown target type: {target_type}")
-
-
+    return get_profile(target_type).bootstrap_command()

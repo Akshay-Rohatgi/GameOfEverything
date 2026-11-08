@@ -2,44 +2,38 @@
 id: postgres_rce
 description: Configures PostgreSQL with pg_hba.conf set to trust authentication and grants SUPERUSER to a low-privilege database user, enabling Remote Code Execution via the COPY ... TO PROGRAM SQL command.
 required_vars: [db_user]
+requires_service: postgres
 ---
 # Atom: PostgreSQL RCE via COPY TO PROGRAM
 PostgreSQL's `COPY ... TO PROGRAM` feature executes an OS command as the `postgres` system user. When a database user has `SUPERUSER` privileges and authentication is set to `trust` (no password required), any user who can connect to the database can achieve OS-level code execution.
 
+> **PostgreSQL is provided by the platform.** The `postgres` service recipe (declared via `requires_service`) installs the correct package for the target distro, starts the cluster, and sets `listen_addresses = '*'` so it is reachable over the network. The entity script MUST NOT install or start PostgreSQL. It applies only the vulnerability: `trust` authentication and a `SUPERUSER` role. Run `psql` as the `postgres` system user over the local socket (peer auth), which works regardless of `pg_hba.conf`.
+
 ### Logic Requirements:
-1. Install PostgreSQL: `apt-get install -y postgresql`
-2. Start PostgreSQL: `service postgresql start`
-3. Configure `pg_hba.conf` to use `trust` authentication for local and host connections:
+1. Set `pg_hba.conf` to `trust` authentication for local and host connections (version-agnostic path via `find`):
    ```
    local   all   all             trust
    host    all   all   0.0.0.0/0 trust
    ```
-4. Configure `postgresql.conf` to listen on all interfaces: `listen_addresses = '*'`
-5. Create `<db_user>` with SUPERUSER: `CREATE USER <db_user> WITH SUPERUSER;`
-6. Reload PostgreSQL config.
+2. Create `<db_user>` with SUPERUSER: `CREATE USER <db_user> WITH SUPERUSER;`
+3. Reload PostgreSQL so the new `pg_hba.conf` takes effect (a `trust` change needs only a reload, not a restart — `listen_addresses` is already set by the recipe). Use `SELECT pg_reload_conf();` or the Debian cluster reload, not a distro init system.
 
 ### Common Patterns:
-- **Full Setup Script:**
+- **Apply the misconfiguration (service already running):**
   ```bash
-  apt-get install -y postgresql
-  service postgresql start
-
-  # Allow all connections without password
-  PG_HBA=$(find /etc/postgresql -name pg_hba.conf | head -1)
+  # trust auth for everyone
+  PG_HBA=$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)
   cat > "$PG_HBA" << 'EOF'
   local   all   all             trust
   host    all   all   0.0.0.0/0 trust
   EOF
 
-  # Listen on all interfaces
-  PG_CONF=$(find /etc/postgresql -name postgresql.conf | head -1)
-  sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" "$PG_CONF"
-
-  # Create superuser
+  # superuser role + a database it owns, created over the local socket as postgres
   su -c "psql -c \"CREATE USER <db_user> WITH SUPERUSER;\"" postgres
   su -c "psql -c \"CREATE DATABASE <db_user> OWNER <db_user>;\"" postgres
 
-  service postgresql restart
+  # reload so trust auth takes effect
+  su -c "psql -c \"SELECT pg_reload_conf();\"" postgres
   ```
 
 ### Testing Guidance:
@@ -55,4 +49,4 @@ PostgreSQL's `COPY ... TO PROGRAM` feature executes an OS command as the `postgr
 5. Escalate: `COPY (SELECT '') TO PROGRAM 'cp /bin/bash /tmp/rootbash && chmod +s /tmp/rootbash'`
 
 ### Synthesis Guidance:
-Use the versioned paths for `pg_hba.conf` and `postgresql.conf` (e.g. `/etc/postgresql/14/main/`). Use shell globbing (`find /etc/postgresql -name pg_hba.conf | head -1`) to avoid hardcoding the version. The `trust` authentication method eliminates all password requirements — combine with `database_expose` to allow remote exploitation. Note: `COPY TO PROGRAM` requires PostgreSQL >= 9.3.
+PostgreSQL install/start/`listen_addresses` is owned by the `postgres` recipe — the entity must not duplicate it. The atom applies only `trust` auth + a `SUPERUSER` role. Use shell globbing (`find /etc/postgresql -name pg_hba.conf | head -1`) to avoid hardcoding the version. Create the superuser over the local socket as the `postgres` system user (peer auth), so it works before `trust` is reloaded. Note: `COPY TO PROGRAM` requires PostgreSQL >= 9.3.
