@@ -34,6 +34,37 @@ MongoDB has historically shipped with authentication disabled by default. This a
     || mongod --config /etc/mongod.conf --fork
   ```
 
+### Seeding data for exfiltration:
+If the scenario needs collections for an attacker to read (an exfiltration/unauth-read
+target), seed them AFTER the daemon is confirmed listening. Two mongosh pitfalls cause the
+seeded database to silently never appear (only `admin`/`config`/`local` remain):
+- **`use <db>;` inside `--eval` does NOT reliably switch the `db` context in mongosh** (it
+  worked in the legacy `mongo` shell; it does not here). Inserts then land in `test` or
+  nowhere, and your target database is never created.
+- **A database only materializes once a document is actually inserted** — a `use` + `drop()`
+  with no successful insert creates nothing.
+
+Seed by putting the database name in the connection URI (no `use`), and run the whole thing
+as a heredoc file, not a fragile inline `--eval` string:
+```bash
+# Robust: DB is selected by the URI path, so `db` IS corporate_data — no `use` needed.
+cat > /tmp/seed.js <<'EOF'
+db.employees.insertMany([
+  { name: 'Alice Johnson', email: 'alice@corp.example', ssn: '123-45-6789' },
+]);
+db.credentials.insertMany([
+  { username: 'dbadmin', plaintext_password: 'S3cret!', role: 'db_admin' },
+]);
+print('seeded employees=' + db.employees.countDocuments());
+EOF
+mongosh "mongodb://127.0.0.1:27017/corporate_data" --quiet --file /tmp/seed.js
+
+# MANDATORY verification — the build must fail loudly if the DB didn't land:
+mongosh "mongodb://127.0.0.1:27017/corporate_data" --quiet \
+  --eval 'if (db.employees.countDocuments() < 1) { print("FATAL: seed failed"); quit(1); }'
+```
+Do not wrap the seed in `|| true`; a failed seed must surface, not pass silently.
+
 ### Testing Guidance:
 1. Verify MongoDB is listening on 0.0.0.0:27017: `ss -tlnp | grep 27017`
 2. Connect without credentials: `mongosh --host 127.0.0.1 --eval "db.adminCommand('listDatabases')"` — should return a database list.
