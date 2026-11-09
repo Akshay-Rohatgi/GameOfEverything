@@ -14,6 +14,7 @@ RUN apt-get update && \
         openssh-client \
         nmap \
         hydra \
+        sqlmap \
         curl \
         wget \
         netcat-traditional \

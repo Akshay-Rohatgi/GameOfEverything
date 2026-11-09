@@ -124,6 +124,87 @@ def _apply_distro_lint(result, deploy_script, procedure, os):
     return result, findings, forced
 
 
+def _fixup_served_ssh_keys(script: str, provided_values: dict | None) -> str:
+    """Deterministically re-write any SSH private key this entity serves.
+
+    The producer embeds the key as base64 and decodes it to a file (per the developer
+    prompt). The LLM keeps getting the fragile parts wrong — mangled PEM bytes
+    ("Load key: invalid format") or wrong permissions (644 where 600 was intended).
+    Here we append, at the END of the deploy script, a deterministic re-write of the
+    exact key material to the same path the script decoded it to, with the permissions
+    the script intended (detected `chmod`, default 600). Running last, it overrides any
+    earlier mangling. No-op when the entity serves no SSH key or no path is found.
+    """
+    if not script or not provided_values:
+        return script
+
+    import re
+
+    # Collect the base64 key material for every SSH-key edge this entity provides.
+    materials: list[str] = []
+    for params in provided_values.values():
+        if not isinstance(params, dict):
+            continue
+        ct = str(params.get("cred_type") or "").lower()
+        secret = params.get("secret")
+        if secret and "ssh" in ct and "key" in ct:
+            materials.append(secret)
+    if not materials:
+        return script
+
+    appended: list[str] = []
+    single = len(materials) == 1
+
+    def _detect_paths(b64: str) -> list[str]:
+        paths: list[str] = []
+        # Lines that both carry this key's inline base64 and redirect to a file.
+        if b64 in script:
+            for line in script.splitlines():
+                if b64 in line and ">" in line and ("base64" in line):
+                    m = re.search(r">>?\s*([^\s;&|>]+)", line)
+                    if m:
+                        paths.append(m.group(1).strip("\"'"))
+        # Single-key fallbacks: the developer often does NOT embed the material inline —
+        # it writes the key from an (uninjected) env var, e.g.
+        #   printf '%s' "${FOO_KEY_B64}" | base64 -d > /root/.ssh/id_rsa_x
+        # which leaves a correctly-permissioned but EMPTY file. Anchor to any
+        # base64-decode redirect, or to a write targeting a conventional SSH key path.
+        # Safe only when a single key is in play (no cross-assignment risk).
+        if single:
+            for m in re.finditer(r"base64\s+(?:-d|--decode)[^\n>]*>>?\s*([^\s;&|>]+)", script):
+                paths.append(m.group(1).strip("\"'"))
+            for m in re.finditer(
+                r">>?\s*((?:/[^\s;&|>]*)?id_(?:rsa|ed25519|ecdsa|dsa)[^\s;&|>]*)", script
+            ):
+                paths.append(m.group(1).strip("\"'"))
+        # Never write private material to a public-key path.
+        return [p for p in dict.fromkeys(paths) if not p.endswith(".pub")]
+
+    for b64 in materials:
+        for path in _detect_paths(b64):
+            cm = re.search(rf"chmod\s+(\d{{3,4}})\s+{re.escape(path)}\b", script)
+            perms = cm.group(1) if cm else "600"
+            appended.append(
+                f"# [harness] deterministic SSH key write — exact PEM bytes + {perms} perms\n"
+                f'mkdir -p "$(dirname "{path}")"\n'
+                f"printf '%s' '{b64}' | base64 -d > {path}\n"
+                f"chmod {perms} {path}"
+            )
+
+    if not appended:
+        return script
+    return script.rstrip() + "\n\n" + "\n".join(appended) + "\n"
+
+
+def _procedure_unchanged(old, new) -> bool:
+    """True when a retry produced the same procedure it started with — a ``procedure_bug``
+    fix that changed nothing, so re-testing it would fail identically."""
+    try:
+        return old is not None and new is not None and old.model_dump() == new.model_dump()
+    except Exception:
+        return False
+
+
 def build_entity(
     entity: "Entity",
     incoming_edges: dict | None = None,
@@ -135,6 +216,7 @@ def build_entity(
     provided_values: dict | None = None,
     console=None,  # RunConsole | None
     os: str = "ubuntu",
+    peers: list | None = None,  # [(hostname_alias, peer_container), ...] to attach
 ) -> "BuildOutcome":
     """Run the full build pipeline for a single entity.
 
@@ -271,10 +353,29 @@ def build_entity(
         env = TestEnvironment(runtime=runtime, scope=scope or f"build_{entity.id[:16]}", os=os)
         env.setup()
 
+    # Attach cross-host peers (e.g. the DB host a web tier connects to) onto this
+    # entity's build network, so their hostnames resolve during the build exactly
+    # as they will on the flat chain network at deploy time. Best-effort.
+    if peers and hasattr(env, "attach_peer"):
+        for alias, peer_container in peers:
+            try:
+                env.attach_peer(alias, peer_container)
+            except Exception as e:  # never let peer wiring abort a build
+                log(f"[peer] attach '{alias}' failed: {e}")
+
     def _make_deploy_script(artifact) -> str:
         if runtime == "system":
-            return artifact.source_files[artifact.primary_source]
-        return registry.deploy(runtime, artifact)
+            script = artifact.source_files[artifact.primary_source]
+            # Deterministically re-write any SSH key this entity serves (exact PEM
+            # bytes + intended perms), overriding the LLM's fragile key handling.
+            script = _fixup_served_ssh_keys(script, provided_values)
+        else:
+            script = registry.deploy(runtime, artifact)
+        # Deterministically neutralize `systemctl` for no-systemd containers: the service
+        # layer already owns start/restart, so a systemctl line is always wrong here and
+        # otherwise loops the distro lint until the entity escalates to design_flaw.
+        from goe.distros import get_profile
+        return get_profile(os).sanitize_service_control(script)
 
     try:
         # Phase 2 — Deploy
@@ -387,7 +488,7 @@ def build_entity(
                     console._line(f"\n[yellow]⚠[/yellow] Diagnosing failure...")
                 else:
                     log(f"Diagnosing failure (attempt {attempt})...")
-                diagnosis = diagnose(entity, crew.artifact, result, env)
+                diagnosis = diagnose(entity, crew.artifact, result, env, procedure=crew.procedure)
 
             if console:
                 console.crew_retry(diagnosis.category.value, attempt, 3)
@@ -426,6 +527,39 @@ def build_entity(
                         failure_category=diagnosis.category.value,
                     ),
                 )
+
+            # No-op guard: a procedure_bug "fix" that left the procedure unchanged will
+            # fail identically on re-test. Don't burn a deploy/test cycle on it — escalate
+            # to implementation_bug so the retry regenerates the app+attacker (something
+            # that can actually change the outcome). One extra crew regen, but it saves a
+            # guaranteed-wasted test cycle and the eventual full-crew design_flaw escalation.
+            if (diagnosis.category == DiagnosisCategory.procedure_bug
+                    and _procedure_unchanged(crew.procedure, new_crew.procedure)):
+                log("fix_procedure produced no change — escalating procedure_bug → implementation_bug")
+                diagnosis = Diagnosis(
+                    category=DiagnosisCategory.implementation_bug,
+                    description="Procedure fix was a no-op (procedure already matches the app); "
+                                "the defect is in the implementation. " + diagnosis.description,
+                    evidence=diagnosis.evidence,
+                )
+                if diagnosis_history:
+                    diagnosis_history[-1] = diagnosis.category
+                new_crew = retry_crew(
+                    entity, incoming_edges, crew, diagnosis, attempt,
+                    edge_schemas=edge_schemas, system_context=system_context,
+                    provided_values=provided_values,
+                )
+                if new_crew is None:
+                    log("Max retries exceeded.")
+                    return BuildOutcome(
+                        result=EntityResult(
+                            id=entity.id,
+                            status=EntityStatus.FAILED,
+                            attempts=attempt + 1,
+                            failure_reason=f"{diagnosis.category}: {diagnosis.description}",
+                            failure_category=diagnosis.category.value,
+                        ),
+                    )
 
             crew = new_crew
 

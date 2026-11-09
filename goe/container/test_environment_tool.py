@@ -116,6 +116,7 @@ TOOL_TO_PACKAGE: Dict[str, str] = {
     "sshpass":      "sshpass",
     "ssh":          "openssh-client",
     "hydra":        "hydra",
+    "sqlmap":       "sqlmap",
     "nmap":         "nmap",
     "curl":         "curl",
     "wget":         "wget",
