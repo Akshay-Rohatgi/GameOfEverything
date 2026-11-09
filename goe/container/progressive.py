@@ -246,6 +246,37 @@ class ProgressiveEnvironment:
         """The entity_id of the most recent snapshot (or None if no snapshots yet)."""
         return self._current_snapshot
 
+    @property
+    def target_container(self):
+        """The running target container (a producer that peers can connect to)."""
+        return self._target_container
+
+    def attach_peer(self, alias: str, peer_container) -> None:
+        """Connect another system's container onto this env's network under ``alias``.
+
+        Lets an entity building here reach a peer host (e.g. a web tier reaching its
+        DB host) by its hostname during the build, mirroring the flat network the
+        chain test uses at deploy time. Idempotent: a peer already attached (or a
+        self-attach) is a no-op.
+        """
+        if peer_container is None or self._network is None:
+            return
+        if peer_container.id == getattr(self._target_container, "id", None):
+            return
+        import docker.errors
+
+        try:
+            self._network.connect(peer_container, aliases=[alias])
+            logger.info(
+                f"[ProgressiveEnvironment] Attached peer '{alias}' "
+                f"to network {self._network.name}"
+            )
+        except docker.errors.APIError as e:
+            # Already connected / endpoint exists → fine. Re-raise anything else.
+            if "already exists" in str(e).lower() or "already connected" in str(e).lower():
+                return
+            logger.warning(f"[ProgressiveEnvironment] attach_peer('{alias}') failed: {e}")
+
     # ------------------------------------------------------------------
     # Deployment
     # ------------------------------------------------------------------
