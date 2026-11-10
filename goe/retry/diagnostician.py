@@ -79,13 +79,30 @@ class Diagnosis(BaseModel):
     evidence: str = ""
 
 
-def _render_procedure(procedure) -> str:
+def _render_procedure(procedure, ctx: dict | None = None) -> str:
     """Render the attacker steps that actually ran — step id, action, and assertion —
     so the diagnostician reasons from the real URLs/commands instead of inferring them
-    from logs (which may carry unrelated or stale requests)."""
+    from logs (which may carry unrelated or stale requests).
+
+    When ``ctx`` is given, each URL/command is interpolated with the same static run
+    context the executor used (``target_host``/``target_port``/``edges``), so the
+    diagnostician sees the ACTUAL dispatched value (e.g. ``http://target:5000/``) rather
+    than the stored template (``http://${target_host}:${target_port}/``). Without this,
+    the raw ``${...}`` placeholders in the template look like an "unresolved variable" bug
+    to the model even though the executor resolves them at runtime — a recurring false
+    procedure_bug diagnosis.
+    """
     steps = getattr(procedure, "procedure", None) or []
     if not steps:
         return "(no procedure recorded)"
+
+    _interp = None
+    if ctx:
+        try:
+            from goe.executor.interpolation import interpolate as _interp
+        except Exception:
+            _interp = None
+
     lines = []
     for s in steps:
         a = getattr(s, "action", None)
@@ -96,6 +113,11 @@ def _render_procedure(procedure) -> str:
             or getattr(a, "script", None)
             or ""
         )
+        if _interp and detail:
+            try:
+                detail = _interp(detail, ctx)
+            except Exception:
+                pass
         exp = getattr(s, "expect", None)
         exp_s = ""
         if exp is not None and hasattr(exp, "model_dump"):
@@ -112,8 +134,14 @@ def diagnose(
     result: "ProcedureResult",
     env: "TestEnvironment",
     procedure=None,
+    ctx: dict | None = None,
 ) -> Diagnosis:
-    """Run L1 god-view diagnosis on a failed procedure result."""
+    """Run L1 god-view diagnosis on a failed procedure result.
+
+    ``ctx`` is the static run context the executor used (target_host/target_port/edges);
+    passing it lets the rendered procedure show resolved URLs/commands instead of raw
+    ``${...}`` templates, preventing a false "unresolved variable" procedure_bug diagnosis.
+    """
     from goe.config import GoEConfig
     from goe.retry.probes import ProbeContext, execute_probes, select_probes
 
@@ -163,8 +191,10 @@ Failed steps:
 
 ## Attack Procedure
 
-The EXACT steps that ran (reason about the attacker's requests from THESE, not from logs):
-{_render_procedure(procedure)}
+The EXACT steps that ran, with ${{...}} references already resolved to the values the
+executor dispatched (reason about the attacker's requests from THESE, not from logs; any
+remaining ${{...}} is a runtime-captured value like ${{steps.*}}, NOT an unresolved-variable bug):
+{_render_procedure(procedure, ctx)}
 
 ## App Source
 

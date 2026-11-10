@@ -172,7 +172,7 @@ def run(
         for system in graph.systems:
             system_entities = [e for e in graph.entities if e.system_id == system.id]
             if len(system_entities) > 1 or system.services:
-                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}_{system.id}", os=system.os)
+                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}_{system.id}", os=system.os, hostname=system.network.hostname)
                 penv.setup()
                 # Register before provision() so the finally tears it down even
                 # if service provisioning fails partway through.

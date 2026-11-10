@@ -87,3 +87,22 @@ def test_reset_target_to_base_restarts_services():
         assert "PONG" in stdout
     finally:
         penv.teardown()
+
+
+# --- Unit tests (no Docker): attacker->target DNS invariant -----------------
+# Regression for the cross-host build-verify blocker: the attacker reaches the
+# target by its container --hostname, so get_target_host() MUST equal the
+# hostname the build container runs under (self._hostname). Returning a literal
+# "target" broke verify (HTTP 000 / status=None) once the build container began
+# running under the system's real network hostname.
+
+def test_get_target_host_matches_configured_hostname():
+    """get_target_host() returns the real hostname the target runs under."""
+    penv = ProgressiveEnvironment(system_id="s", scope="t", hostname="webhost")
+    assert penv.get_target_host() == "webhost"
+
+
+def test_get_target_host_defaults_to_target():
+    """With no hostname supplied, the historical default 'target' is preserved."""
+    penv = ProgressiveEnvironment(system_id="s", scope="t")
+    assert penv.get_target_host() == "target"

@@ -488,7 +488,7 @@ def build_entity(
                     console._line(f"\n[yellow]⚠[/yellow] Diagnosing failure...")
                 else:
                     log(f"Diagnosing failure (attempt {attempt})...")
-                diagnosis = diagnose(entity, crew.artifact, result, env, procedure=crew.procedure)
+                diagnosis = diagnose(entity, crew.artifact, result, env, procedure=crew.procedure, ctx=ctx)
 
             if console:
                 console.crew_retry(diagnosis.category.value, attempt, 3)
