@@ -249,6 +249,132 @@ def _sanitize_ssh_dir_perms(script: str) -> str:
     return script.rstrip() + "\n\n" + "\n".join(appended) + "\n"
 
 
+def _sanitize_world_readable_traversal(script: str) -> str:
+    """Make the parent dirs of a deliberately world-readable file traversable.
+
+    A "leak" entity (bash_history_leak, exposed-config, etc.) ``chmod 644`` a file so
+    an unprivileged attacker can read it — but a world-readable file is unreachable if
+    any ancestor directory lacks the ``o+x`` traverse bit. The LLM reliably sets the
+    FILE mode and forgets the DIRECTORY mode: e.g. ``useradd -m deploy`` leaves
+    ``/home/deploy`` at ``0700``, so ``nobody`` cannot ``cd`` into it to read the
+    ``0644`` ``.bash_history`` (observed P2 live failure, build/system/ubuntu/
+    design_flaw — the retry loop could not self-fix it). For every path the script
+    makes world-readable, append a deterministic ``chmod o+x`` of each ancestor
+    directory (statically known — the paths are literals), so traversal matches the
+    intended read access.
+
+    Scope guards: only paths the script makes world-readable (``o+r``) are considered,
+    so private material left at ``0600`` is never exposed; ``/`` is never chmod-ed; and
+    any ``.ssh`` ancestor is skipped so this never re-loosens a dir that
+    ``_sanitize_ssh_dir_perms`` just forced to ``0700`` (sshd StrictModes). No-op when
+    nothing is made world-readable.
+    """
+    if not script:
+        return script
+
+    import re
+
+    def _world_readable(mode: str) -> bool:
+        # Numeric mode (3- or 4-digit octal): the "other" bits are the last digit.
+        if mode.isdigit():
+            return bool(int(mode[-1]) & 4)
+        # Symbolic mode granting read to other/all: o+r, a+r, o=...r, a=...r, bare +r.
+        return bool(re.search(r"(?:^|,)\s*[oa]?[+=][rwxXst]*r", mode))
+
+    files: list[str] = []
+    # `chmod <mode> <path>` where <mode> grants world read. Stop the path at the first
+    # shell metacharacter so trailing `&&`, `;`, redirects etc. are not captured.
+    for m in re.finditer(r"\bchmod\s+(\S+)\s+(/[^\s;&|>'\"]+)", script):
+        mode, path = m.group(1), m.group(2).strip("\"'")
+        if _world_readable(mode):
+            files.append(path)
+    if not files:
+        return script
+
+    # Collect every ancestor directory of each world-readable path (excluding `/` and
+    # any `.ssh` dir), preserving first-seen order.
+    dirs: list[str] = []
+    for f in files:
+        parts = f.rstrip("/").split("/")  # ['', 'home', 'deploy', '.bash_history']
+        for i in range(len(parts) - 1, 1, -1):  # parents only, skip the leaf
+            d = "/".join(parts[:i])
+            if not d or d == "/" or d.rsplit("/", 1)[-1] == ".ssh":
+                continue
+            if d not in dirs:
+                dirs.append(d)
+    if not dirs:
+        return script
+
+    appended = [
+        "# [harness] a world-readable file is unreachable unless every parent dir is "
+        "traversable; add o+x so the intended reader can reach it."
+    ]
+    for d in dirs:
+        appended.append(f'[ -d "{d}" ] && chmod o+x "{d}"')
+    return script.rstrip() + "\n\n" + "\n".join(appended) + "\n"
+
+
+def _sanitize_env_source_printenv(procedure):
+    """Rewrite the ``source <file> && printenv VAR`` idiom so a sourced ``KEY=VALUE`` file's
+    variables actually reach the process environment that ``printenv`` reads.
+
+    ``/etc/environment`` (and similar files) is plain ``KEY=VALUE`` with no ``export``, so
+    ``source``-ing it sets *shell* variables that ``printenv`` — and any child process —
+    never sees. The observed P2 ``env_vars_leak`` live failure was exactly this: the
+    attacker step ``source /etc/environment && printenv DB_PASSWORD`` printed nothing. On
+    top of that, ``source`` is a bashism that fails under ``/bin/sh``.
+
+    The fix wraps the source in ``set -a`` / ``set +a`` (allexport) and uses POSIX ``.``,
+    so every assignment the file makes is exported and readable, under any shell. Only a
+    command that BOTH sources a file AND reads it back via ``printenv`` is touched — an
+    ordinary ``source`` (profile scripts that already ``export``) is left alone. This is a
+    deterministic procedure-side sanitizer, the attacker-command parallel to the three
+    deploy-script sanitizers above; it rewrites at run time without mutating the stored
+    procedure (so the no-op guards and diagnostician still see the crew's own output).
+    """
+    if procedure is None:
+        return procedure
+
+    import re
+
+    # A `source <file>` / `. <file>` token: a leading delimiter (so `./x` and `..` are not
+    # matched — `.` must be followed by whitespace then a path), the verb, and the path up
+    # to the next shell metachar. Rewritten to an allexport dot-source.
+    _src = re.compile(r"(?P<lead>^|[\s;&|(\"'])(?:source|\.)[ \t]+(?P<file>[^\s;&|)\"']+)")
+
+    def _rewrite(cmd: str) -> str:
+        if not cmd or "printenv" not in cmd:
+            return cmd
+        if not _src.search(cmd):
+            return cmd
+        return _src.sub(lambda m: f"{m.group('lead')}set -a; . {m.group('file')}; set +a", cmd)
+
+    steps = getattr(procedure, "procedure", None) or []
+    new_steps = []
+    changed = False
+    for step in steps:
+        action = getattr(step, "action", None)
+        cmd = getattr(action, "command", None)
+        if isinstance(cmd, str):
+            new_cmd = _rewrite(cmd)
+            if new_cmd != cmd:
+                try:
+                    new_action = action.model_copy(update={"command": new_cmd})
+                    new_steps.append(step.model_copy(update={"action": new_action}))
+                    changed = True
+                    continue
+                except Exception:
+                    pass  # fall through: keep the step as-is if the copy fails
+        new_steps.append(step)
+
+    if not changed:
+        return procedure
+    try:
+        return procedure.model_copy(update={"procedure": new_steps})
+    except Exception:
+        return procedure
+
+
 def _procedure_unchanged(old, new) -> bool:
     """True when a retry produced the same procedure it started with — a ``procedure_bug``
     fix that changed nothing, so re-testing it would fail identically."""
@@ -256,6 +382,147 @@ def _procedure_unchanged(old, new) -> bool:
         return old is not None and new is not None and old.model_dump() == new.model_dump()
     except Exception:
         return False
+
+
+def _artifact_unchanged(old, new) -> bool:
+    """True when a retry produced the same build artifact it started with — an
+    ``implementation_bug``/``design_flaw`` fix that regenerated a byte-identical app, so
+    re-deploying and re-testing it would fail identically. Mirror of
+    :func:`_procedure_unchanged` for the app side of the crew."""
+    try:
+        return old is not None and new is not None and old.model_dump() == new.model_dump()
+    except Exception:
+        return False
+
+
+def _regenerated_artifact_unchanged(category, old_crew, new_crew) -> bool:
+    """True when a regen left the artifact that ``category`` is responsible for changing
+    byte-identical — a guaranteed no-op that will reproduce the same failure on re-test.
+
+    This generalises the old procedure-only no-op guard across every category: a
+    ``procedure_bug`` must change the *procedure*; an ``implementation_bug`` or
+    ``design_flaw`` must change the *app artifact*. Comparing the wrong-for-the-category
+    artifact would miss the no-op (e.g. an implementation_bug that re-emits the same app
+    but a cosmetically different procedure)."""
+    from goe.retry.diagnostician import DiagnosisCategory
+
+    if category == DiagnosisCategory.procedure_bug:
+        return _procedure_unchanged(
+            getattr(old_crew, "procedure", None), getattr(new_crew, "procedure", None)
+        )
+    return _artifact_unchanged(
+        getattr(old_crew, "artifact", None), getattr(new_crew, "artifact", None)
+    )
+
+
+def _step_ids(procedure) -> list[str]:
+    """Ordered step ids declared in a procedure (empty list if none)."""
+    steps = getattr(procedure, "procedure", None) or []
+    return [sid for sid in (getattr(s, "step_id", None) for s in steps) if sid]
+
+
+def _changed_step_ids(old_proc, new_proc) -> set[str]:
+    """Step ids whose definition differs between two procedures — added, removed, or an
+    action/expect/outputs change. Used to tell *which* steps a procedure fix actually
+    touched, not merely whether anything changed."""
+    def _by_id(p) -> dict:
+        out: dict = {}
+        for s in (getattr(p, "procedure", None) or []):
+            sid = getattr(s, "step_id", None)
+            if not sid:
+                continue
+            try:
+                out[sid] = s.model_dump()
+            except Exception:
+                out[sid] = None
+        return out
+
+    old, new = _by_id(old_proc), _by_id(new_proc)
+    return {sid for sid in set(old) | set(new) if old.get(sid) != new.get(sid)}
+
+
+def _cited_step_ids(text: str, procedure) -> list[str]:
+    """Step ids that exist in ``procedure`` and are named (case-insensitively, as whole
+    words) in ``text`` — the steps a diagnosis explicitly points its fix at."""
+    import re
+
+    ids = _step_ids(procedure)
+    if not ids or not text:
+        return []
+    low = text.lower()
+    return [sid for sid in ids if re.search(rf"\b{re.escape(sid.lower())}\b", low)]
+
+
+def _cited_steps_left_unchanged(diagnosis, result, old_proc, new_proc) -> list[str]:
+    """Step ids the diagnosis blames (named in its text, or the failed step) that a
+    procedure fix left byte-identical while still existing in the new procedure.
+
+    These are fixes that regenerated *some* step but not the one the diagnosis said was
+    wrong — re-testing them reproduces the same failure. Returned so the caller can
+    re-prompt with a targeted "you must change step N" instead of burning a test cycle.
+    """
+    cited = set(_cited_step_ids(
+        (getattr(diagnosis, "description", "") or "") + " "
+        + (getattr(diagnosis, "evidence", "") or ""),
+        old_proc,
+    ))
+    failed = getattr(result, "failed_step", None)
+    if failed:
+        cited.add(failed)
+    if not cited:
+        return []
+    changed = _changed_step_ids(old_proc, new_proc)
+    new_ids = set(_step_ids(new_proc))
+    return [sid for sid in cited if sid in new_ids and sid not in changed]
+
+
+# Diagnosis free-text that describes fixing the attacker's request/assertion — i.e. a
+# verify-step defect that ``fix_procedure`` resolves — even when the LLM labelled it an
+# implementation_bug. Kept tight so a genuine app defect (a 500, a missing column) is not
+# mis-routed away from the developer.
+_VERIFY_STEP_FIX_SIGNALS = (
+    "assertion",
+    "the expect",
+    "expected assertion",
+    "wrong url",
+    "wrong path",
+    "wrong endpoint",
+    "wrong payload",
+    "wrong request",
+    "wrong method",
+    "fix the procedure",
+    "fix the attacker",
+    "re-run the attacker",
+    "rerun the attacker",
+    "attack procedure is wrong",
+    "attacker step",
+    "procedure step",
+)
+
+
+def _should_reroute_to_procedure(diagnosis, result, procedure) -> bool:
+    """True when an ``implementation_bug`` diagnosis actually describes a verify-step
+    defect (the attacker's request or assertion is wrong, not the app), so it should
+    route to ``fix_procedure`` rather than regenerate the developer artifact.
+
+    Conservative by construction: fires only when the diagnosis BOTH names a concrete,
+    existing procedure step (or the run's failed step) AND its text uses explicit
+    procedure/assertion-fix language. A status/exit-code mismatch the app alone can cause
+    is never re-routed unless the diagnosis itself blames the step. Even a wrong guess is
+    self-correcting — the generalised no-op guard escalates a no-op procedure fix straight
+    back to implementation_bug."""
+    from goe.retry.diagnostician import DiagnosisCategory
+
+    if getattr(diagnosis, "category", None) != DiagnosisCategory.implementation_bug:
+        return False
+    text = ((getattr(diagnosis, "description", "") or "") + " "
+            + (getattr(diagnosis, "evidence", "") or "")).lower()
+    if not any(sig in text for sig in _VERIFY_STEP_FIX_SIGNALS):
+        return False
+    names_step = bool(_cited_step_ids(text, procedure)) or bool(
+        getattr(result, "failed_step", None)
+    )
+    return names_step
 
 
 def build_entity(
@@ -426,6 +693,11 @@ def build_entity(
             # overriding a `chmod 777 /root/.ssh` the dev adds for a root-Redis BGSAVE
             # key injection (root writes a 0700 dir fine; 777 is what breaks the login).
             script = _sanitize_ssh_dir_perms(script)
+            # A deliberately world-readable "leak" file (0644 .bash_history, config,
+            # etc.) is unreachable if a parent dir lacks o+x — the LLM sets the file
+            # mode but forgets the dir traverse bit (e.g. useradd -m leaves /home/deploy
+            # at 0700). Add o+x to each ancestor so the intended reader can reach it.
+            script = _sanitize_world_readable_traversal(script)
         else:
             script = registry.deploy(runtime, artifact)
         # Deterministically neutralize `systemctl` for no-systemd containers: the service
@@ -484,7 +756,7 @@ def build_entity(
             )
             forced_deploy_failure = True
         else:
-            result = run_procedure(crew.procedure, env, ctx)
+            result = run_procedure(_sanitize_env_source_printenv(crew.procedure), env, ctx)
             forced_deploy_failure = False
 
         # Distro lint — a clean build that still carries Ubuntu-isms for this `os` is
@@ -547,6 +819,21 @@ def build_entity(
                     log(f"Diagnosing failure (attempt {attempt})...")
                 diagnosis = diagnose(entity, crew.artifact, result, env, procedure=crew.procedure, ctx=ctx)
 
+                # Route correction: a verify-step defect (the attacker's request/assertion
+                # is wrong) that the diagnostician mislabelled implementation_bug should
+                # fix the procedure, not regenerate the app. Scoped to LLM diagnoses — the
+                # forced lint/deploy categories above are already deterministic.
+                if _should_reroute_to_procedure(diagnosis, result, crew.procedure):
+                    log(f"Re-routing implementation_bug → procedure_bug: diagnosis describes "
+                        f"a verify-step fix. {diagnosis.description[:80]}")
+                    diagnosis = Diagnosis(
+                        category=DiagnosisCategory.procedure_bug,
+                        description="Re-routed from implementation_bug — the attack procedure "
+                                    "(request/assertion) is what needs fixing, not the app. "
+                                    + diagnosis.description,
+                        evidence=diagnosis.evidence,
+                    )
+
             if console:
                 console.crew_retry(diagnosis.category.value, attempt, 3)
                 console._line(f"  [dim]{diagnosis.description[:100]}{'...' if len(diagnosis.description) > 100 else ''}[/dim]")
@@ -569,54 +856,81 @@ def build_entity(
 
             diagnosis_history.append(diagnosis.category)
 
-            new_crew = retry_crew(
-                entity, incoming_edges, crew, diagnosis, attempt, edge_schemas=edge_schemas,
-                system_context=system_context, provided_values=provided_values,
-            )
-            if new_crew is None:
+            def _regen(diag):
+                return retry_crew(
+                    entity, incoming_edges, crew, diag, attempt, edge_schemas=edge_schemas,
+                    system_context=system_context, provided_values=provided_values,
+                )
+
+            def _max_retries_outcome(diag):
                 log("Max retries exceeded.")
                 return BuildOutcome(
                     result=EntityResult(
                         id=entity.id,
                         status=EntityStatus.FAILED,
                         attempts=attempt + 1,
-                        failure_reason=f"{diagnosis.category}: {diagnosis.description}",
-                        failure_category=diagnosis.category.value,
+                        failure_reason=f"{diag.category}: {diag.description}",
+                        failure_category=diag.category.value,
                     ),
                 )
 
-            # No-op guard: a procedure_bug "fix" that left the procedure unchanged will
-            # fail identically on re-test. Don't burn a deploy/test cycle on it — escalate
-            # to implementation_bug so the retry regenerates the app+attacker (something
-            # that can actually change the outcome). One extra crew regen, but it saves a
-            # guaranteed-wasted test cycle and the eventual full-crew design_flaw escalation.
-            if (diagnosis.category == DiagnosisCategory.procedure_bug
-                    and _procedure_unchanged(crew.procedure, new_crew.procedure)):
-                log("fix_procedure produced no change — escalating procedure_bug → implementation_bug")
-                diagnosis = Diagnosis(
-                    category=DiagnosisCategory.implementation_bug,
-                    description="Procedure fix was a no-op (procedure already matches the app); "
-                                "the defect is in the implementation. " + diagnosis.description,
-                    evidence=diagnosis.evidence,
-                )
-                if diagnosis_history:
-                    diagnosis_history[-1] = diagnosis.category
-                new_crew = retry_crew(
-                    entity, incoming_edges, crew, diagnosis, attempt,
-                    edge_schemas=edge_schemas, system_context=system_context,
-                    provided_values=provided_values,
-                )
-                if new_crew is None:
-                    log("Max retries exceeded.")
-                    return BuildOutcome(
-                        result=EntityResult(
-                            id=entity.id,
-                            status=EntityStatus.FAILED,
-                            attempts=attempt + 1,
-                            failure_reason=f"{diagnosis.category}: {diagnosis.description}",
-                            failure_category=diagnosis.category.value,
-                        ),
+            new_crew = _regen(diagnosis)
+            if new_crew is None:
+                return _max_retries_outcome(diagnosis)
+
+            # Direction 1 — enforce the diagnosis→regen link at step granularity. A
+            # procedure fix that rewrote *some* step but left the step(s) the diagnosis
+            # blamed untouched will fail identically on those steps. Re-prompt once,
+            # naming the steps that must change, before spending a test cycle. (A fix that
+            # changed *nothing* is handled by the generalised no-op guard below.)
+            if diagnosis.category == DiagnosisCategory.procedure_bug:
+                stuck = _cited_steps_left_unchanged(
+                    diagnosis, result, crew.procedure, new_crew.procedure)
+                if stuck and not _procedure_unchanged(crew.procedure, new_crew.procedure):
+                    log(f"fix_procedure changed other steps but left cited step(s) "
+                        f"{', '.join(stuck)} unchanged — re-prompting with a targeted fix")
+                    targeted = Diagnosis(
+                        category=DiagnosisCategory.procedure_bug,
+                        description=(f"You MUST modify step(s) {', '.join(stuck)} — the previous "
+                                     f"fix left them unchanged, so the test failed identically. "
+                                     + diagnosis.description),
+                        evidence=diagnosis.evidence,
                     )
+                    retried = _regen(targeted)
+                    if retried is not None:  # best-effort; keep prior regen if ladder exhausted
+                        new_crew = retried
+
+            # Direction 2 — generalised no-op guard. If the regen left the artifact this
+            # category is responsible for changing byte-identical, re-testing is guaranteed
+            # to reproduce the failure. Escalate one rung (procedure_bug → implementation_bug
+            # → design_flaw) and regenerate something that can actually change the outcome,
+            # rather than burning a deploy/test cycle. One extra crew regen trades cheaply
+            # against a wasted Docker cycle.
+            _noop_escalation = {
+                DiagnosisCategory.procedure_bug: DiagnosisCategory.implementation_bug,
+                DiagnosisCategory.implementation_bug: DiagnosisCategory.design_flaw,
+            }
+            if _regenerated_artifact_unchanged(diagnosis.category, crew, new_crew):
+                nxt = _noop_escalation.get(diagnosis.category)
+                if nxt is not None:
+                    log(f"{diagnosis.category.value} fix was a no-op (artifact unchanged) — "
+                        f"escalating to {nxt.value}")
+                    diagnosis = Diagnosis(
+                        category=nxt,
+                        description="Previous fix was a no-op (the regenerated artifact matched "
+                                    "the original); escalating. " + diagnosis.description,
+                        evidence=diagnosis.evidence,
+                    )
+                    if diagnosis_history:
+                        diagnosis_history[-1] = diagnosis.category
+                    new_crew = _regen(diagnosis)
+                    if new_crew is None:
+                        return _max_retries_outcome(diagnosis)
+                else:
+                    # design_flaw already regenerates the full crew — nowhere left to
+                    # escalate. Proceed; the attempt ladder bounds further retries.
+                    log("design_flaw full-crew regen was a no-op — no further escalation; "
+                        "proceeding under the attempt ladder")
 
             crew = new_crew
 
@@ -643,7 +957,7 @@ def build_entity(
 
             if console:
                 console.crew_test_start(attempt=attempt + 1)
-            result = run_procedure(crew.procedure, env, ctx)
+            result = run_procedure(_sanitize_env_source_printenv(crew.procedure), env, ctx)
 
             # Re-lint the regenerated crew so a retry can't slip an Ubuntu-ism through.
             result, lint_findings, forced_lint_failure = _apply_distro_lint(

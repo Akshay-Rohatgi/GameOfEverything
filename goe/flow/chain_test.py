@@ -339,6 +339,31 @@ def run_chain_test(
                 )
             )
 
+        # ---- Static pre-execution lint (deterministic) ----------------------
+        # Catch planning errors that WILL fail at runtime — a write to a root-owned path
+        # through the unprivileged web-injection vector (option 2), or a side-effecting
+        # injection whose assertion only checks transport status (option 3) — and send them
+        # to fix_chain ONCE before we spend an execution attempt on a known-broken chain.
+        from goe.flow.chain_lint import lint_chain
+
+        lint_issues = lint_chain(chain_procedure)
+        if lint_issues:
+            logger.warning(
+                f"ChainTest: static lint flagged {len(lint_issues)} planning issue(s); "
+                f"requesting a deterministic fix before execution:\n  - "
+                + "\n  - ".join(lint_issues)
+            )
+            lint_diagnosis = (
+                "A deterministic pre-execution lint found planning errors that will fail at "
+                "runtime. Fix EXACTLY these before we execute (do not change working steps):\n"
+                + "\n".join(f"- {i}" for i in lint_issues)
+            )
+            try:
+                chain_procedure = chain_attacker.fix_chain(chain_procedure, lint_diagnosis)
+            except ProcedureParseError as e:
+                # Non-fatal: proceed with the original chain; execution will surface the issue.
+                logger.warning(f"ChainTest: lint fix_chain failed to parse, proceeding as-is: {e}")
+
         # ---- Phase 3: execute + retry loop ----------------------------------
         # Resolve the build-time-static ctx (systems + edge concrete values). Every
         # consumed edge param should carry a concrete value by now (resolve.py + the

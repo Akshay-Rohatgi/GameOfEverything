@@ -118,15 +118,18 @@ def attack(
     cfg = GoEConfig.get()
     model = cfg.model_for("chain_attacker")
 
+    from goe.flow.chain_lint import privesc_grounding
+
     graph_summary = _graph_summary(graph)
     entity_procedures = _per_entity_procedures(built)
     staged_section = _staged_keys_section(staged_keys)
+    privesc_section = privesc_grounding(graph, built)
 
     user_msg = f"""{graph_summary}
 
 {entity_procedures}
 
-{staged_section}Write a single end-to-end YAML procedure that exploits each entity in order, chaining
+{privesc_section}{staged_section}Write a single end-to-end YAML procedure that exploits each entity in order, chaining
 outputs across systems to complete the full attack path. The final step must verify
 that the attacker has achieved the terminal goal (the last entity in the chain).
 

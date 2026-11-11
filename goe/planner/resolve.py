@@ -77,28 +77,40 @@ def _resolve_creds(graph: "EntityGraph", edge) -> None:
                 edge.params[key].concrete = password
 
 
+def _target_system(graph: "EntityGraph", edge):
+    """The system this edge points at.
+
+    Normally that is the target entity's system. But an operator edge that fans out to
+    several consumers on one host carries ``to_entity=None`` (there is no single target
+    entity) — e.g. ``op_to_internal_host_22`` reaching SSH on the internal host, consumed
+    by both the bash-history and env-vars leaks. For those, resolve the system by matching
+    the edge's ``host`` param (its concrete, else its structural name) against a system
+    hostname, so host/port still fill instead of leaving a cross-host edge_gap. The
+    structural host is already the target hostname (``internalhost``), so this is a
+    deterministic lookup, not a guess."""
+    if edge.to_entity is not None:
+        entity = graph.entity_by_id(edge.to_entity)
+        if entity is not None:
+            return graph.system_by_id(entity.system_id)
+        return None
+    host_param = edge.params.get("host")
+    if host_param is not None:
+        wanted = host_param.concrete or host_param.structural
+        if wanted:
+            for system in graph.systems:
+                if system.network.hostname == wanted:
+                    return system
+    return None
+
+
 def _resolve_host(graph: "EntityGraph", edge) -> str | None:
-    if edge.to_entity is None:
-        return None
-    entity = graph.entity_by_id(edge.to_entity)
-    if entity is None:
-        return None
-    system = graph.system_by_id(entity.system_id)
-    if system is None:
-        return None
-    return system.network.hostname
+    system = _target_system(graph, edge)
+    return system.network.hostname if system is not None else None
 
 
 def _resolve_port(graph: "EntityGraph", edge) -> str | None:
-    if edge.to_entity is None:
-        return None
-    entity = graph.entity_by_id(edge.to_entity)
-    if entity is None:
-        return None
-    system = graph.system_by_id(entity.system_id)
-    if system is None:
-        return None
-    if not system.network.exposed_ports:
+    system = _target_system(graph, edge)
+    if system is None or not system.network.exposed_ports:
         return None
 
     # If the structural port matches an exposed port, use it
@@ -107,7 +119,7 @@ def _resolve_port(graph: "EntityGraph", edge) -> str | None:
         structural_port_int = int(structural_port_str)
         if structural_port_int in system.network.exposed_ports:
             return structural_port_str
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, TypeError):
         pass
 
     # Otherwise fall back to the first exposed port
