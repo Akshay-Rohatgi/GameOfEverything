@@ -196,6 +196,59 @@ def _fixup_served_ssh_keys(script: str, provided_values: dict | None) -> str:
     return script.rstrip() + "\n\n" + "\n".join(appended) + "\n"
 
 
+def _l2_verify_port(runtime, artifact, registry):
+    """Port the L2 build-verify should target: where the app ACTUALLY bound.
+
+    Prefer ``artifact.port`` (the developer's real ``app.run(port=...)``) over the
+    runtime template default. The developer sometimes binds a different port than the
+    template specifies (e.g. ``:80`` where ``flask.yaml`` says ``:5000``); the verify
+    curls ``${target_port}``, so targeting the template port would miss a healthy app
+    (HTTP 000 / status=None) and fail the build on a phantom. Returns ``None`` for
+    ``system`` entities (no web server) and falls back to the template port when the
+    entity reports no port of its own.
+    """
+    if runtime == "system":
+        return None
+    return getattr(artifact, "port", None) or registry.port_for(runtime)
+
+
+def _sanitize_ssh_dir_perms(script: str) -> str:
+    """Force any ``.ssh`` directory to sshd-safe ``0700``, overriding an LLM loosen.
+
+    sshd StrictModes unconditionally refuses a ``~/.ssh`` that is group- or
+    world-writable ("Authentication refused: bad ownership or modes for directory"),
+    so a key-based login silently fails with ``Permission denied (publickey)``.
+    Developers building a Redis-BGSAVE key-injection entity routinely
+    ``chmod 777 /root/.ssh`` so a root-running Redis can drop the RDB there — which is
+    both unnecessary (root writes a ``0700`` dir it owns) and fatal (sshd then rejects
+    the injected key). Append, at the END of the deploy script, a deterministic
+    ``chmod 700`` of every ``.ssh`` directory the script touches, running after any
+    earlier loosen. Safe: ``0700`` is the mode sshd requires, so it can never break a
+    valid login, and a root writer can still write into it at attack time. No-op when
+    the script references no ``.ssh`` directory path.
+    """
+    if not script:
+        return script
+
+    import re
+
+    # Absolute ``.../.ssh`` directory paths referenced anywhere in the script.
+    dirs: list[str] = []
+    for m in re.finditer(r"(/[^\s;&|>'\"]*/\.ssh)(?=[\s;&|>'\"/]|$)", script):
+        dirs.append(m.group(1))
+    dirs = list(dict.fromkeys(dirs))
+    if not dirs:
+        return script
+
+    appended = [
+        "# [harness] sshd StrictModes: a group/world-writable ~/.ssh is rejected; "
+        "force 0700 (root can still write into it)."
+    ]
+    for d in dirs:
+        appended.append(f'[ -d "{d}" ] && chmod 700 "{d}"')
+    return script.rstrip() + "\n\n" + "\n".join(appended) + "\n"
+
+
 def _procedure_unchanged(old, new) -> bool:
     """True when a retry produced the same procedure it started with — a ``procedure_bug``
     fix that changed nothing, so re-testing it would fail identically."""
@@ -369,6 +422,10 @@ def build_entity(
             # Deterministically re-write any SSH key this entity serves (exact PEM
             # bytes + intended perms), overriding the LLM's fragile key handling.
             script = _fixup_served_ssh_keys(script, provided_values)
+            # sshd rejects a group/world-writable ~/.ssh — force any such dir to 0700,
+            # overriding a `chmod 777 /root/.ssh` the dev adds for a root-Redis BGSAVE
+            # key injection (root writes a 0700 dir fine; 777 is what breaks the login).
+            script = _sanitize_ssh_dir_perms(script)
         else:
             script = registry.deploy(runtime, artifact)
         # Deterministically neutralize `systemctl` for no-systemd containers: the service
@@ -401,7 +458,7 @@ def build_entity(
                 dump("deploy stderr", stderr)
 
         # Phase 3 — L2 test
-        port = None if runtime == "system" else registry.port_for(runtime)
+        port = _l2_verify_port(runtime, crew.artifact, registry)
         ctx = {
             "target_host": env.get_target_host(),
             "attacker_host": env.get_attacker_host(),

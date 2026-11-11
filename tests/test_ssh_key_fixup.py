@@ -79,3 +79,59 @@ def test_no_ssh_key_edge_is_noop():
 def test_empty_inputs_are_noop():
     assert _fixup_served_ssh_keys("", {"e": {"cred_type": "ssh_key", "secret": B64}}) == ""
     assert _fixup_served_ssh_keys("echo hi", None) == "echo hi"
+
+
+# --- _sanitize_ssh_dir_perms: force a group/world-writable ~/.ssh back to 0700 ----
+# sshd StrictModes rejects a world-writable .ssh dir, so a Redis-BGSAVE key injection
+# that `chmod 777 /root/.ssh` fails the subsequent SSH login. The sanitizer appends a
+# `chmod 700` of every .ssh dir, running last to override the loosen.
+
+from goe.build import _sanitize_ssh_dir_perms
+
+
+def test_sanitize_appends_chmod_700_for_world_writable_ssh_dir():
+    script = "mkdir -p /root/.ssh\nchmod 700 /root/.ssh\nchmod 777 /root/.ssh\n"
+    out = _sanitize_ssh_dir_perms(script)
+    assert out.rstrip().endswith('[ -d "/root/.ssh" ] && chmod 700 "/root/.ssh"')
+    # original content is preserved; the corrective runs AFTER the chmod 777
+    assert out.index("chmod 777 /root/.ssh") < out.index('chmod 700 "/root/.ssh"')
+
+
+def test_sanitize_handles_multiple_distinct_ssh_dirs_once_each():
+    script = "chmod 777 /root/.ssh\nchmod 0777 /home/svc/.ssh\nchmod 777 /root/.ssh\n"
+    out = _sanitize_ssh_dir_perms(script)
+    assert out.count('chmod 700 "/root/.ssh"') == 1
+    assert out.count('chmod 700 "/home/svc/.ssh"') == 1
+
+
+def test_sanitize_noop_without_ssh_dir():
+    assert _sanitize_ssh_dir_perms("echo hi\nchmod 777 /tmp/data\n") == "echo hi\nchmod 777 /tmp/data\n"
+    assert _sanitize_ssh_dir_perms("") == ""
+
+
+# --- _l2_verify_port: verify against the port the app actually bound ---------------
+from goe.build import _l2_verify_port
+
+
+class _Art:
+    def __init__(self, port):
+        self.port = port
+
+
+class _Reg:
+    def port_for(self, runtime):
+        return 5000  # template default (e.g. flask)
+
+
+def test_l2_verify_port_prefers_artifact_port():
+    # App bound :80 though the template default is 5000 -> verify must curl :80.
+    assert _l2_verify_port("flask", _Art(80), _Reg()) == 80
+
+
+def test_l2_verify_port_falls_back_to_template():
+    # Entity reports no port of its own -> use the runtime template default.
+    assert _l2_verify_port("flask", _Art(None), _Reg()) == 5000
+
+
+def test_l2_verify_port_none_for_system():
+    assert _l2_verify_port("system", _Art(6379), _Reg()) is None
