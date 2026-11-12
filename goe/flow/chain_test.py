@@ -253,6 +253,7 @@ def run_chain_test(
     Returns:
         ChainTestResult with PASSED/FAILED status.
     """
+    from goe.build import _sanitize_procedure_commands
     from goe.construction_crew import chain_attacker
     from goe.container.topology_environment import TopologyEnvironment
     from goe.executor.interpolation import resolve_static_ctx
@@ -383,7 +384,13 @@ def run_chain_test(
             logger.info(f"ChainTest: executing chain procedure (attempt {attempt + 1})…")
             if console:
                 console.chain_test_executing(attempt + 1, MAX_RETRIES)
-            exec_result = run_procedure(chain_procedure, env, ctx)
+            # Deterministic procedure-side sanitizers (SSH known-hosts hardening, psql
+            # --protocol strip, env-source/printenv) run at exec time, mirroring the
+            # per-entity build path — without mutating the stored chain procedure the
+            # diagnostician and packager still see.
+            exec_result = run_procedure(
+                _sanitize_procedure_commands(chain_procedure), env, ctx
+            )
 
             # Show step results if console is available
             if console and exec_result.steps:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -332,23 +333,31 @@ def _sanitize_env_source_printenv(procedure):
     deploy-script sanitizers above; it rewrites at run time without mutating the stored
     procedure (so the no-op guards and diagnostician still see the crew's own output).
     """
+    return _walk_commands(procedure, _rewrite_env_source_printenv_cmd)
+
+
+# A `source <file>` / `. <file>` token: a leading delimiter (so `./x` and `..` are not
+# matched — `.` must be followed by whitespace then a path), the verb, and the path up to
+# the next shell metachar. Rewritten to an allexport dot-source.
+_ENV_SRC = re.compile(r"(?P<lead>^|[\s;&|(\"'])(?:source|\.)[ \t]+(?P<file>[^\s;&|)\"']+)")
+
+
+def _rewrite_env_source_printenv_cmd(cmd: str) -> str:
+    if not cmd or "printenv" not in cmd:
+        return cmd
+    if not _ENV_SRC.search(cmd):
+        return cmd
+    return _ENV_SRC.sub(lambda m: f"{m.group('lead')}set -a; . {m.group('file')}; set +a", cmd)
+
+
+def _walk_commands(procedure, rewrite):
+    """Apply a per-command ``rewrite(cmd) -> cmd`` over every step's ``action.command``,
+    returning a new procedure (or the original when nothing changed). The shared engine
+    behind every deterministic procedure-side sanitizer: it never mutates the stored
+    procedure in place, so the no-op guards and diagnostician still see the crew's own
+    output."""
     if procedure is None:
         return procedure
-
-    import re
-
-    # A `source <file>` / `. <file>` token: a leading delimiter (so `./x` and `..` are not
-    # matched — `.` must be followed by whitespace then a path), the verb, and the path up
-    # to the next shell metachar. Rewritten to an allexport dot-source.
-    _src = re.compile(r"(?P<lead>^|[\s;&|(\"'])(?:source|\.)[ \t]+(?P<file>[^\s;&|)\"']+)")
-
-    def _rewrite(cmd: str) -> str:
-        if not cmd or "printenv" not in cmd:
-            return cmd
-        if not _src.search(cmd):
-            return cmd
-        return _src.sub(lambda m: f"{m.group('lead')}set -a; . {m.group('file')}; set +a", cmd)
-
     steps = getattr(procedure, "procedure", None) or []
     new_steps = []
     changed = False
@@ -356,7 +365,7 @@ def _sanitize_env_source_printenv(procedure):
         action = getattr(step, "action", None)
         cmd = getattr(action, "command", None)
         if isinstance(cmd, str):
-            new_cmd = _rewrite(cmd)
+            new_cmd = rewrite(cmd)
             if new_cmd != cmd:
                 try:
                     new_action = action.model_copy(update={"command": new_cmd})
@@ -373,6 +382,79 @@ def _sanitize_env_source_printenv(procedure):
         return procedure.model_copy(update={"procedure": new_steps})
     except Exception:
         return procedure
+
+
+# SSH command token: a leading delimiter, the `ssh`/`scp` executable, then a lookahead that
+# the next token is an actual ssh argument — an option (`-i`/`-o`/…), a `user@host`, or a
+# `${…}` host interpolation. That lookahead (not just `\s`) keeps a literal word "ssh" in an
+# echoed string from matching. The verb itself excludes `ssh-keygen`/`ssh-copy-id` (next char
+# `-`, not whitespace) and `sshpass` (next char `p`); the leading-delimiter class excludes a
+# path like `/root/.ssh/…` (the `ssh` there is preceded by `.`, not a delimiter).
+_SSH_TOK = re.compile(r"(?P<lead>^|[\s;&|(])(?P<verb>ssh|scp)(?=\s+(?:-|\$|\S*@))")
+
+
+def _rewrite_ssh_known_hosts(cmd: str) -> str:
+    """Make every ``ssh``/``scp`` invocation tolerate a changed/unknown host key.
+
+    ``StrictHostKeyChecking=no`` alone does NOT bypass ``WARNING: REMOTE HOST
+    IDENTIFICATION HAS CHANGED!`` — once a host key is pinned in ``known_hosts``, a key that
+    later differs (e.g. a container regenerated between retry attempts) is refused with
+    ``HOST KEY VERIFICATION FAILED`` regardless of that flag. The live P2 lateral-SSH hop
+    failed exactly this way. Pointing ``UserKnownHostsFile`` at ``/dev/null`` makes every
+    connection use a throwaway known-hosts store, so there is never a stale pin to collide
+    with. This has one correct answer, so we force it deterministically rather than coaxing
+    the attacker LLM. Idempotent: options already present are not duplicated.
+    """
+    if not cmd or not _SSH_TOK.search(cmd):
+        return cmd
+
+    def _inject(m: "re.Match") -> str:
+        opts = ""
+        if "UserKnownHostsFile" not in cmd:
+            opts += " -o UserKnownHostsFile=/dev/null"
+        if "StrictHostKeyChecking" not in cmd:
+            opts += " -o StrictHostKeyChecking=no"
+        return f"{m.group('lead')}{m.group('verb')}{opts}"
+
+    # Only inject once (after the first ssh/scp token); the presence checks above read the
+    # whole command, so a second token in the same command won't re-add existing options.
+    return _SSH_TOK.sub(_inject, cmd, count=1)
+
+
+# `--protocol[= ]<value>` anywhere in a psql command. Postgres' psql has no `--protocol`
+# option — it is a MySQL/MariaDB flag the attacker LLM cross-pollinates from the mysql
+# guidance. psql already speaks TCP whenever `-h <host>` is given, so dropping the flag is
+# loss-free.
+_PSQL_PROTOCOL = re.compile(r"\s--protocol(?:=|\s+)\S+")
+
+
+def _rewrite_psql_protocol(cmd: str) -> str:
+    """Strip the invalid ``--protocol=TCP`` flag the attacker invents on ``psql`` commands."""
+    if not cmd or "psql" not in cmd:
+        return cmd
+    return _PSQL_PROTOCOL.sub("", cmd)
+
+
+def _sanitize_procedure_commands(procedure):
+    """Run every deterministic procedure-side command rewriter in a single pass.
+
+    Composes the env-source/printenv fix, the SSH known-hosts hardening, and the psql
+    ``--protocol`` strip. One pass keeps the stored procedure untouched (see
+    ``_walk_commands``) while guaranteeing each command is corrected before execution,
+    whether it came from a per-entity crew or the cross-host chain attacker.
+    """
+    rewriters = (
+        _rewrite_env_source_printenv_cmd,
+        _rewrite_ssh_known_hosts,
+        _rewrite_psql_protocol,
+    )
+
+    def _rewrite_all(cmd: str) -> str:
+        for fn in rewriters:
+            cmd = fn(cmd)
+        return cmd
+
+    return _walk_commands(procedure, _rewrite_all)
 
 
 def _procedure_unchanged(old, new) -> bool:
@@ -756,7 +838,7 @@ def build_entity(
             )
             forced_deploy_failure = True
         else:
-            result = run_procedure(_sanitize_env_source_printenv(crew.procedure), env, ctx)
+            result = run_procedure(_sanitize_procedure_commands(crew.procedure), env, ctx)
             forced_deploy_failure = False
 
         # Distro lint — a clean build that still carries Ubuntu-isms for this `os` is
@@ -957,7 +1039,7 @@ def build_entity(
 
             if console:
                 console.crew_test_start(attempt=attempt + 1)
-            result = run_procedure(_sanitize_env_source_printenv(crew.procedure), env, ctx)
+            result = run_procedure(_sanitize_procedure_commands(crew.procedure), env, ctx)
 
             # Re-lint the regenerated crew so a retry can't slip an Ubuntu-ism through.
             result, lint_findings, forced_lint_failure = _apply_distro_lint(

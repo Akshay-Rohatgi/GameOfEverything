@@ -84,7 +84,7 @@ def _staged_keys_section(staged_keys: dict | None) -> str:
         "",
         "The private keys below are ALREADY written into your attacker container at the given",
         "paths, with mode 600 and valid PEM format (verified). To move laterally, run directly:",
-        "`ssh -i <path> -o StrictHostKeyChecking=no <user>@${system.<target_system_id>.host} <cmd>`.",
+        "`ssh -i <path> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null <user>@${system.<target_system_id>.host} <cmd>`.",
         "Do NOT read, cat, download, scp, recreate, base64-decode, or reformat these keys — they",
         "are ready to use as-is. There is no `fix key format` work to do.",
         "",
