@@ -40,6 +40,15 @@ config_vars:
     after_start: true
     apply: |
       if [ -n "{value}" ]; then
-        mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '{value}'; FLUSH PRIVILEGES;" 2>/dev/null || true
-        mysql -e "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{value}'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;" 2>/dev/null || true
+        # Create the remotely-reachable root@'%' account up front: cross-host
+        # consumers (e.g. a web app on another host) build BEFORE this DB entity
+        # runs its own setup.sh, so the remote account must already exist at
+        # provision time. Do it in ONE `mysql -e` call (one socket-authed session)
+        # and — critically — DO NOT alter root@'localhost' here. Setting a password
+        # on root@'localhost' switches it from unix_socket to password auth, which
+        # would deny every subsequent passwordless `mysql` call: both this recipe's
+        # own follow-ups AND the entity's weak_service_password script (which
+        # correctly sets the localhost password LAST, in a single session). Leaving
+        # root@'localhost' on unix_socket keeps those passwordless calls working.
+        mysql -e "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{value}'; ALTER USER 'root'@'%' IDENTIFIED BY '{value}'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;" 2>/dev/null || true
       fi

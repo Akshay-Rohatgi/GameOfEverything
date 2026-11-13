@@ -36,7 +36,7 @@ body: '{"key": "value"}'
 **Shell from attacker container:**
 ```yaml
 type: exec_attacker
-command: "ssh -o StrictHostKeyChecking=no user@${system.db_system.host} 'id'"
+command: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null user@${system.db_system.host} 'id'"
 ```
 
 **Shell background from attacker (fire and forget — for listeners):**
@@ -63,7 +63,7 @@ Use the exact `system_id` values from the graph (e.g. `${system.web_system.host}
 
 For SSH pivots, use the hostname directly:
 ```yaml
-command: "sshpass -p '${edge.webapp_to_db_creds.password}' ssh -o StrictHostKeyChecking=no ${edge.webapp_to_db_creds.user}@${system.db_system.host} 'cat /etc/passwd'"
+command: "sshpass -p '${edge.webapp_to_db_creds.password}' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${edge.webapp_to_db_creds.user}@${system.db_system.host} 'cat /etc/passwd'"
 ```
 
 ### Edge Values (concrete, build-time filled)

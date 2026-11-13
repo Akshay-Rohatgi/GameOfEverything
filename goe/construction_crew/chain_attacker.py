@@ -75,15 +75,39 @@ def _parse(raw: str) -> "Procedure":
     return Procedure.model_validate(data)
 
 
+def _staged_keys_section(staged_keys: dict | None) -> str:
+    """Render the pre-staged SSH key info so the attacker uses the key file directly."""
+    if not staged_keys:
+        return ""
+    lines = [
+        "## Pre-staged SSH keys (ALREADY on your attacker container)",
+        "",
+        "The private keys below are ALREADY written into your attacker container at the given",
+        "paths, with mode 600 and valid PEM format (verified). To move laterally, run directly:",
+        "`ssh -i <path> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null <user>@${system.<target_system_id>.host} <cmd>`.",
+        "Do NOT read, cat, download, scp, recreate, base64-decode, or reformat these keys — they",
+        "are ready to use as-is. There is no `fix key format` work to do.",
+        "",
+    ]
+    for eid, info in staged_keys.items():
+        host = info.get("host") or "(use ${system.<target>.host})"
+        lines.append(f"- edge `{eid}`: key at `{info['path']}`, login user `{info['user']}`, target host `{host}`")
+    return "\n".join(lines) + "\n\n"
+
+
 def attack(
     graph: "EntityGraph",
     built: dict[str, "BuildOutcome"],
+    staged_keys: dict | None = None,
 ) -> "Procedure":
     """Call the chain-attacker LLM to produce one end-to-end Procedure.
 
     Args:
         graph: The fully-resolved EntityGraph (concrete edge values populated).
         built: Dict of entity_id → BuildOutcome for all PASSED entities.
+        staged_keys: Optional {edge_id: {"path","user","host"}} of SSH private keys the
+            harness has already written into the attacker container (deterministic PEM),
+            so the attacker uses `ssh -i <path>` instead of reconstructing the key itself.
 
     Returns:
         A single Procedure that chains all entities across all systems.
@@ -94,14 +118,18 @@ def attack(
     cfg = GoEConfig.get()
     model = cfg.model_for("chain_attacker")
 
+    from goe.flow.chain_lint import privesc_grounding
+
     graph_summary = _graph_summary(graph)
     entity_procedures = _per_entity_procedures(built)
+    staged_section = _staged_keys_section(staged_keys)
+    privesc_section = privesc_grounding(graph, built)
 
     user_msg = f"""{graph_summary}
 
 {entity_procedures}
 
-Write a single end-to-end YAML procedure that exploits each entity in order, chaining
+{privesc_section}{staged_section}Write a single end-to-end YAML procedure that exploits each entity in order, chaining
 outputs across systems to complete the full attack path. The final step must verify
 that the attacker has achieved the terminal goal (the last entity in the chain).
 

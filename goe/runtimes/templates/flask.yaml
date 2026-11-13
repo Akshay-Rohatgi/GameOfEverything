@@ -13,7 +13,11 @@ setup_notes: >
 install_runtime: |
   apt-get install -y python3 python3-pip
 # {extra} is replaced with the space-prefixed extra_deps (or "" when none).
-deps_install_template: "pip3 install flask{extra}"
+# --break-system-packages is required on PEP 668 distros (Debian 12+, Ubuntu 23.04+)
+# where the system Python is "externally managed" and a bare `pip3 install` aborts.
+# Older pip (e.g. Ubuntu 22.04's pip 22) rejects the flag, so fall back to a plain
+# install there — those releases don't enforce PEP 668, so the fallback succeeds.
+deps_install_template: "pip3 install --break-system-packages flask{extra} || pip3 install flask{extra}"
 attacker_rules: |
   - Flask routes commonly return 200 directly — do not assume redirects unless the app source shows redirect().
   - SSTI payloads use Jinja2 syntax: `{{7*7}}` to confirm, `{{config.__class__.__init__.__globals__['os'].popen('id').read()}}` for RCE. URL-encode `{` as `%7B` and `}` as `%7D` in GET parameters.

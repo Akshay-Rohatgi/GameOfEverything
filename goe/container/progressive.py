@@ -25,9 +25,16 @@ class ProgressiveEnvironment:
     the procedure executor.
     """
 
-    def __init__(self, system_id: str, scope: str = "", os: str = "ubuntu"):
+    def __init__(self, system_id: str, scope: str = "", os: str = "ubuntu", hostname: str = ""):
         self._system_id = system_id
         self._os = os
+        # The build container runs under the system's REAL network hostname (e.g.
+        # "datahost"), so a procedure step that verifies the service "remotely" via
+        # `-h <hostname>` resolves to this container itself during the isolated build
+        # — Docker maps the container's own hostname to its IP in /etc/hosts, and the
+        # service binds 0.0.0.0, so the off-loopback check passes. Falls back to
+        # "target" (the historical default) when no hostname is supplied.
+        self._hostname = hostname or "target"
         self._scope = scope or f"prog_{system_id[:12]}"
         self._client = None  # docker.DockerClient (lazy)
         self._network = None
@@ -73,7 +80,7 @@ class ProgressiveEnvironment:
             profile.image,
             command="sleep infinity",
             name=target_name,
-            hostname="target",
+            hostname=self._hostname,
             network=net_name,
             detach=True,
             remove=False,
@@ -214,7 +221,7 @@ class ProgressiveEnvironment:
             tag,
             command="sleep infinity",
             name=target_name,
-            hostname="target",
+            hostname=self._hostname,
             network=net_name,
             detach=True,
             remove=False,
@@ -245,6 +252,37 @@ class ProgressiveEnvironment:
     def current_snapshot(self) -> str | None:
         """The entity_id of the most recent snapshot (or None if no snapshots yet)."""
         return self._current_snapshot
+
+    @property
+    def target_container(self):
+        """The running target container (a producer that peers can connect to)."""
+        return self._target_container
+
+    def attach_peer(self, alias: str, peer_container) -> None:
+        """Connect another system's container onto this env's network under ``alias``.
+
+        Lets an entity building here reach a peer host (e.g. a web tier reaching its
+        DB host) by its hostname during the build, mirroring the flat network the
+        chain test uses at deploy time. Idempotent: a peer already attached (or a
+        self-attach) is a no-op.
+        """
+        if peer_container is None or self._network is None:
+            return
+        if peer_container.id == getattr(self._target_container, "id", None):
+            return
+        import docker.errors
+
+        try:
+            self._network.connect(peer_container, aliases=[alias])
+            logger.info(
+                f"[ProgressiveEnvironment] Attached peer '{alias}' "
+                f"to network {self._network.name}"
+            )
+        except docker.errors.APIError as e:
+            # Already connected / endpoint exists → fine. Re-raise anything else.
+            if "already exists" in str(e).lower() or "already connected" in str(e).lower():
+                return
+            logger.warning(f"[ProgressiveEnvironment] attach_peer('{alias}') failed: {e}")
 
     # ------------------------------------------------------------------
     # Deployment
@@ -332,8 +370,17 @@ class ProgressiveEnvironment:
     # ------------------------------------------------------------------
 
     def get_target_host(self) -> str:
-        """Hostname of the target container as seen from the attacker container."""
-        return "target"
+        """Hostname of the target container as seen from the attacker container.
+
+        Must match the target container's ``--hostname`` (``self._hostname``):
+        on a user-defined bridge network a peer resolves another container by its
+        ``--hostname`` (verified locally), and the target has no other network alias.
+        Returning the literal "target" broke this once the build container began
+        running under the system's real hostname instead of "target" — the attacker's
+        ``curl http://target:.../`` no longer resolved (HTTP 000 / status=None).
+        Defaults to "target" when no hostname was supplied (``self._hostname`` default).
+        """
+        return self._hostname
 
     def get_attacker_host(self) -> str:
         """Hostname of the attacker container as seen from the target container."""
@@ -384,7 +431,7 @@ class ProgressiveEnvironment:
             "ubuntu:22.04",
             command="sleep infinity",
             name=target_name,
-            hostname="target",
+            hostname=self._hostname,
             network=net_name,
             detach=True,
             remove=False,

@@ -116,6 +116,56 @@ class DistroProfile:
             return command  # a future systemd profile would translate to systemctl
         return f"nohup {command} >/dev/null 2>&1 &"
 
+    # Verbs that map to a SysV `service` action; anything else (enable, daemon-reload,
+    # mask, is-active, status, …) has no meaning in a no-systemd container → dropped.
+    _SYSTEMCTL_ACTION = {
+        "start": "start", "restart": "restart", "reload": "restart",
+        "stop": "stop", "try-restart": "restart", "force-reload": "restart",
+    }
+
+    def sanitize_service_control(self, script: str) -> str:
+        """Rewrite ``systemctl`` lines for a no-systemd container.
+
+        On our containers systemd is not PID 1, so ``systemctl`` always fails — yet the
+        LLM keeps emitting it to (re)start a service the recipe layer already owns. Rather
+        than loop on the distro lint, translate deterministically: an action verb becomes a
+        best-effort SysV ``service`` call (never fails the deploy); a non-action verb is
+        dropped. Idempotent and a no-op on a systemd profile or a script without systemctl.
+        """
+        if self.has_systemd or not script or "systemctl" not in script:
+            return script
+
+        out: list[str] = []
+        for raw in script.splitlines():
+            stripped = raw.lstrip()
+            indent = raw[: len(raw) - len(stripped)]
+            prefix = ""
+            if stripped.startswith("sudo "):
+                prefix, stripped = "sudo ", stripped[5:].lstrip()
+            if not stripped.startswith("systemctl"):
+                out.append(raw)
+                continue
+            # Parse: systemctl [--flags] <verb> [<service>] ...
+            toks = stripped[len("systemctl"):].split()
+            verb = svc = None
+            for t in toks:
+                if t.startswith("-"):
+                    continue
+                if verb is None:
+                    verb = t
+                elif svc is None:
+                    svc = t.split(".service")[0]
+                    break
+            action = self._SYSTEMCTL_ACTION.get(verb or "")
+            if action and svc:
+                out.append(
+                    f"{indent}{prefix}service {svc} {action} 2>/dev/null || true"
+                    f"  # translated from `systemctl {verb} {svc}` (no systemd)"
+                )
+            else:
+                out.append(f"{indent}: # dropped `{stripped}` (no systemd in this container)")
+        return "\n".join(out)
+
     def _unsupported_pm(self) -> str:
         return (
             f"DistroProfile {self.name!r}: unsupported package manager "

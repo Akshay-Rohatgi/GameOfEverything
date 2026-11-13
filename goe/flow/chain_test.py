@@ -32,6 +32,56 @@ class ChainTestOutcome:
     procedure: "Procedure | None" = None
 
 
+def _stage_ssh_keys(graph: "EntityGraph", env) -> dict:
+    """Write each SSH-key edge secret into the attacker container, deterministically.
+
+    The keypair is generated once (``graph.secrets.materialize_secrets``) and the private
+    half travels base64-encoded on the ``creds_for`` edge's ``secret`` param. Here we decode
+    it straight into a file with ``chmod 600`` — the exact, reliable handling the LLM attacker
+    kept getting wrong (mangled PEM newlines → "Load key: invalid format" → publickey denied).
+
+    Returns ``{edge_id: {"path", "user", "host"}}`` for the keys that were staged and load
+    cleanly, so the chain attacker can be told to ``ssh -i <path>`` instead of reconstructing.
+    """
+    staged: dict = {}
+    for edge in graph.edges:
+        if edge.type.value != "creds_for":
+            continue
+        secret = edge.params.get("secret")
+        cred_type = edge.params.get("cred_type")
+        if secret is None or not secret.concrete:
+            continue
+        ct = ""
+        if cred_type is not None:
+            ct = (cred_type.concrete or cred_type.structural or "").lower()
+        if "ssh" not in ct or "key" not in ct:
+            continue
+
+        path = f"/root/.ssh/chain_{edge.id}"
+        user_pv, host_pv = edge.params.get("user"), edge.params.get("host")
+        user = (user_pv.concrete if user_pv else None) or "root"
+        host = host_pv.concrete if host_pv else None
+
+        # Decode in-container (printf avoids echo's flag/newline quirks); then verify the
+        # private key actually loads before advertising it to the attacker.
+        write_cmd = (
+            "mkdir -p /root/.ssh && "
+            f"printf '%s' '{secret.concrete}' | base64 -d > {path} && "
+            f"chmod 600 {path} && ssh-keygen -y -f {path} >/dev/null 2>&1"
+        )
+        try:
+            ec, _out, err = env.exec_in("attacker", write_cmd)
+        except Exception as e:  # never let key staging abort the chain test
+            logger.warning(f"ChainTest: SSH key staging for edge '{edge.id}' errored: {e}")
+            continue
+        if ec == 0:
+            staged[edge.id] = {"path": path, "user": user, "host": host}
+            logger.info(f"ChainTest: staged SSH key for edge '{edge.id}' at {path} (user={user})")
+        else:
+            logger.warning(f"ChainTest: SSH key for edge '{edge.id}' failed to stage/validate: {err[:200]}")
+    return staged
+
+
 def _build_systems_ctx(graph: "EntityGraph") -> dict[str, dict[str, str]]:
     """Build the ``ctx["systems"]`` map for multi-target interpolation.
 
@@ -203,6 +253,7 @@ def run_chain_test(
     Returns:
         ChainTestResult with PASSED/FAILED status.
     """
+    from goe.build import _sanitize_procedure_commands
     from goe.construction_crew import chain_attacker
     from goe.container.topology_environment import TopologyEnvironment
     from goe.executor.interpolation import resolve_static_ctx
@@ -264,6 +315,12 @@ def run_chain_test(
             logger.warning(f"ChainTest: healthcheck failures (may be expected for non-web systems): {reason}")
             # Don't fail the chain test on healthcheck — some systems are SSH-only, no HTTP
 
+        # Deterministically stage SSH private keys into the attacker container. The key
+        # material is already generated once and carried base64-encoded on the edge; writing
+        # it with `base64 -d` + chmod 600 here removes the fragile LLM step that read/
+        # reconstructed the PEM and kept producing "Load key: invalid format".
+        staged_keys = _stage_ssh_keys(graph, env)
+
         # ---- Phase 2: synthesise the chain procedure ------------------------
         logger.info("ChainTest: synthesising chain procedure…")
         if console:
@@ -271,7 +328,7 @@ def run_chain_test(
         from goe.construction_crew._yaml_repair import ProcedureParseError
 
         try:
-            chain_procedure = chain_attacker.attack(graph, built)
+            chain_procedure = chain_attacker.attack(graph, built, staged_keys=staged_keys)
             if console:
                 console.chain_test_procedure_summary(len(chain_procedure.procedure))
         except ProcedureParseError as e:
@@ -282,6 +339,31 @@ def run_chain_test(
                     reason=f"Chain attacker YAML parse failure: {e}",
                 )
             )
+
+        # ---- Static pre-execution lint (deterministic) ----------------------
+        # Catch planning errors that WILL fail at runtime — a write to a root-owned path
+        # through the unprivileged web-injection vector (option 2), or a side-effecting
+        # injection whose assertion only checks transport status (option 3) — and send them
+        # to fix_chain ONCE before we spend an execution attempt on a known-broken chain.
+        from goe.flow.chain_lint import lint_chain
+
+        lint_issues = lint_chain(chain_procedure)
+        if lint_issues:
+            logger.warning(
+                f"ChainTest: static lint flagged {len(lint_issues)} planning issue(s); "
+                f"requesting a deterministic fix before execution:\n  - "
+                + "\n  - ".join(lint_issues)
+            )
+            lint_diagnosis = (
+                "A deterministic pre-execution lint found planning errors that will fail at "
+                "runtime. Fix EXACTLY these before we execute (do not change working steps):\n"
+                + "\n".join(f"- {i}" for i in lint_issues)
+            )
+            try:
+                chain_procedure = chain_attacker.fix_chain(chain_procedure, lint_diagnosis)
+            except ProcedureParseError as e:
+                # Non-fatal: proceed with the original chain; execution will surface the issue.
+                logger.warning(f"ChainTest: lint fix_chain failed to parse, proceeding as-is: {e}")
 
         # ---- Phase 3: execute + retry loop ----------------------------------
         # Resolve the build-time-static ctx (systems + edge concrete values). Every
@@ -302,7 +384,13 @@ def run_chain_test(
             logger.info(f"ChainTest: executing chain procedure (attempt {attempt + 1})…")
             if console:
                 console.chain_test_executing(attempt + 1, MAX_RETRIES)
-            exec_result = run_procedure(chain_procedure, env, ctx)
+            # Deterministic procedure-side sanitizers (SSH known-hosts hardening, psql
+            # --protocol strip, env-source/printenv) run at exec time, mirroring the
+            # per-entity build path — without mutating the stored chain procedure the
+            # diagnostician and packager still see.
+            exec_result = run_procedure(
+                _sanitize_procedure_commands(chain_procedure), env, ctx
+            )
 
             # Show step results if console is available
             if console and exec_result.steps:

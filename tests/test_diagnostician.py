@@ -56,3 +56,31 @@ def test_diagnose_falls_back_on_wrong_shape(monkeypatch):
     monkeypatch.setattr(utils, "call_json", lambda *a, **k: {"category": "nonsense"})
     di = diagnose(*_args())
     assert di.category == DiagnosisCategory.design_flaw
+
+
+def test_render_procedure_resolves_interpolation_with_ctx():
+    """Regression: the rendered procedure must show the EXECUTED value, not the raw
+    ${...} template, or the diagnostician falsely flags 'unresolved variables' as a
+    procedure_bug (the P2/P3 hallucination). See _render_procedure(ctx=...)."""
+    from goe.retry.diagnostician import _render_procedure
+
+    step = SimpleNamespace(
+        step_id="confirm_ssti",
+        action=SimpleNamespace(
+            type="http_request",
+            url="http://${target_host}:${target_port}/search?q=x",
+            command=None,
+            script=None,
+        ),
+        expect=None,
+    )
+    proc = SimpleNamespace(procedure=[step])
+
+    # Without ctx: template leaks through (documents the old, confusing behavior).
+    assert "${target_host}" in _render_procedure(proc)
+
+    # With ctx: the diagnostician sees the real dispatched URL — no ${...} to misread.
+    rendered = _render_procedure(proc, {"target_host": "target", "target_port": "5000", "edges": {}})
+    assert "http://target:5000/search?q=x" in rendered
+    assert "${target_host}" not in rendered
+    assert "${target_port}" not in rendered

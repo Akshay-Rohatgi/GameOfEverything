@@ -43,6 +43,16 @@ When a vulnerability involves reading files from user home directories (e.g., .b
 - If the app process isn't in `ps aux` or the port isn't in `ss -tlnp`, that's a **design_flaw** (startup failed)
 - If the process is running but not behaving correctly, that's **implementation_bug**
 
+## Grounding (critical)
+
+The exact attack procedure that ran is given below under "## Attack Procedure". When you
+reason about what the attacker requested — URLs, payloads, commands, assertions — quote it
+from that procedure, NEVER from a log line. A log may show an unrelated or stale request
+(a health check, a scanner, a prior attempt); it is NOT proof of what this procedure sent.
+If you claim "the attacker requested X", X must appear verbatim in the procedure below. If
+the procedure's URL/payload already matches the app and the test still fails, the cause is
+NOT the procedure — look to the app (implementation_bug) or deployment (design_flaw) instead.
+
 ## Output Format
 
 Respond with ONLY valid JSON:
@@ -69,13 +79,69 @@ class Diagnosis(BaseModel):
     evidence: str = ""
 
 
+def _render_procedure(procedure, ctx: dict | None = None) -> str:
+    """Render the attacker steps that actually ran — step id, action, and assertion —
+    so the diagnostician reasons from the real URLs/commands instead of inferring them
+    from logs (which may carry unrelated or stale requests).
+
+    When ``ctx`` is given, each URL/command is interpolated with the same static run
+    context the executor used (``target_host``/``target_port``/``edges``), so the
+    diagnostician sees the ACTUAL dispatched value (e.g. ``http://target:5000/``) rather
+    than the stored template (``http://${target_host}:${target_port}/``). Without this,
+    the raw ``${...}`` placeholders in the template look like an "unresolved variable" bug
+    to the model even though the executor resolves them at runtime — a recurring false
+    procedure_bug diagnosis.
+    """
+    steps = getattr(procedure, "procedure", None) or []
+    if not steps:
+        return "(no procedure recorded)"
+
+    _interp = None
+    if ctx:
+        try:
+            from goe.executor.interpolation import interpolate as _interp
+        except Exception:
+            _interp = None
+
+    lines = []
+    for s in steps:
+        a = getattr(s, "action", None)
+        atype = getattr(a, "type", "?")
+        detail = (
+            getattr(a, "url", None)
+            or getattr(a, "command", None)
+            or getattr(a, "script", None)
+            or ""
+        )
+        if _interp and detail:
+            try:
+                detail = _interp(detail, ctx)
+            except Exception:
+                pass
+        exp = getattr(s, "expect", None)
+        exp_s = ""
+        if exp is not None and hasattr(exp, "model_dump"):
+            kv = ", ".join(f"{k}={v}" for k, v in exp.model_dump(exclude_none=True).items())
+            if kv:
+                exp_s = f"  | expect: {kv}"
+        lines.append(f"- [{getattr(s, 'step_id', '?')}] {atype}: {detail}{exp_s}")
+    return "\n".join(lines)
+
+
 def diagnose(
     entity: "Entity",
     artifact: "BuildArtifact",
     result: "ProcedureResult",
     env: "TestEnvironment",
+    procedure=None,
+    ctx: dict | None = None,
 ) -> Diagnosis:
-    """Run L1 god-view diagnosis on a failed procedure result."""
+    """Run L1 god-view diagnosis on a failed procedure result.
+
+    ``ctx`` is the static run context the executor used (target_host/target_port/edges);
+    passing it lets the rendered procedure show resolved URLs/commands instead of raw
+    ``${...}`` templates, preventing a false "unresolved variable" procedure_bug diagnosis.
+    """
     from goe.config import GoEConfig
     from goe.retry.probes import ProbeContext, execute_probes, select_probes
 
@@ -122,6 +188,13 @@ Failed at step: {result.failed_step}
 
 Failed steps:
 {chr(10).join(failed_steps) or '(none recorded)'}
+
+## Attack Procedure
+
+The EXACT steps that ran, with ${{...}} references already resolved to the values the
+executor dispatched (reason about the attacker's requests from THESE, not from logs; any
+remaining ${{...}} is a runtime-captured value like ${{steps.*}}, NOT an unresolved-variable bug):
+{_render_procedure(procedure, ctx)}
 
 ## App Source
 

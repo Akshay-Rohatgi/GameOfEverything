@@ -116,6 +116,7 @@ TOOL_TO_PACKAGE: Dict[str, str] = {
     "sshpass":      "sshpass",
     "ssh":          "openssh-client",
     "hydra":        "hydra",
+    "sqlmap":       "sqlmap",
     "nmap":         "nmap",
     "curl":         "curl",
     "wget":         "wget",
@@ -365,6 +366,24 @@ class TestEnvironmentTool:
         logger.info("Tearing down test environment...")
         self._force_cleanup()
         logger.info("Test environment teardown complete.")
+
+    def attach_peer(self, alias: str, peer_container) -> None:
+        """Connect a peer host's container onto this env's network under ``alias``.
+
+        Lets the entity under test reach another system (e.g. a web tier reaching its
+        DB host) by hostname during the isolated build, mirroring the flat chain
+        network at deploy time. The peer is disconnected automatically when this
+        env's network is removed at teardown. Idempotent.
+        """
+        if peer_container is None or self.network is None:
+            return
+        try:
+            self.network.connect(peer_container, aliases=[alias])
+            logger.info(f"Attached peer '{alias}' to network {self.network_name}")
+        except APIError as e:
+            if "already exists" in str(e).lower() or "already connected" in str(e).lower():
+                return
+            logger.warning(f"attach_peer('{alias}') failed: {e}")
 
     # ------------------------------------------------------------------
     # Command execution
