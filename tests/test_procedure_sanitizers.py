@@ -17,6 +17,7 @@ one pass without mutating the stored procedure.
 
 from goe.build import (
     _rewrite_psql_protocol,
+    _rewrite_redis_lua_call,
     _rewrite_ssh_known_hosts,
     _sanitize_procedure_commands,
 )
@@ -98,6 +99,68 @@ def test_mysql_protocol_is_preserved():
 
 
 # --------------------------------------------------------------------------- #
+# Redis Lua-eval flattening (Week 8 — Redis forbids CONFIG/SAVE from scripts on
+# every server version; the direct command succeeds)
+# --------------------------------------------------------------------------- #
+def test_redis_lua_config_set_dir_flattened():
+    cmd = "redis-cli -h $HOST eval \"return redis.call('config','set','dir','/tmp')\" 0"
+    assert _rewrite_redis_lua_call(cmd) == "redis-cli -h $HOST config set dir /tmp"
+
+
+def test_redis_lua_save_flattened():
+    cmd = "redis-cli eval \"return redis.call('save')\" 0"
+    assert _rewrite_redis_lua_call(cmd) == "redis-cli save"
+
+
+def test_redis_lua_no_connection_flags():
+    cmd = "redis-cli eval \"redis.call('config','set','dbfilename','x.rdb')\" 0"
+    assert _rewrite_redis_lua_call(cmd) == "redis-cli config set dbfilename x.rdb"
+
+
+def test_redis_lua_multiple_calls_joined_with_and():
+    cmd = ("redis-cli -h 10.0.0.5 -p 6379 eval \""
+           "redis.call('config','set','dir','/root/.ssh'); "
+           "redis.call('config','set','dbfilename','authorized_keys')\" 0")
+    out = _rewrite_redis_lua_call(cmd)
+    assert out == (
+        "redis-cli -h 10.0.0.5 -p 6379 config set dir /root/.ssh"
+        " && redis-cli -h 10.0.0.5 -p 6379 config set dbfilename authorized_keys"
+    )
+
+
+def test_redis_lua_preserves_auth_flags():
+    cmd = "redis-cli -h h -a secretpw eval \"return redis.call('set','k','v')\" 0"
+    assert _rewrite_redis_lua_call(cmd) == "redis-cli -h h -a secretpw set k v"
+
+
+def test_redis_lua_value_with_spaces_is_quoted():
+    cmd = "redis-cli eval \"return redis.call('set','payload','a b c')\" 0"
+    assert _rewrite_redis_lua_call(cmd) == "redis-cli set payload 'a b c'"
+
+
+def test_redis_real_lua_logic_left_untouched():
+    # A body with genuine Lua control flow must NOT be flattened.
+    cmd = "redis-cli eval \"if redis.call('get','x') then return 1 end\" 0"
+    assert _rewrite_redis_lua_call(cmd) == cmd
+
+
+def test_redis_lua_with_argv_left_untouched():
+    cmd = "redis-cli eval \"return redis.call('set',KEYS[1],ARGV[1])\" 1 k v"
+    assert _rewrite_redis_lua_call(cmd) == cmd
+
+
+def test_redis_non_eval_command_untouched():
+    cmd = "redis-cli -h h ping"
+    assert _rewrite_redis_lua_call(cmd) == cmd
+
+
+def test_redis_lua_rewrite_is_idempotent():
+    cmd = "redis-cli eval \"return redis.call('config','set','dir','/tmp')\" 0"
+    once = _rewrite_redis_lua_call(cmd)
+    assert _rewrite_redis_lua_call(once) == once
+
+
+# --------------------------------------------------------------------------- #
 # composite pass
 # --------------------------------------------------------------------------- #
 def test_composite_applies_all_rewriters():
@@ -105,11 +168,13 @@ def test_composite_applies_all_rewriters():
         _exec_step("hop", "ssh -o StrictHostKeyChecking=no u@h 'id'"),
         _exec_step("pg", "psql -h 127.0.0.1 --protocol=TCP -U u -c x"),
         _exec_step("leak", "source /etc/environment && printenv DB_PASSWORD"),
+        _exec_step("redis", "redis-cli -h t eval \"return redis.call('config','set','dir','/tmp')\" 0"),
     )
     out = _sanitize_procedure_commands(proc)
     assert "-o UserKnownHostsFile=/dev/null" in _cmd(out, 0)
     assert "--protocol" not in _cmd(out, 1)
     assert "set -a; . /etc/environment; set +a" in _cmd(out, 2)
+    assert _cmd(out, 3) == "redis-cli -h t config set dir /tmp"
 
 
 def test_composite_no_op_returns_same_object():

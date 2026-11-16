@@ -55,6 +55,7 @@ class TestEnvironment:
             target_image=image,
             enable_browser=enable_browser,
             expose_ports=expose_ports,
+            target_os=os,
         )
         self._setup_done = False
 

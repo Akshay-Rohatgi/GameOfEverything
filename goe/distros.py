@@ -53,6 +53,55 @@ DEBIAN_FAMILY_ALIASES: dict[str, str] = {
     "nc": "netcat-openbsd",
 }
 
+# Base packages for every Red Hat–family (dnf) target container. These are the
+# RHEL-side equivalents of APT_BASE_PACKAGES, named directly (no aliasing needed):
+#   curl    -> shipped by curl-minimal, already present -> omitted (installing
+#              `curl` conflicts with curl-minimal); install_cmd uses
+#              --allowerasing so a recipe asking for curl still resolves cleanly.
+#   gnupg        -> gnupg2        lsb-release  -> dropped (redhat-lsb-core is
+#   iproute2     -> iproute                       deprecated/heavy on RHEL 9)
+#   iputils-ping -> iputils       procps       -> procps-ng
+#   libcap2-bin  -> libcap (provides setcap/getcap for the set_capability atom)
+# sshpass lives in EPEL on RHEL, not the base repos, so bootstrap_command enables
+# epel-release before installing these.
+RHEL_BASE_PACKAGES: tuple[str, ...] = (
+    "wget",
+    "ca-certificates",
+    "gnupg2",
+    "iproute",
+    "net-tools",
+    "iputils",
+    "procps-ng",
+    "binutils",
+    "sudo",
+    "openssh-server",
+    "sshpass",
+    "libcap",
+)
+
+# Debian/canonical package name -> real package name on Red Hat–family distros.
+# Covers both the canonical names recipes/atoms request and the Debian-named
+# packages that flow in from TARGET_TOOL_TO_PACKAGE (the target tool-installer
+# passes e.g. "iproute2"/"procps"/"sqlite3"), so install_cmd resolves them for dnf.
+RHEL_FAMILY_ALIASES: dict[str, str] = {
+    "netcat": "nmap-ncat",
+    "nc": "nmap-ncat",
+    "netcat-openbsd": "nmap-ncat",
+    "iproute2": "iproute",
+    "iputils-ping": "iputils",
+    "procps": "procps-ng",
+    "sqlite3": "sqlite",
+    "gnupg": "gnupg2",
+    "libcap2-bin": "libcap",
+    "default-mysql-client": "mariadb",
+    "dnsutils": "bind-utils",
+    # Redis: Debian splits the daemon (redis-server) and CLI (redis-tools) into
+    # separate packages; RHEL ships both binaries in a single `redis` package
+    # (same /usr/bin/redis-server, /usr/bin/redis-cli, /etc/redis/redis.conf).
+    "redis-server": "redis",
+    "redis-tools": "redis",
+}
+
 
 @dataclass(frozen=True)
 class DistroProfile:
@@ -61,7 +110,7 @@ class DistroProfile:
     name            canonical name, e.g. "ubuntu"
     family          distro family for grouping, e.g. "debian" (Ubuntu is Debian-family)
     image           docker base image, e.g. "ubuntu:22.04"
-    package_manager "apt" today; room for "dnf"/"apk" later
+    package_manager "apt" (Debian family) or "dnf" (Red Hat family); room for "apk" later
     base_packages   packages installed into every fresh container of this OS
     package_aliases canonical package name -> this distro's real package name
     has_systemd     whether systemd runs as init (False in our containers -> use
@@ -83,7 +132,17 @@ class DistroProfile:
         return self.package_aliases.get(name, name)
 
     def resolve_pkgs(self, names) -> list[str]:
-        return [self.resolve_pkg(n) for n in names]
+        # Order-preserving dedupe: several canonical names can collapse to one real
+        # package (e.g. redis-server + redis-tools -> `redis` on RHEL), and we don't
+        # want to emit it twice on the install line.
+        seen: set[str] = set()
+        out: list[str] = []
+        for n in names:
+            pkg = self.resolve_pkg(n)
+            if pkg not in seen:
+                seen.add(pkg)
+                out.append(pkg)
+        return out
 
     # Package-manager operations
 
@@ -91,6 +150,11 @@ class DistroProfile:
         """Refresh the package index."""
         if self.package_manager == "apt":
             return "apt-get update -y"
+        if self.package_manager == "dnf":
+            # dnf validates/refreshes metadata on each transaction, so an explicit
+            # refresh is cheap and keeps the two-line (update; install) shape callers
+            # emit. `--refresh` forces a metadata check even within the cache window.
+            return "dnf -y makecache --refresh"
         raise ValueError(self._unsupported_pm())
 
     def install_cmd(self, packages) -> str:
@@ -98,10 +162,21 @@ class DistroProfile:
         pkgs = " ".join(self.resolve_pkgs(packages))
         if self.package_manager == "apt":
             return f"DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs}"
+        if self.package_manager == "dnf":
+            # --allowerasing lets a requested package replace a preinstalled
+            # conflicting one (e.g. `curl` over curl-minimal on RHEL 9) instead of
+            # failing the transaction.
+            return f"dnf -y install --allowerasing {pkgs}"
         raise ValueError(self._unsupported_pm())
 
     def bootstrap_command(self) -> str:
         """Command that installs the base packages into a fresh container."""
+        if self.package_manager == "dnf":
+            # sshpass (and some tooling) lives in EPEL on RHEL, not the base repos,
+            # so enable EPEL before the base install. epel-release ships in Rocky's
+            # default-enabled extras repo. dnf refreshes metadata on this install, so
+            # the newly enabled EPEL repo is visible to the base-package transaction.
+            return f"dnf -y install epel-release && {self.install_cmd(self.base_packages)}"
         return f"{self.update_cmd()} && {self.install_cmd(self.base_packages)}"
 
     # Service / init model
@@ -193,6 +268,15 @@ _PROFILES: dict[str, DistroProfile] = {
         package_aliases=DEBIAN_FAMILY_ALIASES,
         has_systemd=False,
     ),
+    "rocky": DistroProfile(
+        name="rocky",
+        family="rhel",
+        image="rockylinux:9",
+        package_manager="dnf",
+        base_packages=RHEL_BASE_PACKAGES,
+        package_aliases=RHEL_FAMILY_ALIASES,
+        has_systemd=False,
+    ),
 }
 
 # Legacy / alternate spellings mapped onto a canonical profile name.
@@ -202,6 +286,19 @@ _ALIASES: dict[str, str] = {
     "debian_12": "debian",
     "debian12": "debian",
     "bookworm": "debian",
+    # Red Hat family — Rocky 9 is our RHEL 9 stand-in, so RHEL/clone spellings
+    # all resolve to it. The security lab needs "a RHEL box", not a specific clone.
+    "rocky_linux": "rocky",
+    "rockylinux": "rocky",
+    "rocky9": "rocky",
+    "rocky_9": "rocky",
+    "rhel": "rocky",
+    "rhel9": "rocky",
+    "redhat": "rocky",
+    "red_hat": "rocky",
+    "almalinux": "rocky",
+    "alma": "rocky",
+    "centos": "rocky",
 }
 
 

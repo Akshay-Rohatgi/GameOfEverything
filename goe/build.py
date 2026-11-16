@@ -435,11 +435,101 @@ def _rewrite_psql_protocol(cmd: str) -> str:
     return _PSQL_PROTOCOL.sub("", cmd)
 
 
+# A `redis-cli [flags] eval "<lua>" <numkeys>` invocation. `prefix` is the connection
+# flags between `redis-cli` and `eval` (`-h $HOST`, `-p 6379`, `-a pw`, …), captured so
+# the rewrite keeps them. The quoted Lua body is matched non-greedily up to the matching
+# quote followed by the numkeys integer.
+_REDIS_EVAL = re.compile(
+    r"""(?P<lead>^|[\s;&|(])
+        redis-cli
+        (?P<prefix>(?:[ \t]+(?!eval\b)[^\s'"]+)*)
+        [ \t]+eval[ \t]+
+        (?P<q>['"])(?P<body>.*?)(?P=q)
+        [ \t]+(?P<numkeys>\d+)
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+# One `redis.call(<args>)` inside a Lua body (no nested parens in practice).
+_REDIS_CALL = re.compile(r"redis\.call\s*\(\s*(?P<args>[^)]*?)\s*\)", re.DOTALL)
+# After stripping `return`, `;`, `end`, whitespace and every redis.call(...) span, a
+# pure config/save script leaves nothing — anything else (if/for/local/KEYS/ARGV/…) means
+# real Lua logic we must NOT flatten, so the rewrite bails.
+_LUA_RESIDUE = re.compile(r"\b(return|end)\b|[;\s]+")
+_SHELL_SAFE = re.compile(r"[\w./:@%+=-]+")
+
+
+def _shell_quote_arg(a: str) -> str:
+    return a if _SHELL_SAFE.fullmatch(a) else "'" + a.replace("'", "'\\''") + "'"
+
+
+def _parse_lua_call_args(raw: str) -> list[str] | None:
+    """Parse the comma-separated args of one ``redis.call(...)`` into literal strings.
+
+    Returns ``None`` (bail) if any arg is not a plain quoted string / bare word / number —
+    e.g. it references ``KEYS``/``ARGV``, a variable, or string concatenation — because then
+    the call is not a static command we can safely issue directly."""
+    args: list[str] = []
+    for part in raw.split(","):
+        tok = part.strip()
+        if not tok:
+            return None
+        if (tok[0] == tok[-1]) and tok[0] in "'\"" and len(tok) >= 2:
+            inner = tok[1:-1]
+            if tok[0] in inner:  # embedded same-quote → give up rather than mis-split
+                return None
+            args.append(inner)
+        elif re.fullmatch(r"[\w.+-]+", tok):  # bare word / number (e.g. SAVE, 6379)
+            args.append(tok)
+        else:
+            return None
+    return args or None
+
+
+def _rewrite_redis_lua_call(cmd: str) -> str:
+    """Rewrite ``redis-cli … eval "redis.call(...)" 0`` into the direct equivalent.
+
+    The attacker LLM routinely builds the Redis unauth→RCE primitive by wrapping
+    ``CONFIG SET dir``/``dbfilename`` (and ``SAVE``) in a Lua ``eval``. Redis forbids those
+    administrative commands *from scripts* on EVERY server version (6.2 on RHEL and 7.x on
+    Debian alike): the call dies with "This Redis command is not allowed from scripts", so
+    the file-write primitive never fires. Issued directly, the same commands succeed. A Lua
+    body that is nothing but one or more static ``redis.call(...)`` statements is therefore
+    exactly equivalent to running those commands directly — so we flatten it, preserving the
+    connection flags, and join multiple calls with ``&&``. Any body with real Lua logic
+    (conditionals, loops, ``KEYS``/``ARGV``, concatenation) is left untouched.
+    """
+    if not cmd or "redis-cli" not in cmd or "eval" not in cmd or "redis.call" not in cmd:
+        return cmd
+
+    def _replace(m: "re.Match") -> str:
+        body = m.group("body")
+        calls = _REDIS_CALL.findall(body)
+        if not calls:
+            return m.group(0)
+        # Reject bodies that contain anything beyond the redis.call statements.
+        residue = _REDIS_CALL.sub(" ", body)
+        if _LUA_RESIDUE.sub("", residue).strip():
+            return m.group(0)
+        direct: list[str] = []
+        for raw_args in calls:
+            parsed = _parse_lua_call_args(raw_args)
+            if not parsed:
+                return m.group(0)  # one un-flattenable call → leave the whole eval alone
+            flags = m.group("prefix")
+            direct.append(
+                f"redis-cli{flags} " + " ".join(_shell_quote_arg(a) for a in parsed)
+            )
+        return m.group("lead") + " && ".join(direct)
+
+    return _REDIS_EVAL.sub(_replace, cmd)
+
+
 def _sanitize_procedure_commands(procedure):
     """Run every deterministic procedure-side command rewriter in a single pass.
 
-    Composes the env-source/printenv fix, the SSH known-hosts hardening, and the psql
-    ``--protocol`` strip. One pass keeps the stored procedure untouched (see
+    Composes the env-source/printenv fix, the SSH known-hosts hardening, the psql
+    ``--protocol`` strip, and the Redis Lua-``eval`` flattening. One pass keeps the stored
+    procedure untouched (see
     ``_walk_commands``) while guaranteeing each command is corrected before execution,
     whether it came from a per-entity crew or the cross-host chain attacker.
     """
@@ -447,6 +537,7 @@ def _sanitize_procedure_commands(procedure):
         _rewrite_env_source_printenv_cmd,
         _rewrite_ssh_known_hosts,
         _rewrite_psql_protocol,
+        _rewrite_redis_lua_call,
     )
 
     def _rewrite_all(cmd: str) -> str:

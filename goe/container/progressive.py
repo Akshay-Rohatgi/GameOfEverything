@@ -421,14 +421,17 @@ class ProgressiveEnvironment:
         return exit_code, stdout, stderr
 
     def _reset_to_base(self) -> None:
-        """Stop and recreate target from fresh ubuntu:22.04, bootstrap packages."""
+        """Stop and recreate target from its distro base image, re-bootstrap packages."""
+        from goe.distros import get_profile
+
+        profile = get_profile(self._os)
         self._target_container.stop(timeout=3)
         self._target_container.remove(force=True)
 
         net_name = f"goe_prog_{self._scope}_net"
         target_name = f"goe_prog_target_{self._scope}"
         self._target_container = self._client.containers.run(
-            "ubuntu:22.04",
+            profile.image,
             command="sleep infinity",
             name=target_name,
             hostname=self._hostname,
@@ -437,12 +440,8 @@ class ProgressiveEnvironment:
             remove=False,
         )
 
-        # Re-bootstrap
-        self._exec_in_target(
-            "apt-get update -y && "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y "
-            "curl wget ca-certificates gnupg lsb-release iproute2 net-tools procps iputils-ping sudo sshpass"
-        )
+        # Re-bootstrap through the distro profile (same package set + manager as setup()).
+        self._exec_in_target(profile.bootstrap_command())
 
     def _ensure_attacker_image(self) -> None:
         """Build goe-attacker:latest if not present."""

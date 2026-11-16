@@ -14,8 +14,15 @@ configure: |
   # the standard file-write primitive (CONFIG SET dir -> SSH authorized_keys
   # injection). Enabling them is consistent with this recipe's intentionally
   # exploitable posture (it already binds 0.0.0.0 with protected-mode off).
-  grep -q '^enable-protected-configs' /etc/redis/redis.conf || echo 'enable-protected-configs yes' >> /etc/redis/redis.conf
-  grep -q '^enable-debug-command' /etc/redis/redis.conf || echo 'enable-debug-command yes' >> /etc/redis/redis.conf
+  # These directives only exist on Redis >= 7 and are a FATAL config error on
+  # older servers (RHEL 9 AppStream ships 6.2), where CONFIG SET dir is already
+  # unprotected and the primitive works without them. Gate on the running major
+  # version (read from the binary, so it is distro/version-robust, not OS-sniffing).
+  REDIS_MAJOR=$(redis-server --version 2>/dev/null | grep -oE 'v=[0-9]+' | grep -oE '[0-9]+' | head -1)
+  if [ "${REDIS_MAJOR:-0}" -ge 7 ]; then
+    grep -q '^enable-protected-configs' /etc/redis/redis.conf || echo 'enable-protected-configs yes' >> /etc/redis/redis.conf
+    grep -q '^enable-debug-command' /etc/redis/redis.conf || echo 'enable-debug-command yes' >> /etc/redis/redis.conf
+  fi
 start: |
   # Get password from config if set
   REDIS_PASS=$(grep "^requirepass" /etc/redis/redis.conf | awk '{print $2}' || true)
