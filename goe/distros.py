@@ -100,6 +100,23 @@ RHEL_FAMILY_ALIASES: dict[str, str] = {
     # (same /usr/bin/redis-server, /usr/bin/redis-cli, /etc/redis/redis.conf).
     "redis-server": "redis",
     "redis-tools": "redis",
+    # Service-recipe package names that differ on the RHEL family. dnf installs a
+    # transaction all-or-nothing, so one unknown name aborts the whole install —
+    # these mappings are what let apache/mysql/postgres/samba install at all.
+    # Apache HTTP server: Debian `apache2` -> RHEL `httpd` (ships apachectl, httpd,
+    # DocumentRoot /var/www/html).
+    "apache2": "httpd",
+    # MariaDB client: Debian `mariadb-client` -> RHEL `mariadb` (the server pkg is
+    # `mariadb-server` on both).
+    "mariadb-client": "mariadb",
+    # PostgreSQL: Debian `postgresql` is a server+client metapackage and
+    # `postgresql-client` the client; RHEL splits them as `postgresql-server`
+    # (daemon + initdb) and `postgresql` (client/libs).
+    "postgresql": "postgresql-server",
+    "postgresql-client": "postgresql",
+    # Samba client (smbclient binary): Debian `smbclient` -> RHEL `samba-client`
+    # (the daemon pkg is `samba` on both).
+    "smbclient": "samba-client",
 }
 
 

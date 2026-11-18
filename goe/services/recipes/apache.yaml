@@ -8,8 +8,16 @@ configure: |
   mkdir -p /var/www/html /var/log/apache2
   echo "Apache is running" > /var/www/html/index.html
 start: |
-  # Start Apache in foreground mode
-  apachectl start
+  # Start Apache WITHOUT systemd. On RHEL `apachectl start` delegates to
+  # `systemctl start httpd`, which fails in a no-init container ("Failed to connect
+  # to bus"), so invoke the httpd binary directly. On Debian the daemon is `apache2`
+  # and apachectl sources /etc/apache2/envvars, so use apachectl there. Branch on
+  # which binary exists rather than sniffing the OS.
+  if command -v httpd >/dev/null 2>&1; then
+    httpd -k start 2>/dev/null || /usr/sbin/httpd -k start
+  else
+    apachectl start 2>/dev/null || apache2ctl start
+  fi
 
   # Readiness check
   echo "Waiting for Apache to be ready..."
@@ -26,7 +34,7 @@ start: |
     exit 1
   fi
 healthcheck: "curl -sf http://localhost/ >/dev/null"
-stop: "apachectl stop || true"
+stop: "if command -v httpd >/dev/null 2>&1; then httpd -k stop 2>/dev/null || true; else apachectl stop 2>/dev/null || true; fi"
 ports: [80]
 restart_after_snapshot: true
 config_vars: {}

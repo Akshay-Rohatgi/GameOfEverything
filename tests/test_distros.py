@@ -84,10 +84,47 @@ def test_apt_profile_unaffected_by_dnf_branch():
         ("sqlite3", "sqlite"),
         ("gnupg", "gnupg2"),
         ("libcap2-bin", "libcap"),
+        # Service-recipe package names that differ on the RHEL family.
+        ("apache2", "httpd"),
+        ("mariadb-client", "mariadb"),
+        ("postgresql", "postgresql-server"),
+        ("postgresql-client", "postgresql"),
+        ("smbclient", "samba-client"),
     ],
 )
 def test_rhel_package_aliases(canonical, expected):
     assert ROCKY.resolve_pkg(canonical) == expected
+
+
+def test_service_recipe_packages_resolve_for_rhel():
+    # The service recipes declare Debian package names; on Rocky they must resolve
+    # to real RHEL packages, or dnf's all-or-nothing transaction aborts the whole
+    # install. (Regression guard for the Week-8 Rocky service smoke matrix.)
+    # apache: apache2 -> httpd
+    assert ROCKY.resolve_pkgs(["apache2", "curl"]) == ["httpd", "curl"]
+    # mysql: server name shared, client mariadb-client -> mariadb
+    assert ROCKY.resolve_pkgs(["mariadb-server", "mariadb-client"]) == [
+        "mariadb-server",
+        "mariadb",
+    ]
+    # postgres: Debian metapackage/client split maps to RHEL server/client split
+    assert ROCKY.resolve_pkgs(["postgresql", "postgresql-client"]) == [
+        "postgresql-server",
+        "postgresql",
+    ]
+    # samba: daemon pkg shared, client smbclient -> samba-client
+    assert ROCKY.resolve_pkgs(["samba", "smbclient"]) == ["samba", "samba-client"]
+
+
+def test_service_aliases_do_not_affect_debian():
+    # The RHEL service aliases must not leak onto the Debian family — the apt
+    # profile keeps the original Debian package names.
+    import goe.distros as d
+    ubuntu = d.get_profile("ubuntu")
+    assert ubuntu.resolve_pkg("apache2") == "apache2"
+    assert ubuntu.resolve_pkg("mariadb-client") == "mariadb-client"
+    assert ubuntu.resolve_pkg("postgresql") == "postgresql"
+    assert ubuntu.resolve_pkg("smbclient") == "smbclient"
 
 
 def test_target_tool_package_names_resolve_for_dnf():

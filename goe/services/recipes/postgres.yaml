@@ -1,26 +1,49 @@
 id: postgres
-description: "PostgreSQL database server (Debian cluster, no-systemd Docker startup)"
+description: "PostgreSQL database server (Debian cluster or RHEL initdb, no-systemd Docker startup)"
 packages:
   - postgresql
   - postgresql-client
 configure: |
   # Listen on all interfaces so the scenario is reachable over the network.
-  # Version-agnostic: find the conf under /etc/postgresql/<ver>/main/.
-  PG_CONF=$(find /etc/postgresql -name postgresql.conf 2>/dev/null | head -1)
-  if [ -n "$PG_CONF" ]; then
-    sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" "$PG_CONF"
+  # Debian and RHEL lay PostgreSQL out differently; branch on the Debian
+  # postgresql-common tooling (pg_lsclusters) rather than sniffing the OS.
+  if command -v pg_lsclusters >/dev/null 2>&1; then
+    # Debian/Ubuntu: a cluster already exists at /etc/postgresql/<ver>/main/.
+    PG_CONF=$(find /etc/postgresql -name postgresql.conf 2>/dev/null | head -1)
+    if [ -n "$PG_CONF" ]; then
+      sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" "$PG_CONF"
+    fi
+  else
+    # RHEL/Rocky: postgresql-server ships no initialized data dir — create one,
+    # then set listen_addresses in it. postgresql-setup handles ownership/perms;
+    # fall back to a direct initdb as the postgres user if the wrapper is absent.
+    PGDATA=/var/lib/pgsql/data
+    if [ ! -s "$PGDATA/PG_VERSION" ]; then
+      postgresql-setup --initdb 2>/dev/null \
+        || su postgres -c "/usr/bin/initdb -D $PGDATA" 2>/dev/null || true
+    fi
+    if [ -f "$PGDATA/postgresql.conf" ]; then
+      sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" "$PGDATA/postgresql.conf"
+    fi
   fi
   # Ensure the runtime socket dir exists (postgres owns it).
   mkdir -p /var/run/postgresql
   chown postgres:postgres /var/run/postgresql 2>/dev/null || true
 start: |
   # Start the default cluster WITHOUT systemd — these containers have no init.
-  # pg_ctlcluster / pg_lsclusters are Debian postgresql-common tools; a Red Hat
-  # profile (Week 8) will need its own init path (postgresql-setup + pg_ctl).
-  PG_SPEC=$(pg_lsclusters 2>/dev/null | awk 'NR==2 {print $1, $2}')
-  if [ -n "$PG_SPEC" ]; then
-    pg_ctlcluster --skip-systemctl-redirect $PG_SPEC start 2>/dev/null \
-      || pg_ctlcluster $PG_SPEC start 2>/dev/null || true
+  # Debian uses the postgresql-common wrapper (pg_ctlcluster); RHEL uses pg_ctl
+  # directly against the data dir. Detect by tool presence.
+  if command -v pg_lsclusters >/dev/null 2>&1; then
+    PG_SPEC=$(pg_lsclusters 2>/dev/null | awk 'NR==2 {print $1, $2}')
+    if [ -n "$PG_SPEC" ]; then
+      pg_ctlcluster --skip-systemctl-redirect $PG_SPEC start 2>/dev/null \
+        || pg_ctlcluster $PG_SPEC start 2>/dev/null || true
+    fi
+  else
+    PGDATA=/var/lib/pgsql/data
+    # pg_ctl must run as the postgres user; log to a writable path. The -o flag
+    # re-asserts listen_addresses in case the conf edit above was skipped.
+    su postgres -c "/usr/bin/pg_ctl -D $PGDATA -l /var/lib/pgsql/startup.log -o \"-c listen_addresses='*'\" -w start" 2>/dev/null || true
   fi
 
   echo "Waiting for PostgreSQL to be ready..."
