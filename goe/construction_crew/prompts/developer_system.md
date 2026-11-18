@@ -141,7 +141,7 @@ The Runtime Spec you receive may include a `developer_rules` field. These are ma
     containers — use direct process commands instead:
     - Samba: `smbcontrol smbd reload-config` (config reload) or `pkill smbd && smbd -D` (full restart)
     - SSH: `kill -HUP $(pgrep sshd)` (config reload without dropping connections)
-    - Apache: `apache2ctl graceful`
+    - Apache: `apachectl graceful` (works on both families; avoid Debian-only `apache2ctl` and the RHEL `httpd` binary)
     - Never use `systemctl restart/reload/start/stop` — it will fail with exit code 1 under `set -e`
   - Only assume a package is pre-installed if the System & Chain Context lists it as a provided
     service; otherwise install it.

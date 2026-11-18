@@ -31,7 +31,7 @@ Rules:
     - MySQL-specific exploit → `["web", "mysql"]`
     - Separate DB server → system 1: `["web"]`, system 2: `["mysql", "ssh"]`
 - For single-machine scenarios, use one system with `id: target_system` and `hostname: target`
-- `os` must be one of: `"ubuntu"` or `"debian"`. Default to `"ubuntu"` unless the request names a specific distro (e.g. "on Debian" → `"debian"`)
+- `os` must be one of: {ALLOWED_OSES}. Default to `"ubuntu"` unless the request names a specific distro: "on Debian" → `"debian"`; "Rocky", "Rocky Linux", "RHEL", "Red Hat", "AlmaLinux", or "CentOS" → `"rocky"`.
 
 **Port-to-runtime mapping** (for web apps):
 - Express web apps bind to port **3000**

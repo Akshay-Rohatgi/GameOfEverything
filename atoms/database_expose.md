@@ -41,16 +41,23 @@ A database server is configured to accept connections from any IP address rather
 ```bash
 # The recipe already binds MariaDB to 0.0.0.0; add a drop-in only if it isn't already.
 # Exposure only — do NOT create users or set passwords here (weak_service_password does).
-grep -rqs "bind-address.*0.0.0.0" /etc/mysql/ \
-  || echo -e "[mysqld]\nbind-address = 0.0.0.0" > /etc/mysql/conf.d/expose.cnf
+# The include dir differs by distro (Debian: /etc/mysql/conf.d; RHEL/Rocky: /etc/my.cnf.d),
+# so detect it rather than hardcoding the Debian path.
+for CONFD in /etc/mysql/conf.d /etc/my.cnf.d /etc/mysql/mariadb.conf.d; do
+  [ -d "$CONFD" ] || continue
+  grep -rqs "bind-address.*0.0.0.0" "$CONFD" /etc/mysql /etc/my.cnf 2>/dev/null \
+    || printf '[mysqld]\nbind-address = 0.0.0.0\n' > "$CONFD/expose.cnf"
+  break
+done
 ```
 
 **PostgreSQL:**
 ```bash
-# listen on all interfaces (version-agnostic path via find)
-PG_CONF=$(find /etc/postgresql -name postgresql.conf 2>/dev/null | head -1)
+# listen on all interfaces (version- and distro-agnostic path via find;
+# Debian: /etc/postgresql/<ver>/main/, RHEL/Rocky: /var/lib/pgsql/data/)
+PG_CONF=$(find /etc/postgresql /var/lib/pgsql -name postgresql.conf 2>/dev/null | head -1)
 sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" "$PG_CONF"
-PG_HBA=$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)
+PG_HBA=$(find /etc/postgresql /var/lib/pgsql -name pg_hba.conf 2>/dev/null | head -1)
 echo "host all all 0.0.0.0/0 md5" >> "$PG_HBA"
 # reload (not restart) over the local socket
 su -c "psql -c \"SELECT pg_reload_conf();\"" postgres

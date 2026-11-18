@@ -18,7 +18,7 @@ MongoDB has historically shipped with authentication disabled by default. This a
 1. Edit `/etc/mongod.conf` so MongoDB binds to all interfaces and auth is off:
    - Set `net.bindIp: 0.0.0.0`
    - Set `security.authorization: disabled` (or remove the `security` section entirely)
-2. Restart `mongod` so the new `bindIp` takes effect — WITHOUT a distro init system (no `systemctl`): stop the running daemon and relaunch it detached as the `mongodb` user.
+2. Restart `mongod` so the new `bindIp` takes effect — WITHOUT a distro init system (no `systemctl`): stop the running daemon and relaunch it detached as the MongoDB service user. That user differs by distro (Debian: `mongodb`; RHEL/Rocky: `mongod`), so detect it rather than hardcoding `mongodb`.
 
 ### Common Patterns:
 - **Open the bind address and disable auth in the config the recipe installed:**
@@ -30,7 +30,9 @@ MongoDB has historically shipped with authentication disabled by default. This a
 - **Bounce mongod without systemd (the recipe's start model):**
   ```bash
   pkill mongod 2>/dev/null; sleep 2
-  su mongodb -s /bin/bash -c "mongod --config /etc/mongod.conf --fork" \
+  # Service user is mongodb on Debian, mongod on RHEL/Rocky — detect it.
+  MONGO_USER=mongodb; id mongod >/dev/null 2>&1 && MONGO_USER=mongod
+  su "$MONGO_USER" -s /bin/bash -c "mongod --config /etc/mongod.conf --fork" \
     || mongod --config /etc/mongod.conf --fork
   ```
 
