@@ -10,7 +10,9 @@ PostgreSQL's `COPY ... TO PROGRAM` feature executes an OS command as the `postgr
 > **PostgreSQL is provided by the platform.** The `postgres` service recipe (declared via `requires_service`) installs the correct package for the target distro, starts the cluster, and sets `listen_addresses = '*'` so it is reachable over the network. The entity script MUST NOT install or start PostgreSQL. It applies only the vulnerability: `trust` authentication and a `SUPERUSER` role. Run `psql` as the `postgres` system user over the local socket (peer auth), which works regardless of `pg_hba.conf`.
 
 ### Logic Requirements:
-1. Set `pg_hba.conf` to `trust` authentication for local and host connections (version-agnostic path via `find`):
+1. Set `pg_hba.conf` to `trust` authentication for local and host connections (version- and
+   distro-agnostic path via `find`; Debian keeps it under `/etc/postgresql/<ver>/main/`, RHEL/Rocky
+   under `/var/lib/pgsql/data/`):
    ```
    local   all   all             trust
    host    all   all   0.0.0.0/0 trust
@@ -22,7 +24,7 @@ PostgreSQL's `COPY ... TO PROGRAM` feature executes an OS command as the `postgr
 - **Apply the misconfiguration (service already running):**
   ```bash
   # trust auth for everyone
-  PG_HBA=$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)
+  PG_HBA=$(find /etc/postgresql /var/lib/pgsql -name pg_hba.conf 2>/dev/null | head -1)
   cat > "$PG_HBA" << 'EOF'
   local   all   all             trust
   host    all   all   0.0.0.0/0 trust
@@ -49,4 +51,4 @@ PostgreSQL's `COPY ... TO PROGRAM` feature executes an OS command as the `postgr
 5. Escalate: `COPY (SELECT '') TO PROGRAM 'cp /bin/bash /tmp/rootbash && chmod +s /tmp/rootbash'`
 
 ### Synthesis Guidance:
-PostgreSQL install/start/`listen_addresses` is owned by the `postgres` recipe — the entity must not duplicate it. The atom applies only `trust` auth + a `SUPERUSER` role. Use shell globbing (`find /etc/postgresql -name pg_hba.conf | head -1`) to avoid hardcoding the version. Create the superuser over the local socket as the `postgres` system user (peer auth), so it works before `trust` is reloaded. Note: `COPY TO PROGRAM` requires PostgreSQL >= 9.3.
+PostgreSQL install/start/`listen_addresses` is owned by the `postgres` recipe — the entity must not duplicate it. The atom applies only `trust` auth + a `SUPERUSER` role. Use shell globbing (`find /etc/postgresql /var/lib/pgsql -name pg_hba.conf | head -1`) to avoid hardcoding the version or distro layout (Debian: `/etc/postgresql/<ver>/main/`; RHEL/Rocky: `/var/lib/pgsql/data/`). Create the superuser over the local socket as the `postgres` system user (peer auth), so it works before `trust` is reloaded. Note: `COPY TO PROGRAM` requires PostgreSQL >= 9.3.

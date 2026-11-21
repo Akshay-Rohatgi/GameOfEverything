@@ -18,7 +18,7 @@ MongoDB has historically shipped with authentication disabled by default. This a
 1. Edit `/etc/mongod.conf` so MongoDB binds to all interfaces and auth is off:
    - Set `net.bindIp: 0.0.0.0`
    - Set `security.authorization: disabled` (or remove the `security` section entirely)
-2. Restart `mongod` so the new `bindIp` takes effect — WITHOUT a distro init system (no `systemctl`): stop the running daemon and relaunch it detached as the `mongodb` user.
+2. Restart `mongod` so the new `bindIp` takes effect — WITHOUT a distro init system (no `systemctl`): stop the running daemon and relaunch it detached as the MongoDB service user. That user differs by distro (Debian: `mongodb`; RHEL/Rocky: `mongod`), so detect it rather than hardcoding `mongodb`.
 
 ### Common Patterns:
 - **Open the bind address and disable auth in the config the recipe installed:**
@@ -30,9 +30,42 @@ MongoDB has historically shipped with authentication disabled by default. This a
 - **Bounce mongod without systemd (the recipe's start model):**
   ```bash
   pkill mongod 2>/dev/null; sleep 2
-  su mongodb -s /bin/bash -c "mongod --config /etc/mongod.conf --fork" \
+  # Service user is mongodb on Debian, mongod on RHEL/Rocky — detect it.
+  MONGO_USER=mongodb; id mongod >/dev/null 2>&1 && MONGO_USER=mongod
+  su "$MONGO_USER" -s /bin/bash -c "mongod --config /etc/mongod.conf --fork" \
     || mongod --config /etc/mongod.conf --fork
   ```
+
+### Seeding data for exfiltration:
+If the scenario needs collections for an attacker to read (an exfiltration/unauth-read
+target), seed them AFTER the daemon is confirmed listening. Two mongosh pitfalls cause the
+seeded database to silently never appear (only `admin`/`config`/`local` remain):
+- **`use <db>;` inside `--eval` does NOT reliably switch the `db` context in mongosh** (it
+  worked in the legacy `mongo` shell; it does not here). Inserts then land in `test` or
+  nowhere, and your target database is never created.
+- **A database only materializes once a document is actually inserted** — a `use` + `drop()`
+  with no successful insert creates nothing.
+
+Seed by putting the database name in the connection URI (no `use`), and run the whole thing
+as a heredoc file, not a fragile inline `--eval` string:
+```bash
+# Robust: DB is selected by the URI path, so `db` IS corporate_data — no `use` needed.
+cat > /tmp/seed.js <<'EOF'
+db.employees.insertMany([
+  { name: 'Alice Johnson', email: 'alice@corp.example', ssn: '123-45-6789' },
+]);
+db.credentials.insertMany([
+  { username: 'dbadmin', plaintext_password: 'S3cret!', role: 'db_admin' },
+]);
+print('seeded employees=' + db.employees.countDocuments());
+EOF
+mongosh "mongodb://127.0.0.1:27017/corporate_data" --quiet --file /tmp/seed.js
+
+# MANDATORY verification — the build must fail loudly if the DB didn't land:
+mongosh "mongodb://127.0.0.1:27017/corporate_data" --quiet \
+  --eval 'if (db.employees.countDocuments() < 1) { print("FATAL: seed failed"); quit(1); }'
+```
+Do not wrap the seed in `|| true`; a failed seed must surface, not pass silently.
 
 ### Testing Guidance:
 1. Verify MongoDB is listening on 0.0.0.0:27017: `ss -tlnp | grep 27017`

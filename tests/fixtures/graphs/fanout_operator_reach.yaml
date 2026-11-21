@@ -1,0 +1,84 @@
+# Mirrors the P2 live topology: a fan-out operator network_reach edge to the internal
+# host (to_entity: null, consumed by two entities). Before the resolve fix, its host/port
+# stayed None -> edge_gap; the structural host already names the target system.
+systems:
+  - id: web_host
+    os: debian_12
+    services:
+      - web
+    network:
+      hostname: webhost
+      exposed_ports:
+        - 80
+        - 22
+      internal_ports: []
+
+  - id: internal_host
+    os: ubuntu_22_04
+    services:
+      - ssh
+    network:
+      hostname: internalhost
+      exposed_ports:
+        - 22
+      internal_ports: []
+
+entities:
+  - id: cmd_injection_web
+    description: Command injection on the web host
+    system_id: web_host
+    requires:
+      - edge_id: op_to_web_host_80
+        optional: false
+    provides: []
+    runtime: flask
+    atoms:
+      - cmd_injection
+
+  - id: bash_history_leak
+    description: Leaked shell history on the internal host
+    system_id: internal_host
+    requires:
+      - edge_id: op_to_internal_host_22
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+  - id: env_vars_leak
+    description: Exposed env vars on the internal host
+    system_id: internal_host
+    requires:
+      - edge_id: op_to_internal_host_22
+        optional: false
+    provides: []
+    runtime: ubuntu
+    atoms: []
+
+edges:
+  - id: op_to_web_host_80
+    from_entity: operator
+    to_entity: cmd_injection_web
+    type: network_reach
+    params:
+      host:
+        structural: webhost
+        concrete: null
+      port:
+        structural: "80"
+        concrete: null
+
+  # The fan-out operator reach: no single to_entity (both internal_host entities
+  # require it). This is the edge that regressed to edge_gap before the fix.
+  - id: op_to_internal_host_22
+    from_entity: operator
+    to_entity: null
+    type: network_reach
+    fan_out: true
+    params:
+      host:
+        structural: internalhost
+        concrete: null
+      port:
+        structural: "22"
+        concrete: null

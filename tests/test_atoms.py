@@ -182,3 +182,52 @@ class TestResolveRequiredServices:
         # A welded atom returns its static service regardless of config.
         assert resolve_required_services("postgres_rce", {"db_type": "mysql"}) == ["postgres"]
         assert resolve_required_services("postgres_rce", None) == ["postgres"]
+
+
+class TestRedisRceAtom:
+    """Grounding for the Redis-RCE scenario: the atom must prescribe the real
+    CONFIG SET / SAVE file-write primitive and forbid the sandboxed Lua path
+    (os.execute/io.popen/system.call) that can never solve on any Redis version.
+    """
+
+    def test_atom_loads_and_welds_to_redis_recipe(self):
+        content = load_atom("redis_rce")
+        assert "not found" not in content
+        # Atom->service bridge: redis_rce always needs the redis recipe.
+        assert required_services("redis_rce") == ["redis"]
+        assert resolve_required_services("redis_rce", {}) == ["redis"]
+        assert resolve_required_services("redis_rce", {"db_type": "mysql"}) == ["redis"]
+
+    def test_prescribes_real_file_write_primitive(self):
+        logic = load_logic_requirements("redis_rce")
+        assert logic
+        # The direct CONFIG SET dir/dbfilename + SAVE primitive, not Lua.
+        assert "CONFIG SET dir" in logic
+        assert "dbfilename" in logic
+        assert "SAVE" in logic
+        assert "not Lua" in logic
+
+    def test_forbids_lua_sandbox_path(self):
+        # The fake-vuln Lua shell-out must be explicitly ruled out in the body
+        # AND in an injected section (synthesis guidance).
+        content = load_atom("redis_rce")
+        for dead_end in ("os.execute", "io.popen", "system.call"):
+            assert dead_end in content, dead_end
+        synth = load_synthesis_guidance("redis_rce")
+        assert synth and "sandbox" in synth
+
+    def test_verification_targets_rdb_file_write(self):
+        testing = load_testing_guidance("redis_rce")
+        assert testing
+        # The exact step the live run hinged on.
+        assert "verify_rdb_file_exists" in testing
+        assert "SAVE" in testing
+
+    def test_surfaced_in_misconfig_catalog(self):
+        from goe.planner._atom_catalog import (
+            misconfig_atom_catalog,
+            _load_misconfig_atom_entries,
+        )
+        ids = {e["id"] for e in _load_misconfig_atom_entries()}
+        assert "redis_rce" in ids
+        assert "redis_rce" in misconfig_atom_catalog()

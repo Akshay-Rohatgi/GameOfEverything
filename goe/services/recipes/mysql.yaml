@@ -4,11 +4,28 @@ packages:
   - mariadb-server
   - mariadb-client
 configure: |
-  # Bind to all interfaces so other containers can connect
-  sed -i 's/bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
-  # Ensure runtime directory exists and is owned by mysql
+  # Bind to all interfaces so other containers can connect. MariaDB's include dir
+  # differs by distro (Debian: /etc/mysql/mariadb.conf.d; RHEL: /etc/my.cnf.d), so
+  # drop a [mysqld] include into whichever one this image ships rather than editing
+  # a Debian-only path. Detect by directory presence, not OS name.
+  for d in /etc/mysql/mariadb.conf.d /etc/my.cnf.d /etc/mysql/conf.d; do
+    if [ -d "$d" ]; then
+      printf '[mysqld]\nbind-address = 0.0.0.0\nskip-networking = 0\n' > "$d/99-goe-bind.cnf"
+      break
+    fi
+  done
+  # Ensure runtime directory exists and is owned by mysql (the mariadb-server
+  # package creates the mysql user on both families).
   mkdir -p /run/mysqld
-  chown mysql:mysql /run/mysqld
+  chown mysql:mysql /run/mysqld 2>/dev/null || true
+  # Initialize the data directory if the system tables are absent. Debian's
+  # mariadb-server initializes /var/lib/mysql during package install; RHEL's does
+  # NOT, so mysqld_safe would start mariadbd against an empty datadir and exit.
+  # Detect by the presence of the `mysql` system DB and run install-db if missing.
+  if [ ! -d /var/lib/mysql/mysql ]; then
+    mariadb-install-db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 \
+      || mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1 || true
+  fi
 start: |
   # Start mysqld_safe in background (handles crash recovery, restarts)
   mysqld_safe &
@@ -40,6 +57,15 @@ config_vars:
     after_start: true
     apply: |
       if [ -n "{value}" ]; then
-        mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '{value}'; FLUSH PRIVILEGES;" 2>/dev/null || true
-        mysql -e "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{value}'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;" 2>/dev/null || true
+        # Create the remotely-reachable root@'%' account up front: cross-host
+        # consumers (e.g. a web app on another host) build BEFORE this DB entity
+        # runs its own setup.sh, so the remote account must already exist at
+        # provision time. Do it in ONE `mysql -e` call (one socket-authed session)
+        # and — critically — DO NOT alter root@'localhost' here. Setting a password
+        # on root@'localhost' switches it from unix_socket to password auth, which
+        # would deny every subsequent passwordless `mysql` call: both this recipe's
+        # own follow-ups AND the entity's weak_service_password script (which
+        # correctly sets the localhost password LAST, in a single session). Leaving
+        # root@'localhost' on unix_socket keeps those passwordless calls working.
+        mysql -e "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{value}'; ALTER USER 'root'@'%' IDENTIFIED BY '{value}'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;" 2>/dev/null || true
       fi

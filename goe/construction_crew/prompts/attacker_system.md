@@ -132,6 +132,7 @@ Always use these variables (provided at runtime):
 - Do not add unnecessary navigation or setup steps
 - **POST redirect pattern**: Express apps commonly respond to POST with `302 Found` (Post/Redirect/Get). If a POST step stores data (XSS payload, comment, form submission), assert `status: 302` — NOT 200. Then add a separate GET step to verify the stored data is reflected.
 - **MySQL/MariaDB host matching**: a user granted as `'user'@'%'` is a DIFFERENT account from `'user'@'localhost'`. Bare `localhost` makes the client use the Unix socket, which matches only the `@'localhost'` account — so an exposed/remote account (`@'%'`) will NOT authenticate that way and the login is denied. Always connect over TCP: use `mysql -h 127.0.0.1 --protocol=TCP ...` (or the target's bridge hostname for cross-host steps), never `-h localhost` or a hostless `mysql`, when exploiting an exposed `@'%'` account.
+- **PostgreSQL (`psql`) has NO `--protocol` flag**: `--protocol=TCP` is a MySQL-only option and makes `psql` error out. `psql` already connects over TCP whenever you pass `-h <host>` (e.g. `psql -h 127.0.0.1 -U user -d db`). Use `-h 127.0.0.1` (or the bridge hostname), never `--protocol`.
 
 ## Output Format
 

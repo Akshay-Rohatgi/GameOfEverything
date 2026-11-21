@@ -81,8 +81,36 @@ def _commands(procedure: "Procedure | None") -> list[tuple[str, str]]:
     return out
 
 
+def _strip_comments(text: str) -> str:
+    """Remove shell comments so a token mentioned in a comment isn't linted as a command.
+
+    The LLM often documents what it deliberately avoided — e.g. ``# reload without systemctl``
+    — and a naive token scan would flag that comment as using the very thing it avoided. We
+    strip from the first unquoted ``#`` to end-of-line, preserving ``#`` inside single/double
+    quotes (so a literal ``#`` in a command argument is kept).
+    """
+    out = []
+    for line in text.splitlines():
+        in_s = in_d = False
+        cut = len(line)
+        for i, ch in enumerate(line):
+            if ch == "'" and not in_d:
+                in_s = not in_s
+            elif ch == '"' and not in_s:
+                in_d = not in_d
+            elif ch == "#" and not in_s and not in_d:
+                cut = i
+                break
+        out.append(line[:cut])
+    return "\n".join(out)
+
+
 def _lint_text(profile: "DistroProfile", where: str, text: str) -> list[LintFinding]:
     findings: list[LintFinding] = []
+
+    # Lint the CODE only — a token mentioned in a comment (e.g. "reload without systemctl")
+    # is documentation, not a command, and must not be flagged.
+    text = _strip_comments(text)
 
     # 1. systemd — keyed off the profile's init model, not the distro name.
     if not profile.has_systemd and re.search(r"\bsystemctl\b", text):

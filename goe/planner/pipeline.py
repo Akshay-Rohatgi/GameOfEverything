@@ -28,48 +28,101 @@ class PlanResult(BaseModel):
     final_violations: list[Violation] = []
 
 
+# Maps a service recipe -> the config_var that receives an atom-pinned password.
+# Only recipes whose weak-credential vuln is a password config_var appear here;
+# trust/no-auth services (postgres, mongodb) are exposure-only and need no credential.
+_RECIPE_PASSWORD_VAR: dict[str, str] = {
+    "mysql": "root_password",   # applies to the root account
+    "redis": "requirepass",
+}
+
+
+def _service_config_from_entity(svc_recipe_id: str, entity_config) -> dict:
+    """Derive recipe config_vars from an entity's planner-pinned atom config.
+
+    So the deterministic service layer configures the service FULLY at provision
+    time (before any entity builds) — e.g. a weak root password that creates the
+    remotely-reachable ``root@'%'`` account — instead of leaving it to an entity
+    deploy script that runs after a cross-host consumer (a web tier) has already
+    tried to connect. Returns {} when there is nothing to pin.
+    """
+    cfg: dict = {}
+    if not entity_config:
+        return cfg
+    password = entity_config.get("password")
+    username = (entity_config.get("username") or "").strip().lower()
+    var = _RECIPE_PASSWORD_VAR.get(svc_recipe_id)
+    if var and password:
+        # mysql's config_var targets the root account specifically; only pin it when
+        # the atom's account is root (or unspecified). A non-root pinned user is left
+        # to the entity script, which the recipe doesn't model as a config_var.
+        if svc_recipe_id == "mysql" and username not in ("", "root"):
+            return cfg
+        cfg[var] = password
+    return cfg
+
+
 def _attach_required_services(entities, systems):
-    """Union each entity's atoms' declared required services into its System.
+    """Union each entity's atoms' declared required services into its System, and
+    pin the atom's credential config into the recipe so provision() fully configures it.
 
     The atom->service bridge. Atoms declare ``requires_service`` in their
     frontmatter (see ``construction_crew.atoms.required_services``); here we ensure
     those recipes are present on the entity's system so the deterministic,
     distro-aware service layer installs the package — instead of the atom
-    hardcoding ``apt-get`` in its prose. Idempotent: a service already declared on
-    a system is never duplicated. Returns a new systems list; inputs are unchanged.
+    hardcoding ``apt-get`` in its prose. We also carry the entity's planner-pinned
+    credential (e.g. a weak password) into ``ServiceSpec.config`` so the recipe sets
+    it up at provision time, before any cross-host consumer builds. Idempotent: a
+    service already declared on a system is merged (config filled in), not duplicated.
+    Returns a new systems list; inputs are unchanged.
     """
     from goe.construction_crew.atoms import resolve_required_services
     from goe.models.system import ServiceSpec
 
     sys_ids = {s.id for s in systems}
-    needed: dict[str, list[str]] = {}
+    # {system_id: {service_id: merged_config_dict}}
+    needed: dict[str, dict[str, dict]] = {}
     for e in entities:
         if e.system_id not in sys_ids:
             continue
+        e_cfg = getattr(e, "config", None)
         for atom_id in (e.atoms or []):
             # Resolve both static (requires_service) and dynamic
             # (requires_service_by, keyed off the entity's planner-pinned config)
             # service needs, so parameterized atoms install the recipe matching the
             # service the planner actually chose.
-            for svc in resolve_required_services(atom_id, getattr(e, "config", None)):
-                bucket = needed.setdefault(e.system_id, [])
-                if svc not in bucket:
-                    bucket.append(svc)
+            for svc in resolve_required_services(atom_id, e_cfg):
+                bucket = needed.setdefault(e.system_id, {})
+                svc_cfg = bucket.setdefault(svc, {})
+                svc_cfg.update(_service_config_from_entity(svc, e_cfg))
 
     if not needed:
         return systems
 
     updated = []
     for s in systems:
-        extra = needed.get(s.id, [])
-        have = {spec.id for spec in s.services}
-        new_specs = list(s.services) + [
-            ServiceSpec(id=svc) for svc in extra if svc not in have
-        ]
-        updated.append(
-            s if len(new_specs) == len(s.services)
-            else s.model_copy(update={"services": new_specs})
-        )
+        want = needed.get(s.id, {})
+        if not want:
+            updated.append(s)
+            continue
+        have = {spec.id: spec for spec in s.services}
+        new_specs = []
+        changed = False
+        # Merge pinned config into existing specs.
+        for spec in s.services:
+            extra_cfg = want.get(spec.id)
+            if extra_cfg and any(spec.config.get(k) != v for k, v in extra_cfg.items()):
+                merged = {**(spec.config or {}), **extra_cfg}
+                new_specs.append(spec.model_copy(update={"config": merged}))
+                changed = True
+            else:
+                new_specs.append(spec)
+        # Add services the system doesn't have yet, with their pinned config.
+        for svc, cfg in want.items():
+            if svc not in have:
+                new_specs.append(ServiceSpec(id=svc, config=cfg or {}))
+                changed = True
+        updated.append(s.model_copy(update={"services": new_specs}) if changed else s)
     return updated
 
 

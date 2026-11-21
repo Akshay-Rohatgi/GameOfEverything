@@ -131,7 +131,7 @@ APACHE_PROBES = [
     Probe(
         id="apache_error_log",
         label="Apache Error Log (last 30 lines)",
-        command="tail -30 /var/log/apache2/error.log 2>/dev/null || echo '(no apache log)'",
+        command="tail -30 /var/log/apache2/error.log /var/log/httpd/error_log 2>/dev/null || echo '(no apache log)'",
         relevance=lambda ctx: ctx.runtime == "apache_php",
         priority=3,
     ),
