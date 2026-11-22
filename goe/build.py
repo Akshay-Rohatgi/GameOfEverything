@@ -214,19 +214,26 @@ def _l2_verify_port(runtime, artifact, registry):
 
 
 def _sanitize_ssh_dir_perms(script: str) -> str:
-    """Force any ``.ssh`` directory to sshd-safe ``0700``, overriding an LLM loosen.
+    """Strip the group/world *write* bits from any ``.ssh`` directory, overriding an
+    LLM loosen, without disturbing its read/traverse bits.
 
-    sshd StrictModes unconditionally refuses a ``~/.ssh`` that is group- or
-    world-writable ("Authentication refused: bad ownership or modes for directory"),
-    so a key-based login silently fails with ``Permission denied (publickey)``.
-    Developers building a Redis-BGSAVE key-injection entity routinely
-    ``chmod 777 /root/.ssh`` so a root-running Redis can drop the RDB there — which is
-    both unnecessary (root writes a ``0700`` dir it owns) and fatal (sshd then rejects
-    the injected key). Append, at the END of the deploy script, a deterministic
-    ``chmod 700`` of every ``.ssh`` directory the script touches, running after any
-    earlier loosen. Safe: ``0700`` is the mode sshd requires, so it can never break a
-    valid login, and a root writer can still write into it at attack time. No-op when
-    the script references no ``.ssh`` directory path.
+    sshd StrictModes refuses a ``~/.ssh`` that is group- or world-**writable**
+    ("Authentication refused: bad ownership or modes for directory"), so a key-based
+    login silently fails with ``Permission denied (publickey)``. Developers building a
+    Redis-BGSAVE key-injection entity routinely ``chmod 777 /root/.ssh`` so a
+    root-running Redis can drop the RDB there — the ``o+w`` is what sshd rejects.
+
+    The earlier version forced ``0700``, which fixed the login case but *clobbered* a
+    different, valid shape: a credential-leak entity that deliberately
+    ``chmod 755 ~/.ssh`` so an unprivileged foothold user can read a planted private
+    key — ``0700`` made the world-readable key unreachable (LIVE: the Rocky
+    web→postgres chain's ``ssh_key_on_web_server`` producer, whose attacker could never
+    read the 0644 key once ``.ssh`` was clamped to 700). StrictModes only cares about
+    the **write** bits, so append a deterministic ``chmod go-w`` of every ``.ssh`` dir
+    the script touches, running after any earlier loosen. This satisfies sshd (a 755
+    dir is not group/world-writable) *and* preserves a deliberately-traversable leak
+    dir, with no need to tell the two cases apart. No-op when the script references no
+    ``.ssh`` directory path.
     """
     if not script:
         return script
@@ -242,11 +249,11 @@ def _sanitize_ssh_dir_perms(script: str) -> str:
         return script
 
     appended = [
-        "# [harness] sshd StrictModes: a group/world-writable ~/.ssh is rejected; "
-        "force 0700 (root can still write into it)."
+        "# [harness] sshd StrictModes rejects a group/world-WRITABLE ~/.ssh; strip only "
+        "the write bits (go-w) so a 0755 leak dir stays readable and login still works."
     ]
     for d in dirs:
-        appended.append(f'[ -d "{d}" ] && chmod 700 "{d}"')
+        appended.append(f'[ -d "{d}" ] && chmod go-w "{d}"')
     return script.rstrip() + "\n\n" + "\n".join(appended) + "\n"
 
 
@@ -863,9 +870,10 @@ def build_entity(
             # Deterministically re-write any SSH key this entity serves (exact PEM
             # bytes + intended perms), overriding the LLM's fragile key handling.
             script = _fixup_served_ssh_keys(script, provided_values)
-            # sshd rejects a group/world-writable ~/.ssh — force any such dir to 0700,
-            # overriding a `chmod 777 /root/.ssh` the dev adds for a root-Redis BGSAVE
-            # key injection (root writes a 0700 dir fine; 777 is what breaks the login).
+            # sshd rejects a group/world-WRITABLE ~/.ssh — strip the write bits (go-w)
+            # from any such dir, overriding a `chmod 777 /root/.ssh` the dev adds for a
+            # root-Redis BGSAVE key injection. go-w (not 0700) also preserves a leak
+            # entity's deliberately world-readable `chmod 755 ~/.ssh`.
             script = _sanitize_ssh_dir_perms(script)
             # A deliberately world-readable "leak" file (0644 .bash_history, config,
             # etc.) is unreachable if a parent dir lacks o+x — the LLM sets the file

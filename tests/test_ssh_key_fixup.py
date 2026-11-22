@@ -81,27 +81,41 @@ def test_empty_inputs_are_noop():
     assert _fixup_served_ssh_keys("echo hi", None) == "echo hi"
 
 
-# --- _sanitize_ssh_dir_perms: force a group/world-writable ~/.ssh back to 0700 ----
-# sshd StrictModes rejects a world-writable .ssh dir, so a Redis-BGSAVE key injection
-# that `chmod 777 /root/.ssh` fails the subsequent SSH login. The sanitizer appends a
-# `chmod 700` of every .ssh dir, running last to override the loosen.
+# --- _sanitize_ssh_dir_perms: strip group/world WRITE bits from ~/.ssh (go-w) --------
+# sshd StrictModes rejects a group/world-WRITABLE .ssh dir, so a Redis-BGSAVE key
+# injection that `chmod 777 /root/.ssh` fails the subsequent SSH login. The sanitizer
+# appends `chmod go-w` of every .ssh dir, running last to override the loosen. It strips
+# ONLY the write bits so a credential-leak entity's deliberate `chmod 755 ~/.ssh` (keep
+# a planted key world-readable) survives — sshd only forbids writability, not readability.
 
 from goe.build import _sanitize_ssh_dir_perms
 
 
-def test_sanitize_appends_chmod_700_for_world_writable_ssh_dir():
+def test_sanitize_appends_chmod_go_w_for_world_writable_ssh_dir():
     script = "mkdir -p /root/.ssh\nchmod 700 /root/.ssh\nchmod 777 /root/.ssh\n"
     out = _sanitize_ssh_dir_perms(script)
-    assert out.rstrip().endswith('[ -d "/root/.ssh" ] && chmod 700 "/root/.ssh"')
+    assert out.rstrip().endswith('[ -d "/root/.ssh" ] && chmod go-w "/root/.ssh"')
     # original content is preserved; the corrective runs AFTER the chmod 777
-    assert out.index("chmod 777 /root/.ssh") < out.index('chmod 700 "/root/.ssh"')
+    assert out.index("chmod 777 /root/.ssh") < out.index('chmod go-w "/root/.ssh"')
 
 
 def test_sanitize_handles_multiple_distinct_ssh_dirs_once_each():
     script = "chmod 777 /root/.ssh\nchmod 0777 /home/svc/.ssh\nchmod 777 /root/.ssh\n"
     out = _sanitize_ssh_dir_perms(script)
-    assert out.count('chmod 700 "/root/.ssh"') == 1
-    assert out.count('chmod 700 "/home/svc/.ssh"') == 1
+    assert out.count('chmod go-w "/root/.ssh"') == 1
+    assert out.count('chmod go-w "/home/svc/.ssh"') == 1
+
+
+def test_sanitize_preserves_world_readable_leak_ssh_dir():
+    """A leak entity's `chmod 755 ~/.ssh` (planted key readable by a foothold user) must
+    survive: go-w strips no read/traverse bit, so 755 stays 755 — unlike the old 0700
+    clobber that broke the Rocky web->postgres ssh_key_on_web_server leak."""
+    script = "mkdir -p /home/webuser/.ssh\nchmod 755 /home/webuser/.ssh\n"
+    out = _sanitize_ssh_dir_perms(script)
+    assert out.rstrip().endswith('[ -d "/home/webuser/.ssh" ] && chmod go-w "/home/webuser/.ssh"')
+    # the corrective removes only write bits; no 0700/chmod 700 clamp is emitted
+    assert "chmod 700" not in out
+    assert "chmod 0700" not in out
 
 
 def test_sanitize_noop_without_ssh_dir():
