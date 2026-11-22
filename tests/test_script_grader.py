@@ -182,6 +182,69 @@ useradd alice"""  # No trailing newline to avoid whitespace issues
         assert len(warnings) == 0  # No changes detected
 
 
+class TestRemovedSshKeyMaterial:
+    """The grader must never delete an SSH key write (the web->db chain legitimately
+    plants the same key on multiple hosts); removing one empties the key file."""
+
+    # base64 of "-----BEGIN OPENSSH PRIVATE KEY-----\n..." (as seen in the live failure)
+    KEY_B64 = "LS0tLS1CRUdJTiBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0KYjNCbGZvbw=="
+
+    def test_detects_removed_base64_key_write(self):
+        from goe.packaging.grader import _removed_ssh_key_material
+        line = f"echo '{self.KEY_B64}' | base64 -d > /tmp/pg_priv_key"
+        original = f"#!/bin/bash\nuseradd webuser\n{line}\n"
+        fixed = "#!/bin/bash\nuseradd webuser\n"  # key write deleted, no survivor
+        offenders = _removed_ssh_key_material(original, fixed)
+        assert offenders and offenders[0].startswith("echo '" + self.KEY_B64[:10])
+
+    def test_detects_removed_key_path_write(self):
+        from goe.packaging.grader import _removed_ssh_key_material
+        original = "echo 'KEYDATA' > /home/webuser/.ssh/id_rsa\n"
+        assert _removed_ssh_key_material(original, "")
+
+    def test_ignores_non_key_file_write_removal(self):
+        from goe.packaging.grader import _removed_ssh_key_material
+        original = "echo 'hello' > /etc/motd\necho 'x' > /var/www/index.html\n"
+        assert _removed_ssh_key_material(original, "") == []
+
+    def test_ignores_removal_when_identical_key_write_survives(self):
+        """Removing one of two byte-identical key writes is harmless (the survivor still
+        writes the file), so it must NOT be flagged — only a lost write is harmful."""
+        from goe.packaging.grader import _removed_ssh_key_material
+        line = f"echo '{self.KEY_B64}' | base64 -d > /tmp/pg_priv_key"
+        original = f"{line}\nuseradd a\n{line}\n"
+        fixed = f"{line}\nuseradd a\n"  # one copy dropped, identical copy remains
+        assert _removed_ssh_key_material(original, fixed) == []
+
+    def test_grader_reverts_when_llm_removes_ssh_key(self, monkeypatch):
+        """End-to-end: an LLM 'fix' that deletes a key write with no survivor is rejected.
+        Mirrors the live web->db chain: the key is planted at one path on the web host and
+        decoded to a different path on the db host; dropping either breaks the chain."""
+        from goe.packaging.grader import grade_and_fix_script
+        web_key = f"echo '{self.KEY_B64}' | base64 -d > /home/webuser/.ssh/postgres_db_id_rsa"
+        db_key = f"echo '{self.KEY_B64}' | base64 -d > /tmp/pg_priv_key"
+        original = f"""#!/bin/bash
+set -e
+useradd webuser
+{web_key}
+useradd dbuser
+{db_key}
+"""
+        # LLM treats the second key write as a "duplicate base64 overwrite" and removes it.
+        def mock_call(*args, **kwargs):
+            return f"""#!/bin/bash
+set -e
+useradd webuser
+{web_key}
+useradd dbuser
+"""
+        monkeypatch.setattr("goe.bedrock.call", mock_call)
+        fixed, warnings = grade_and_fix_script(original, {"e1": original})
+        assert fixed == original  # reverted
+        assert len(warnings) == 1
+        assert "SSH key material" in warnings[0]
+
+
 class TestDiffSummary:
     def test_detects_removed_chpasswd(self):
         """Test that removed chpasswd lines are detected."""

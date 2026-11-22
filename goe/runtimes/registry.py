@@ -109,8 +109,11 @@ class RuntimeRegistry:
         # The template supplies a deps_install_template with an `{extra}` placeholder;
         # `extra` expands to the space-prefixed extra_deps (or "" when there are none),
         # so the same template covers both the deps and no-deps cases. Runtimes with no
-        # package install (e.g. apache_php) simply omit deps_install_template.
-        deps_template = t.get("deps_install_template", "").strip()
+        # package install (e.g. apache_php) simply omit deps_install_template. The value
+        # may be a {family: value} map (e.g. flask gates pip's --break-system-packages,
+        # a PEP-668 flag Debian 12+ needs but RHEL's older pip rejects) resolved for the
+        # target family; a plain string stays universal.
+        deps_template = _pick_family(t.get("deps_install_template"), profile.family).strip()
         if deps_template:
             extra = ("" if not artifact.extra_deps else " " + " ".join(artifact.extra_deps))
             lines.append(f"cd {app_dir}")

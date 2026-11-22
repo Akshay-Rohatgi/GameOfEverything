@@ -107,6 +107,43 @@ def _is_valid_bash(script: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _removed_ssh_key_material(original: str, fixed: str) -> list[str]:
+    """Lines the grader removed that write SSH key material — which it must never do.
+
+    The LLM grader's "duplicate file overwrite → delete the second" rule is correct for a
+    config file but catastrophic for an SSH key: the web→db chain plants a postgres private
+    key on one host and authorizes/decodes it on another, so the same base64 key write
+    legitimately appears more than once. Deleting one leaves an empty key file —
+    ``Load key "/tmp/pg_priv_key": invalid format`` → the chain deploy fails (observed LIVE
+    on the Rocky web→postgres chain, both hosts). Key material is unique, essential, and
+    idempotent to repeat, so removing such a write is never a valid conflict resolution.
+
+    A removed line counts when it is a non-append file write (``base64 -d >`` or
+    ``echo``/``printf`` with ``>`` but not ``>>``) AND it carries SSH key material — either
+    a key-ish target path or a base64 blob that decodes to a PEM ``-----BEGIN`` header.
+    """
+    import re
+
+    orig_lines = [ln.strip() for ln in original.strip().split("\n")]
+    fixed_set = set(ln.strip() for ln in fixed.strip().split("\n"))
+    removed = [ln for ln in orig_lines if ln and ln not in fixed_set]
+
+    # base64 of "-----BEGIN" (any PEM/OpenSSH key block) starts with this prefix.
+    pem_b64_prefix = "LS0tLS1CRUd"
+    key_path = re.compile(
+        r"\.ssh/|authorized_keys|id_rsa|id_ed25519|id_ecdsa|id_dsa|\.pem(?:\b|['\"])|_key\b"
+    )
+    offenders: list[str] = []
+    for ln in removed:
+        is_write = (">" in ln and ">>" not in ln
+                    and ("base64 -d" in ln or ln.startswith(("echo", "printf"))))
+        if not is_write:
+            continue
+        if pem_b64_prefix in ln or key_path.search(ln):
+            offenders.append(ln[:60])
+    return offenders
+
+
 def _detect_suspicious_truncation(original: str, fixed: str) -> bool:
     """Check if fixed script lost significant content AND has syntax errors.
 
@@ -233,16 +270,20 @@ Grade and fix this script. Remove conflicting commands (especially duplicate use
     # Validate the fixed script before accepting it
     is_valid, error = _is_valid_bash(fixed_script)
     is_truncated = _detect_suspicious_truncation(concatenated_script, fixed_script)
+    removed_keys = _removed_ssh_key_material(concatenated_script, fixed_script)
 
-    if not is_valid or is_truncated:
+    if not is_valid or is_truncated or removed_keys:
+        reason = (
+            f"removed SSH key material: {removed_keys}" if removed_keys
+            else f"syntax error: {error or 'truncation detected'}"
+        )
         logger.error(
             f"[ScriptGrader] Fixed script failed validation "
-            f"(valid={is_valid}, truncated={is_truncated}). "
-            f"Error: {error}. Reverting to original script."
+            f"(valid={is_valid}, truncated={is_truncated}, "
+            f"removed_key_material={bool(removed_keys)}). "
+            f"Reverting to original script. Reason: {reason}."
         )
-        return concatenated_script, [
-            f"Grader output rejected (syntax error: {error or 'truncation detected'})"
-        ]
+        return concatenated_script, [f"Grader output rejected ({reason})"]
 
     # Detect what changed
     warnings = _diff_summary(concatenated_script, fixed_script)
