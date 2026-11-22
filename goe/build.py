@@ -857,6 +857,7 @@ def build_entity(
                 log(f"[peer] attach '{alias}' failed: {e}")
 
     def _make_deploy_script(artifact) -> str:
+        from goe.distros import get_profile
         if runtime == "system":
             script = artifact.source_files[artifact.primary_source]
             # Deterministically re-write any SSH key this entity serves (exact PEM
@@ -872,11 +873,10 @@ def build_entity(
             # at 0700). Add o+x to each ancestor so the intended reader can reach it.
             script = _sanitize_world_readable_traversal(script)
         else:
-            script = registry.deploy(runtime, artifact)
+            script = registry.deploy(runtime, artifact, profile=get_profile(os))
         # Deterministically neutralize `systemctl` for no-systemd containers: the service
         # layer already owns start/restart, so a systemctl line is always wrong here and
         # otherwise loops the distro lint until the entity escalates to design_flaw.
-        from goe.distros import get_profile
         return get_profile(os).sanitize_service_control(script)
 
     try:

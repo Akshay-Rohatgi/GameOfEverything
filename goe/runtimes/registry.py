@@ -15,6 +15,25 @@ if TYPE_CHECKING:
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
+def _pick_family(value, family: str) -> str:
+    """Resolve a template field that may be family-specific.
+
+    A plain string is universal (used for every family). A ``{family: value}`` map
+    selects the entry for ``family``, falling back to ``debian`` (the original,
+    pre-Red-Hat default) then to any entry, so a template listing only some families
+    still yields something sensible. Returns "" for a missing/empty field.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        if family in value:
+            return value[family] or ""
+        if "debian" in value:
+            return value["debian"] or ""
+        return next((v for v in value.values() if v), "")
+    return value
+
+
 class RuntimeRegistry:
     """Loads runtime YAML templates and generates deploy scripts from BuildArtifacts."""
 
@@ -29,34 +48,46 @@ class RuntimeRegistry:
             raise ValueError(f"Unknown runtime: {runtime_id!r}. Available: {list(self._templates)}")
         return self._templates[runtime_id]
 
-    def deploy(self, runtime_id: str, artifact: "BuildArtifact") -> str:
+    def deploy(self, runtime_id: str, artifact: "BuildArtifact", profile=None) -> str:
         """Generate a complete bash deploy script for the given runtime and artifact.
 
         The script:
-          1. Installs the runtime (apt packages, NodeSource for express, etc.)
+          1. Installs the runtime (packages, NodeSource/nodejs module, etc.)
           2. Creates app_dir and writes all source_files via base64-decoded heredocs
           3. Installs extra_deps and runtime-specific npm/pip packages
           4. Runs DB setup if artifact.db_setup is present
           5. Starts the service with nohup (Docker-compatible)
+
+        ``profile`` is the target :class:`~goe.distros.DistroProfile`. Package installs
+        render through it (apt on Debian, dnf on Red Hat), and template fields that
+        differ by family (``install_runtime``, ``start_cmd``) may be a ``{family: value}``
+        map resolved for the target family. On a prebuilt appliance image the packages
+        are already present, so the install steps are an idempotent re-ensure; on a bare
+        base image (e.g. the multi-host chain) they do the real install. Defaults to the
+        ubuntu profile so existing Debian behavior is unchanged.
         """
+        if profile is None:
+            from goe.distros import get_profile
+            profile = get_profile("ubuntu")
+
         t = self.get_template(runtime_id)
         app_dir = artifact.app_dir  # artifact owns the path; template provides the default
         lines = ["#!/bin/bash", "set -e", "export DEBIAN_FRONTEND=noninteractive", ""]
 
-        # 1a. Install system deps (apt packages required by the app, e.g. chromium-browser)
+        # 1a. Install system deps (packages required by the app, e.g. chromium). Routed
+        # through the profile so names resolve per distro (apt vs dnf + aliases).
         if artifact.system_deps:
-            pkgs = " ".join(artifact.system_deps)
             lines.append("# Install system dependencies")
-            lines.append("apt-get update -qq")
-            lines.append(f"apt-get install -y {pkgs}")
+            lines.append(profile.update_cmd())
+            lines.append(profile.install_cmd(artifact.system_deps))
             lines.append("")
 
-        # 1b. Install runtime
-        install = t.get("install_runtime", "").strip()
+        # 1b. Install runtime (family-aware: template field may be a {family: value} map)
+        install = _pick_family(t.get("install_runtime"), profile.family).strip()
         if install:
             lines.append("# Install runtime")
             if not artifact.system_deps:
-                lines.append("apt-get update -qq")
+                lines.append(profile.update_cmd())
             lines.append(install)
             lines.append("")
 
@@ -93,7 +124,8 @@ class RuntimeRegistry:
             if db.db_type == "sqlite3":
                 b64_schema = base64.b64encode(db.schema_sql.encode()).decode()
                 b64_seed = base64.b64encode(db.seed_sql.encode()).decode()
-                lines.append("apt-get install -y sqlite3 -qq 2>/dev/null || true")
+                # sqlite3 (Debian) / sqlite (RHEL) — the profile aliases the name.
+                lines.append(f"{profile.install_cmd(['sqlite3'])} 2>/dev/null || true")
                 lines.append(f"echo '{b64_schema}' | base64 -d > /tmp/schema.sql")
                 lines.append(f"echo '{b64_seed}' | base64 -d > /tmp/seed.sql")
                 lines.append(f"sqlite3 {app_dir}/app.db < /tmp/schema.sql")
@@ -101,8 +133,17 @@ class RuntimeRegistry:
             elif db.db_type in ("mysql", "mariadb"):
                 b64_schema = base64.b64encode(db.schema_sql.encode()).decode()
                 b64_seed = base64.b64encode(db.seed_sql.encode()).decode()
-                lines.append("apt-get install -y mariadb-server -qq")
-                lines.append("service mariadb start")
+                lines.append(profile.install_cmd(["mariadb-server"]))
+                if profile.family == "rhel":
+                    # RHEL MariaDB doesn't auto-initialize its datadir; no systemd.
+                    lines.append(
+                        "[ -d /var/lib/mysql/mysql ] || mariadb-install-db "
+                        "--user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1"
+                    )
+                    lines.append("mysqld_safe & ")
+                    lines.append("for i in $(seq 1 30); do mysqladmin ping --silent 2>/dev/null && break; sleep 1; done")
+                else:
+                    lines.append("service mariadb start")
                 lines.append(f"echo '{b64_schema}' | base64 -d | mysql")
                 lines.append(f"echo '{b64_seed}' | base64 -d | mysql")
             else:
@@ -116,7 +157,7 @@ class RuntimeRegistry:
             lines.append("")
 
         # 6. Start the service (nohup — works in Docker without systemd)
-        start_cmd = t["start_cmd"]
+        start_cmd = _pick_family(t["start_cmd"], profile.family)
         run_as = t.get("run_as", "")
         log_file = "/var/log/webapp.log"
         lines.append("# Start application")

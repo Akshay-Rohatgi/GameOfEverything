@@ -88,20 +88,52 @@ PRESET_TARGET_IMAGE_TAG = "goe-preset-target:latest"
 # the most fragile apt-install steps during Docker testing.
 _DOCKER_DIR = _PROJECT_ROOT / "docker"
 
-RUNTIME_TARGET_IMAGES: Dict[str, Dict[str, str]] = {
+# Keyed by runtime, then distro family. Each family has its own prebuilt appliance so
+# a Red Hat web build is as fast as the Debian one (no favoring either distro).
+RUNTIME_TARGET_IMAGES: Dict[str, Dict[str, Dict[str, str]]] = {
     "express": {
-        "tag": "goe-target-express:latest",
-        "dockerfile_dir": str(_DOCKER_DIR / "target_express"),
+        "debian": {
+            "tag": "goe-target-express:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_express"),
+        },
+        "rhel": {
+            "tag": "goe-target-express-rhel:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_express_rhel"),
+        },
     },
     "flask": {
-        "tag": "goe-target-flask:latest",
-        "dockerfile_dir": str(_DOCKER_DIR / "target_flask"),
+        "debian": {
+            "tag": "goe-target-flask:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_flask"),
+        },
+        "rhel": {
+            "tag": "goe-target-flask-rhel:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_flask_rhel"),
+        },
     },
     "apache_php": {
-        "tag": "goe-target-php:latest",
-        "dockerfile_dir": str(_DOCKER_DIR / "target_php"),
+        "debian": {
+            "tag": "goe-target-php:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_php"),
+        },
+        "rhel": {
+            "tag": "goe-target-php-rhel:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_php_rhel"),
+        },
     },
 }
+
+
+def runtime_target_image(runtime: str, family: str = "debian") -> "Dict[str, str] | None":
+    """The ``{tag, dockerfile_dir}`` for a web runtime on a distro family.
+
+    Falls back to the ``debian`` appliance when the runtime has no variant for the
+    requested family, and returns ``None`` for a non-web runtime.
+    """
+    variants = RUNTIME_TARGET_IMAGES.get(runtime)
+    if not variants:
+        return None
+    return variants.get(family) or variants.get("debian")
 
 # Maps attacker-side command names to their apt package names (Kali/Debian).
 # Used by ensure_attacker_tools() to detect and install missing tools at runtime.
@@ -276,9 +308,12 @@ class TestEnvironmentTool:
             if self._target_image == PRESET_TARGET_IMAGE_TAG:
                 dockerfile_dir = PRESET_TARGET_DOCKERFILE_DIR
             else:
-                for info in RUNTIME_TARGET_IMAGES.values():
-                    if info["tag"] == self._target_image:
-                        dockerfile_dir = info["dockerfile_dir"]
+                for variants in RUNTIME_TARGET_IMAGES.values():
+                    for info in variants.values():
+                        if info["tag"] == self._target_image:
+                            dockerfile_dir = info["dockerfile_dir"]
+                            break
+                    if dockerfile_dir:
                         break
             if dockerfile_dir:
                 logger.info(f"Building target image {self._target_image} from {dockerfile_dir}...")

@@ -4,19 +4,29 @@ target_image: goe-target-php:latest
 port: 80
 default_app_dir: /var/www/html
 primary_file: app.php
-start_cmd: "service apache2 start"
+start_cmd:
+  debian: "service apache2 start"
+  rhel: "httpd -k start"
 healthcheck: "curl -sf http://localhost/app.php || curl -sf http://localhost/"
 setup_notes: >
   Apache serves PHP files automatically once libapache2-mod-php is installed.
   No additional configuration needed for basic PHP. Files placed in /var/www/html/.
-install_runtime: |
-  apt-get install -y apache2 php libapache2-mod-php php-mysql php-sqlite3
+install_runtime:
+  debian: |
+    apt-get install -y apache2 php libapache2-mod-php php-mysql php-sqlite3
+  rhel: |
+    # RHEL 9 has no mod_php — PHP is served by php-fpm, which httpd's shipped
+    # php.conf already routes to. Install + start php-fpm so Apache executes PHP.
+    dnf -y install httpd php php-fpm php-mysqlnd php-pdo
+    mkdir -p /run/php-fpm && php-fpm -D
 # apache_php installs no extra packages, so it has no deps_install_template.
 # pre_start: shell commands emitted verbatim after DB setup, before the service starts.
 pre_start: |
-  # Ensure www-data writable dirs
-  mkdir -p /var/db && chown www-data:www-data /var/db
-  mkdir -p /var/www/html/uploads && chown www-data:www-data /var/www/html/uploads
+  # Ensure web-user-writable dirs. The web user differs by distro (www-data on
+  # Debian, apache on RHEL) — detect it rather than hardcoding www-data.
+  WWW=www-data; id apache >/dev/null 2>&1 && WWW=apache
+  mkdir -p /var/db && chown "$WWW":"$WWW" /var/db
+  mkdir -p /var/www/html/uploads && chown "$WWW":"$WWW" /var/www/html/uploads
 attacker_rules: |
   - Apache/PHP apps typically return 200 on POST — only expect 302 if the app source explicitly calls `header('Location: ...')`.
   - File upload webshell attacks: upload a `.php` file to the uploads directory, then GET `/uploads/shell.php?cmd=id` to trigger execution.

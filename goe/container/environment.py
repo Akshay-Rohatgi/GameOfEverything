@@ -33,7 +33,13 @@ def _image_for(runtime: str, os: str = "ubuntu") -> str:
     runtime = normalize_runtime(runtime)
     registry = get_registry()
     if registry.has_runtime(runtime):
-        return registry.image_for(runtime)
+        # Web runtimes use a prebuilt appliance image, one per distro family, so a
+        # Red Hat web build is as fast as the Debian one. Fall back to the template's
+        # default image if a runtime has no variant registered.
+        from goe.container.test_environment_tool import runtime_target_image
+
+        info = runtime_target_image(runtime, get_profile(os).family)
+        return info["tag"] if info else registry.image_for(runtime)
     if runtime == "system":
         return get_profile(os).image
     if runtime in _BASE_IMAGES:

@@ -10,8 +10,11 @@ healthcheck: "curl -sf http://localhost:5000/ || curl -sf http://localhost:5000/
 setup_notes: >
   Flask is installed via pip3. app.py must call app.run(host='0.0.0.0', port=5000).
   Use sqlite3 (stdlib) for simple DB needs.
-install_runtime: |
-  apt-get install -y python3 python3-pip
+install_runtime:
+  debian: |
+    apt-get install -y python3 python3-pip
+  rhel: |
+    dnf -y install python3 python3-pip
 # {extra} is replaced with the space-prefixed extra_deps (or "" when none).
 # --break-system-packages is required on PEP 668 distros (Debian 12+, Ubuntu 23.04+)
 # where the system Python is "externally managed" and a bare `pip3 install` aborts.
