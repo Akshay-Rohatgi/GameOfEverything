@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from goe.graph.models import EntityGraph, ValidationResult, Violation
 from goe.graph.validator import validate
 from goe.planner.assign_os import assign_os
+from goe.planner._family_check import check_atom_family_compat
 from goe.planner.connect_edges import connect_edges
 from goe.planner.design_systems import design_systems
 from goe.planner.grade_stubs import grade_stubs
@@ -202,6 +203,11 @@ def plan(request: str, verbose: bool = False, console=None, os_override: str | N
         if console:
             entity_ids = [stub.id for stub in stubs]
             console.plan_entities_summary(entity_ids)
+
+        # Fail fast on atom/OS-family conflicts (e.g. a Debian-only atom on a Rocky
+        # host) BEFORE the expensive build, instead of letting the architect loop the
+        # distro lint trying to port an impossible technique and burning API calls.
+        check_atom_family_compat(stubs, systems, os_forced=os_override is not None)
 
         # Step 1.5: Grade stubs
         if console:

@@ -168,12 +168,17 @@ def _load_misconfig_atom_entries() -> list[dict]:
         if isinstance(rsb, dict):
             service_var = rsb.get("var")
 
+        families = fm.get("families") or []
+        if isinstance(families, str):
+            families = [families]
+
         entries.append({
             "id": atom_id,
             "description": description,
             "edge_contract": edge_contract,
             "required_vars": [str(v) for v in required_vars],
             "service_var": service_var,
+            "families": [str(f) for f in families],
         })
     return entries
 
@@ -190,8 +195,8 @@ def misconfig_atom_catalog() -> str:
         return "(none)"
 
     lines = [
-        "| Atom | Description | Edge Contract | Pin in config |",
-        "|------|-------------|---------------|---------------|",
+        "| Atom | Description | Edge Contract | Pin in config | Families |",
+        "|------|-------------|---------------|---------------|----------|",
     ]
     for e in entries:
         desc = e["description"].replace("|", "\\|")[:80]
@@ -203,13 +208,21 @@ def misconfig_atom_catalog() -> str:
             pin = ", ".join(f"`{v}`*" if v == svc_var else f"`{v}`" for v in vars_)
         else:
             pin = "—"
-        lines.append(f"| `{e['id']}` | {desc} | {contract} | {pin} |")
+        fams = e.get("families") or []
+        fam_cell = ", ".join(fams) if fams else "all"
+        lines.append(f"| `{e['id']}` | {desc} | {contract} | {pin} | {fam_cell} |")
     lines.append("")
     lines.append(
         "`*` marks the key that selects which **service recipe** is installed — it MUST be "
         "pinned in the entity's `config` (e.g. `{\"db_type\": \"postgres\"}`) so the right "
         "service is deployed. Pin the other listed keys too (credentials, names) to make the "
         "build deterministic."
+    )
+    lines.append(
+        "**Families** lists the distro families an atom supports (`all` = any). An atom "
+        "restricted to e.g. `debian` must NOT be attached to an entity on a host whose OS "
+        "is the Red Hat family (rocky/rhel) — the build will reject that upfront. Put such "
+        "an entity on a compatible host, or choose a portable atom."
     )
     return "\n".join(lines)
 
