@@ -18,6 +18,7 @@ from goe.distros import (
 
 ROCKY = get_profile("rocky")
 DEBIAN = get_profile("debian")
+MINT = get_profile("mint")
 
 
 # --- registration & normalization -------------------------------------------
@@ -47,6 +48,44 @@ def test_redhat_family_spellings_resolve_to_rocky(spelling):
 def test_unknown_os_still_raises():
     with pytest.raises(ValueError):
         normalize_os("plan9")
+
+
+# --- Linux Mint (Debian family, Week 9) -------------------------------------
+
+def test_mint_is_registered():
+    assert "mint" in available_distros()
+
+
+def test_mint_profile_shape():
+    assert MINT.name == "mint"
+    assert MINT.family == "debian"          # inherits every Debian recipe/template/lint
+    assert MINT.package_manager == "apt"
+    assert MINT.has_systemd is False
+    # community image, pinned by digest for reproducibility/supply-chain integrity
+    assert MINT.image.startswith("linuxmintd/mint21.3-amd64@sha256:")
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["mint", "Mint", "MINT", "linuxmint", "linux_mint", "mint21", "mint_21", "mint21.3"],
+)
+def test_mint_spellings_resolve_to_mint(spelling):
+    assert normalize_os(spelling) == "mint"
+    assert get_profile(spelling) is MINT
+
+
+def test_mint_shares_debian_family_commands():
+    # Mint uses apt exactly like Debian/Ubuntu — no dnf, no --allowerasing.
+    assert MINT.install_cmd(["curl"]) == DEBIAN.install_cmd(["curl"])
+    assert "apt-get" in MINT.install_cmd(["curl"])
+    assert "dnf" not in MINT.install_cmd(["curl"])
+    assert MINT.package_aliases is DEBIAN.package_aliases
+
+
+def test_lint_does_not_flag_native_apt_on_mint():
+    # apt-get on a Debian-family target is native, not foreign.
+    findings = lint(MINT, "apt-get install -y nginx\n", None)
+    assert not any(f.token in {"apt", "apt-get", "dpkg"} for f in findings)
 
 
 # --- package-manager command rendering (the real code gap) ------------------

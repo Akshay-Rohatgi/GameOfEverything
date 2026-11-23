@@ -294,6 +294,19 @@ _PROFILES: dict[str, DistroProfile] = {
         package_aliases=RHEL_FAMILY_ALIASES,
         has_systemd=False,
     ),
+    # Linux Mint 21.3 "Virginia" — Debian family, apt, built on Ubuntu 22.04 (jammy),
+    # so it inherits every Debian/Ubuntu recipe, template and lint rule unchanged. No
+    # Official Docker image exists for Mint, so we use Mint's own Docker Hub org image
+    # (linuxmintd), pinned by digest for reproducibility and supply-chain integrity.
+    "mint": DistroProfile(
+        name="mint",
+        family="debian",
+        image="linuxmintd/mint21.3-amd64@sha256:c21780951eb8b1a626078d06e761047d21b3479aa242c11569e141581f012d11",
+        package_manager="apt",
+        base_packages=APT_BASE_PACKAGES,
+        package_aliases=DEBIAN_FAMILY_ALIASES,
+        has_systemd=False,
+    ),
 }
 
 # Legacy / alternate spellings mapped onto a canonical profile name.
@@ -316,6 +329,12 @@ _ALIASES: dict[str, str] = {
     "almalinux": "rocky",
     "alma": "rocky",
     "centos": "rocky",
+    # Linux Mint (Debian family) — common spellings resolve to the mint profile.
+    "linuxmint": "mint",
+    "linux_mint": "mint",
+    "mint21": "mint",
+    "mint_21": "mint",
+    "mint21.3": "mint",
 }
 
 
