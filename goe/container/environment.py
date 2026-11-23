@@ -33,7 +33,13 @@ def _image_for(runtime: str, os: str = "ubuntu") -> str:
     runtime = normalize_runtime(runtime)
     registry = get_registry()
     if registry.has_runtime(runtime):
-        return registry.image_for(runtime)
+        # Web runtimes use a prebuilt appliance image, one per distro family, so a
+        # Red Hat web build is as fast as the Debian one. Fall back to the template's
+        # default image if a runtime has no variant registered.
+        from goe.container.test_environment_tool import runtime_target_image
+
+        info = runtime_target_image(runtime, get_profile(os).family)
+        return info["tag"] if info else registry.image_for(runtime)
     if runtime == "system":
         return get_profile(os).image
     if runtime in _BASE_IMAGES:
@@ -55,6 +61,7 @@ class TestEnvironment:
             target_image=image,
             enable_browser=enable_browser,
             expose_ports=expose_ports,
+            target_os=os,
         )
         self._setup_done = False
 
@@ -93,6 +100,11 @@ class TestEnvironment:
             self._tool.copy_to_attacker(content, path)
         else:
             raise ValueError(f"Unknown container: {container!r}")
+
+    def attach_peer(self, alias: str, peer_container) -> None:
+        """Connect a peer host's container onto this env's network under ``alias``,
+        so the entity under test can reach another system by hostname during the build."""
+        self._tool.attach_peer(alias, peer_container)
 
     def healthcheck(self, port: int, host: str | None = None) -> bool:
         """Return True if the given port is responding to HTTP on the target."""

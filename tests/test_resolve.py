@@ -65,3 +65,42 @@ def test_resolve_multisystem_host():
     # webapp_to_db_creds targets ssh_pivot on db_system with hostname dbserver
     creds_edge = resolved.edge_by_id("webapp_to_db_creds")
     assert creds_edge.params["host"].concrete == "dbserver"
+
+
+# --------------------------------------------------------------------------- #
+# Fan-out operator network_reach edge (to_entity: null) — P2 edge_gap regression
+# --------------------------------------------------------------------------- #
+def test_resolve_fanout_operator_reach_fills_host_and_port():
+    """A fan-out operator reach (to_entity=None, consumed by 2 entities) must resolve its
+    host/port from the structural host name, not regress to an edge_gap. This is the P2
+    `op_to_internal_host_22` live failure: built 5/5 but the cross-host SSH edge was unfilled."""
+    graph = EntityGraph.from_yaml(FIXTURES / "fanout_operator_reach.yaml")
+    fanout = graph.edge_by_id("op_to_internal_host_22")
+    assert fanout.to_entity is None
+    assert fanout.params["host"].concrete is None
+    assert fanout.params["port"].concrete is None
+
+    resolved = resolve(graph)
+
+    fanout = resolved.edge_by_id("op_to_internal_host_22")
+    assert fanout.params["host"].concrete == "internalhost"
+    assert fanout.params["port"].concrete == "22"
+
+
+def test_resolve_fanout_still_fills_targeted_operator_edge():
+    """The ordinary (to_entity set) operator edge keeps resolving as before."""
+    graph = EntityGraph.from_yaml(FIXTURES / "fanout_operator_reach.yaml")
+    resolved = resolve(graph)
+    targeted = resolved.edge_by_id("op_to_web_host_80")
+    assert targeted.params["host"].concrete == "webhost"
+    assert targeted.params["port"].concrete == "80"
+
+
+def test_resolve_fanout_no_match_leaves_none():
+    """If the structural host matches no system hostname, host stays None (no worse than
+    before) rather than resolving to a wrong value."""
+    graph = EntityGraph.from_yaml(FIXTURES / "fanout_operator_reach.yaml")
+    edge = graph.edge_by_id("op_to_internal_host_22")
+    edge.params["host"].structural = "nosuchhost"
+    resolve(graph)
+    assert edge.params["host"].concrete is None

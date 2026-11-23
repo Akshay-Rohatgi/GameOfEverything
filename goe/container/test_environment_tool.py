@@ -20,6 +20,8 @@ from typing import Dict, List, Set, Tuple, Optional
 import docker
 from docker.errors import DockerException, NotFound, APIError
 
+from goe.distros import get_profile
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,20 +88,52 @@ PRESET_TARGET_IMAGE_TAG = "goe-preset-target:latest"
 # the most fragile apt-install steps during Docker testing.
 _DOCKER_DIR = _PROJECT_ROOT / "docker"
 
-RUNTIME_TARGET_IMAGES: Dict[str, Dict[str, str]] = {
+# Keyed by runtime, then distro family. Each family has its own prebuilt appliance so
+# a Red Hat web build is as fast as the Debian one (no favoring either distro).
+RUNTIME_TARGET_IMAGES: Dict[str, Dict[str, Dict[str, str]]] = {
     "express": {
-        "tag": "goe-target-express:latest",
-        "dockerfile_dir": str(_DOCKER_DIR / "target_express"),
+        "debian": {
+            "tag": "goe-target-express:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_express"),
+        },
+        "rhel": {
+            "tag": "goe-target-express-rhel:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_express_rhel"),
+        },
     },
     "flask": {
-        "tag": "goe-target-flask:latest",
-        "dockerfile_dir": str(_DOCKER_DIR / "target_flask"),
+        "debian": {
+            "tag": "goe-target-flask:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_flask"),
+        },
+        "rhel": {
+            "tag": "goe-target-flask-rhel:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_flask_rhel"),
+        },
     },
     "apache_php": {
-        "tag": "goe-target-php:latest",
-        "dockerfile_dir": str(_DOCKER_DIR / "target_php"),
+        "debian": {
+            "tag": "goe-target-php:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_php"),
+        },
+        "rhel": {
+            "tag": "goe-target-php-rhel:latest",
+            "dockerfile_dir": str(_DOCKER_DIR / "target_php_rhel"),
+        },
     },
 }
+
+
+def runtime_target_image(runtime: str, family: str = "debian") -> "Dict[str, str] | None":
+    """The ``{tag, dockerfile_dir}`` for a web runtime on a distro family.
+
+    Falls back to the ``debian`` appliance when the runtime has no variant for the
+    requested family, and returns ``None`` for a non-web runtime.
+    """
+    variants = RUNTIME_TARGET_IMAGES.get(runtime)
+    if not variants:
+        return None
+    return variants.get(family) or variants.get("debian")
 
 # Maps attacker-side command names to their apt package names (Kali/Debian).
 # Used by ensure_attacker_tools() to detect and install missing tools at runtime.
@@ -116,6 +150,7 @@ TOOL_TO_PACKAGE: Dict[str, str] = {
     "sshpass":      "sshpass",
     "ssh":          "openssh-client",
     "hydra":        "hydra",
+    "sqlmap":       "sqlmap",
     "nmap":         "nmap",
     "curl":         "curl",
     "wget":         "wget",
@@ -174,7 +209,7 @@ TOOL_TO_INSTALL_CMD: Dict[str, str] = {
 class TestEnvironmentTool:
     """Manages Docker network + container lifecycle for snippet testing."""
 
-    def __init__(self, scope: str = "", hostname: str = "", target_image: str = "", enable_browser: bool = False, expose_ports: dict[int, int] | None = None):
+    def __init__(self, scope: str = "", hostname: str = "", target_image: str = "", enable_browser: bool = False, expose_ports: dict[int, int] | None = None, target_os: str = "ubuntu"):
         """Args:
             scope: Optional prefix for container and network names.
                    Empty string → default names (goe_target, goe_attacker, goe_test_net).
@@ -198,6 +233,11 @@ class TestEnvironmentTool:
         self._scope = scope
         self._hostname = hostname or "target"
         self._target_image = target_image or TARGET_IMAGE
+        # Distro profile for the TARGET box, so the safety-net tool installer
+        # (ensure_target_tools) uses the right package manager + package names
+        # (apt on Debian/Ubuntu, dnf on Red Hat family). The attacker box is a
+        # fixed Debian toolbox and keeps its own apt path.
+        self._target_os = target_os or "ubuntu"
         self._enable_browser = enable_browser
         self._expose_ports = expose_ports or {}
         self._client: Optional[docker.DockerClient] = None
@@ -268,9 +308,12 @@ class TestEnvironmentTool:
             if self._target_image == PRESET_TARGET_IMAGE_TAG:
                 dockerfile_dir = PRESET_TARGET_DOCKERFILE_DIR
             else:
-                for info in RUNTIME_TARGET_IMAGES.values():
-                    if info["tag"] == self._target_image:
-                        dockerfile_dir = info["dockerfile_dir"]
+                for variants in RUNTIME_TARGET_IMAGES.values():
+                    for info in variants.values():
+                        if info["tag"] == self._target_image:
+                            dockerfile_dir = info["dockerfile_dir"]
+                            break
+                    if dockerfile_dir:
                         break
             if dockerfile_dir:
                 logger.info(f"Building target image {self._target_image} from {dockerfile_dir}...")
@@ -293,14 +336,17 @@ class TestEnvironmentTool:
 
         # Bootstrap target with tools that generated snippets commonly rely on.
         # Pre-built runtime images already have these baked in — skip for them.
-        if self._target_image == TARGET_IMAGE:
-            logger.info("Bootstrapping target container with base tools...")
-            bootstrap_cmd = (
-                "apt-get update -qq && "
-                "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
-                "curl wget ca-certificates gnupg lsb-release "
-                "iproute2 net-tools procps iputils-ping sudo sshpass"
+        # We bootstrap a bare distro base image (apt on Debian/Ubuntu, dnf on Red
+        # Hat family) and detect it by matching the target's distro profile image,
+        # so a non-Ubuntu base (e.g. rockylinux:9) is bootstrapped too rather than
+        # mistaken for a prebuilt runtime image.
+        target_profile = get_profile(self._target_os)
+        if self._target_image in (TARGET_IMAGE, target_profile.image):
+            logger.info(
+                f"Bootstrapping target container with base tools "
+                f"({target_profile.package_manager})..."
             )
+            bootstrap_cmd = target_profile.bootstrap_command()
             exit_code, _, stderr = self._exec_in_container(self.target_container, bootstrap_cmd)
             if exit_code != 0:
                 logger.warning(f"Target bootstrap had non-zero exit ({exit_code}): {stderr[:300]}")
@@ -365,6 +411,24 @@ class TestEnvironmentTool:
         logger.info("Tearing down test environment...")
         self._force_cleanup()
         logger.info("Test environment teardown complete.")
+
+    def attach_peer(self, alias: str, peer_container) -> None:
+        """Connect a peer host's container onto this env's network under ``alias``.
+
+        Lets the entity under test reach another system (e.g. a web tier reaching its
+        DB host) by hostname during the isolated build, mirroring the flat chain
+        network at deploy time. The peer is disconnected automatically when this
+        env's network is removed at teardown. Idempotent.
+        """
+        if peer_container is None or self.network is None:
+            return
+        try:
+            self.network.connect(peer_container, aliases=[alias])
+            logger.info(f"Attached peer '{alias}' to network {self.network_name}")
+        except APIError as e:
+            if "already exists" in str(e).lower() or "already connected" in str(e).lower():
+                return
+            logger.warning(f"attach_peer('{alias}') failed: {e}")
 
     # ------------------------------------------------------------------
     # Command execution
@@ -520,27 +584,34 @@ class TestEnvironmentTool:
             return
 
         packages_to_install: Set[str] = {TARGET_TOOL_TO_PACKAGE[t] for t in missing_tools}
-        logger.info(f"ensure_target_tools: installing via apt: {sorted(packages_to_install)}")
+        # Resolve through the target's distro profile: picks the package manager
+        # (apt vs dnf) and maps the Debian-named packages above to this distro's
+        # real names (e.g. iproute2->iproute, procps->procps-ng on Red Hat).
+        profile = get_profile(self._target_os)
+        logger.info(
+            f"ensure_target_tools: installing via {profile.package_manager} "
+            f"({profile.name}): {sorted(packages_to_install)}"
+        )
 
         if not self._target_apt_updated:
-            logger.info("ensure_target_tools: running apt-get update in target container...")
+            logger.info(
+                f"ensure_target_tools: refreshing package index in target container "
+                f"({profile.package_manager})..."
+            )
             upd_exit, _, upd_err = self._exec_in_container(
-                self.target_container, "apt-get update -qq"
+                self.target_container, profile.update_cmd()
             )
             if upd_exit != 0:
                 logger.warning(
-                    f"ensure_target_tools: apt-get update failed (exit {upd_exit}): {upd_err}"
+                    f"ensure_target_tools: package index refresh failed (exit {upd_exit}): {upd_err}"
                 )
             self._target_apt_updated = True
 
-        pkg_list = " ".join(sorted(packages_to_install))
-        install_cmd = (
-            f"DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends {pkg_list}"
-        )
+        install_cmd = profile.install_cmd(sorted(packages_to_install))
         inst_exit, _, inst_err = self._exec_in_container(self.target_container, install_cmd)
         if inst_exit != 0:
             logger.warning(
-                f"ensure_target_tools: apt install failed (exit {inst_exit}): {inst_err[:500]}"
+                f"ensure_target_tools: package install failed (exit {inst_exit}): {inst_err[:500]}"
             )
         else:
             logger.info(

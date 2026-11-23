@@ -10,10 +10,21 @@ healthcheck: "curl -sf http://localhost:5000/ || curl -sf http://localhost:5000/
 setup_notes: >
   Flask is installed via pip3. app.py must call app.run(host='0.0.0.0', port=5000).
   Use sqlite3 (stdlib) for simple DB needs.
-install_runtime: |
-  apt-get install -y python3 python3-pip
+install_runtime:
+  debian: |
+    apt-get install -y python3 python3-pip
+  rhel: |
+    dnf -y install python3 python3-pip
 # {extra} is replaced with the space-prefixed extra_deps (or "" when none).
-deps_install_template: "pip3 install flask{extra}"
+# --break-system-packages is a PEP 668 flag the Debian/Ubuntu system pip needs (Debian
+# 12+, Ubuntu 23.04+) where the system Python is "externally managed" and a bare
+# `pip3 install` aborts. Older Debian-family pip (Ubuntu 22.04's pip 22) rejects the
+# flag, so fall back to a plain install there. RHEL/Rocky's system python is NOT
+# externally-managed and its older pip (RHEL 9 pip 21) treats --break-system-packages
+# as "no such option", so the flag must be omitted entirely on the rhel family.
+deps_install_template:
+  debian: "pip3 install --break-system-packages flask{extra} || pip3 install flask{extra}"
+  rhel: "pip3 install flask{extra}"
 attacker_rules: |
   - Flask routes commonly return 200 directly — do not assume redirects unless the app source shows redirect().
   - SSTI payloads use Jinja2 syntax: `{{7*7}}` to confirm, `{{config.__class__.__init__.__globals__['os'].popen('id').read()}}` for RCE. URL-encode `{` as `%7B` and `}` as `%7D` in GET parameters.

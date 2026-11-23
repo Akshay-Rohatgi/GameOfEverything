@@ -29,16 +29,27 @@ The natural cover story is a **support ticket system**, **feedback form**, or **
 The deploy_snippet must install Node.js, Puppeteer, and Chromium's shared library dependencies. Use the system Chromium package rather than Puppeteer's bundled download for reliability in Docker:
 
 ```bash
-# Install Node.js 20 via NodeSource (NOT apt default which is v12)
-apt-get update -qq
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-
-# Install Chromium and its dependencies (system package, ~200MB)
-DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser \
-  libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-  libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-  libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2
+# Install Node.js 20 + system Chromium, distro-aware. Use the SYSTEM Chromium package
+# (not Puppeteer's bundled download) for reliability; on both families the binary is
+# /usr/bin/chromium-browser. Branch on the package manager, not the OS name.
+if command -v apt-get >/dev/null 2>&1; then
+  # Debian/Ubuntu — NodeSource 20 (apt default is far older)
+  apt-get update -qq
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+  # Chromium + its shared-library deps (Debian package names)
+  DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser \
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+    libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2
+else
+  # RHEL/Rocky — AppStream's default nodejs is too old for Puppeteer, so enable the
+  # nodejs:20 module stream. Chromium is in EPEL (enabled by the base bootstrap) and
+  # pulls its own library deps, so no explicit lib list is needed.
+  dnf -y module reset nodejs >/dev/null 2>&1
+  dnf -y module enable nodejs:20 >/dev/null 2>&1
+  dnf -y install nodejs npm chromium
+fi
 
 # CRITICAL: install ALL npm dependencies in the app directory BEFORE starting
 cd /opt/webapp

@@ -1,33 +1,56 @@
 id: mongodb
-description: "MongoDB server (Debian via official MongoDB apt repo, no-systemd Docker startup)"
-# MongoDB server is NOT in Debian's own repositories, so it cannot be installed from
-# the profile's package list. The repo + key setup below is inherently distro-specific
-# (Debian bookworm here); a Red Hat profile (Week 8) will need its own repo/yum path.
-# This is the sanctioned use of the recipe `install:` escape hatch for "extra repos/keys
-# the package list can't express". NOTE: unverified in CI — mongod on Debian has known
-# pitfalls (CPU AVX requirement for 5.0+, arm64 availability); confirm on a live run.
+description: "MongoDB server (official MongoDB repo, apt or dnf, no-systemd Docker startup)"
+# MongoDB server is NOT in the base Debian or RHEL repositories, so it cannot be
+# installed from the profile's package list. The repo + key setup below is inherently
+# distro-specific and branches on the package manager present (apt -> Debian bookworm
+# repo; dnf -> RHEL 9 yum repo). This is the sanctioned use of the recipe `install:`
+# escape hatch for "extra repos/keys the package list can't express". NOTE: mongod
+# requires an AVX-capable CPU (MongoDB 5.0+) on both families; confirm on a live run.
 packages: []
 install: |
-  # Add MongoDB's official apt repository and signing key (Debian 12 "bookworm").
   MONGO_MAJOR=7.0
-  curl -fsSL "https://pgp.mongodb.com/server-${MONGO_MAJOR}.asc" \
-    | gpg --dearmor -o /usr/share/keyrings/mongodb-server-${MONGO_MAJOR}.gpg
-  echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-${MONGO_MAJOR}.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/${MONGO_MAJOR} main" \
-    > /etc/apt/sources.list.d/mongodb-org-${MONGO_MAJOR}.list
-  apt-get update -y
+  if command -v apt-get >/dev/null 2>&1; then
+    # Debian/Ubuntu: official MongoDB apt repository + signing key (Debian "bookworm").
+    curl -fsSL "https://pgp.mongodb.com/server-${MONGO_MAJOR}.asc" \
+      | gpg --dearmor -o /usr/share/keyrings/mongodb-server-${MONGO_MAJOR}.gpg
+    echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-${MONGO_MAJOR}.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/${MONGO_MAJOR} main" \
+      > /etc/apt/sources.list.d/mongodb-org-${MONGO_MAJOR}.list
+    apt-get update -y
+    DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org-server mongodb-mongosh
+  else
+    # RHEL/Rocky 9: official MongoDB yum repository (gpg-verified).
+    cat > /etc/yum.repos.d/mongodb-org-${MONGO_MAJOR}.repo <<RHREPO
+  [mongodb-org-${MONGO_MAJOR}]
+  name=MongoDB Repository
+  baseurl=https://repo.mongodb.org/yum/redhat/9/mongodb-org/${MONGO_MAJOR}/x86_64/
+  gpgcheck=1
+  enabled=1
+  gpgkey=https://pgp.mongodb.com/server-${MONGO_MAJOR}.asc
+  RHREPO
+    # The heredoc above is indented by the YAML block; strip the leading two
+    # spaces so the .repo file is valid ini.
+    sed -i 's/^  //' /etc/yum.repos.d/mongodb-org-${MONGO_MAJOR}.repo
+    dnf -y install mongodb-org-server mongodb-mongosh
+  fi
   # Install the daemon AND the mongosh shell: the shell is needed on the target
   # itself for seeding collections and for target-side verification steps. (The
   # legacy `mongo` shell was removed in MongoDB 6.0+, so mongosh is the client.)
-  DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org-server mongodb-mongosh
 configure: |
-  # Package ships /etc/mongod.conf (bindIp 127.0.0.1, no auth). Ensure the data and
-  # log dirs exist and are owned by the mongodb service user the package creates.
-  mkdir -p /var/lib/mongodb /var/log/mongodb
-  chown -R mongodb:mongodb /var/lib/mongodb /var/log/mongodb 2>/dev/null || true
+  # Package ships /etc/mongod.conf (bindIp 127.0.0.1, no auth) and creates a service
+  # user that differs by family (Debian: mongodb; RHEL: mongod). Resolve the user and
+  # the configured dbPath, then ensure the data + log dirs exist and are owned by it.
+  MONGO_USER=mongodb; id mongod >/dev/null 2>&1 && MONGO_USER=mongod
+  DBPATH=$(awk '/dbPath:/{print $2}' /etc/mongod.conf 2>/dev/null)
+  [ -z "$DBPATH" ] && DBPATH=/var/lib/mongo
+  LOGPATH=$(awk '/path:/{print $2}' /etc/mongod.conf 2>/dev/null)
+  LOGDIR=$(dirname "${LOGPATH:-/var/log/mongodb/mongod.log}")
+  mkdir -p "$DBPATH" "$LOGDIR"
+  chown -R "$MONGO_USER" "$DBPATH" "$LOGDIR" 2>/dev/null || true
 start: |
   # Start mongod WITHOUT systemd — these containers have no init. --fork daemonizes.
-  # Run as the mongodb user so it can write its dbPath.
-  su mongodb -s /bin/bash -c "mongod --config /etc/mongod.conf --fork" 2>/dev/null \
+  # Run as the service user (mongodb on Debian, mongod on RHEL) so it can write dbPath.
+  MONGO_USER=mongodb; id mongod >/dev/null 2>&1 && MONGO_USER=mongod
+  su "$MONGO_USER" -s /bin/bash -c "mongod --config /etc/mongod.conf --fork" 2>/dev/null \
     || mongod --config /etc/mongod.conf --fork
 
   echo "Waiting for MongoDB to be ready..."

@@ -140,3 +140,56 @@ class TestScriptStructure:
     def test_deploy_ok_marker(self, registry):
         script = registry.deploy("express", minimal_artifact())
         assert "deploy_ok" in script
+
+
+class TestDistroAwareDeploy:
+    """Red Hat (B2): the generator emits distro-correct commands per profile, and
+    web runtimes select a prebuilt appliance per distro family."""
+
+    def _rocky(self):
+        from goe.distros import get_profile
+        return get_profile("rocky")
+
+    def _ubuntu(self):
+        from goe.distros import get_profile
+        return get_profile("ubuntu")
+
+    def test_apache_php_rhel_uses_dnf_httpd_phpfpm(self, registry):
+        s = registry.deploy("apache_php", minimal_artifact("app.php"), profile=self._rocky())
+        assert "dnf" in s and "httpd" in s and "php-fpm" in s
+        assert "apt-get" not in s and "service apache2" not in s
+        assert "httpd -k start" in s
+
+    def test_apache_php_debian_unchanged(self, registry):
+        s = registry.deploy("apache_php", minimal_artifact("app.php"), profile=self._ubuntu())
+        assert "apt-get" in s and "apache2" in s
+        assert "dnf" not in s
+
+    def test_default_profile_is_debian(self, registry):
+        # No profile arg == ubuntu behavior (backward compatible).
+        assert registry.deploy("flask", minimal_artifact()).startswith("#!/bin/bash")
+        assert "apt-get" in registry.deploy("flask", minimal_artifact())
+
+    def test_express_rhel_uses_nodejs_module(self, registry):
+        s = registry.deploy("express", minimal_artifact(), profile=self._rocky())
+        assert "nodejs:20" in s and "dnf" in s
+        assert "deb.nodesource.com" not in s
+
+    def test_flask_rhel_uses_dnf(self, registry):
+        s = registry.deploy("flask", minimal_artifact("app.py"), profile=self._rocky())
+        assert "dnf" in s and "python3" in s
+
+    def test_image_selection_by_family(self):
+        from goe.container.environment import _image_for
+        for rt in ("apache_php", "express", "flask"):
+            assert _image_for(rt, "rocky").endswith("-rhel:latest")
+            assert not _image_for(rt, "ubuntu").endswith("-rhel:latest")
+        # system runtime still resolves to the OS base image, not an appliance.
+        assert _image_for("system", "rocky") == "rockylinux:9"
+
+    def test_runtime_target_image_falls_back_to_debian(self):
+        from goe.container.test_environment_tool import runtime_target_image
+        assert runtime_target_image("apache_php", "rhel")["tag"].endswith("-rhel:latest")
+        # unknown family -> debian appliance; non-web runtime -> None
+        assert runtime_target_image("apache_php", "nonsense")["tag"] == "goe-target-php:latest"
+        assert runtime_target_image("system", "rhel") is None

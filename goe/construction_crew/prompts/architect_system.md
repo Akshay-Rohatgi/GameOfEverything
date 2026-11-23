@@ -98,7 +98,8 @@ stay deployed and provide their own pieces.
   not reinstall them or add a service this system does not declare.
 - **No systemd (see the Target OS init model); `systemctl` is NOT available in Docker.** To reload
   a service use its own tooling: Samba → `smbcontrol smbd reload-config`; SSH → `kill -HUP $(pgrep sshd)`;
-  Apache → `apache2ctl graceful`. Never use `systemctl`.
+  Apache → `apachectl graceful` (the `apachectl` binary exists on both families; `apache2ctl` is
+  Debian-only and `httpd` is the RHEL binary — prefer `apachectl`). Never use `systemctl`.
 - Your `success_indicator` MUST be observable on this entity's own system in isolation (e.g.
   "the key file is anonymously readable from the share"), NOT the end-to-end cross-system
   outcome (NOT "SSH login to the other box succeeds"). The full chain is verified separately.

@@ -172,7 +172,7 @@ def run(
         for system in graph.systems:
             system_entities = [e for e in graph.entities if e.system_id == system.id]
             if len(system_entities) > 1 or system.services:
-                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}_{system.id}", os=system.os)
+                penv = ProgressiveEnvironment(system_id=system.id, scope=f"run_{state.run_id[:8]}_{system.id}", os=system.os, hostname=system.network.hostname)
                 penv.setup()
                 # Register before provision() so the finally tears it down even
                 # if service provisioning fails partway through.
@@ -194,6 +194,19 @@ def run(
             if console:
                 console.entity_start(entity.id)
 
+            # Cross-host peers: every OTHER system with a live, provisioned env.
+            # Attaching their containers onto this entity's build network lets a
+            # web tier reach its DB host by hostname during the build (the DB
+            # service is already running from the up-front provision step above),
+            # instead of failing DNS resolution until the chain test.
+            peers = [
+                (s.network.hostname, progressive_envs[s.id].target_container)
+                for s in graph.systems
+                if s.id != entity.system_id
+                and s.id in progressive_envs
+                and progressive_envs[s.id].target_container is not None
+            ]
+
             # Use progressive environment if available for this system
             penv = progressive_envs.get(entity.system_id)
             if penv is not None:
@@ -214,6 +227,7 @@ def run(
                     provided_values=provided_values,
                     console=console,
                     os=_penv_system.os if _penv_system else "ubuntu",
+                    peers=peers,
                 )
             else:
                 # Single-entity systems (no services): per-entity isolation
@@ -228,6 +242,7 @@ def run(
                     provided_values=provided_values,
                     console=console,
                     os=_entity_system.os if _entity_system else "ubuntu",
+                    peers=peers,
                 )
 
             if outcome.result.status == EntityStatus.PASSED:
@@ -504,6 +519,16 @@ def _os_context(system) -> list[str]:
     return lines
 
 
+def _edge_cred_hint(edge) -> str:
+    """Render the resolved credential values on an edge, for the self-containment hint."""
+    parts = []
+    for k in ("user", "secret", "password"):
+        pv = edge.params.get(k)
+        if pv is not None and pv.concrete:
+            parts.append(f"{k}={pv.concrete}")
+    return ", ".join(parts) or "(use the provided edge values verbatim)"
+
+
 def _system_chain_context(
     graph: "EntityGraph",
     entity: "Entity",
@@ -567,6 +592,37 @@ def _system_chain_context(
                 sib_sys = graph.system_by_id(sib.system_id)
                 host = f"/{sib_sys.network.hostname}" if sib_sys is not None else ""
                 lines.append(f"- `{sib.id}` (on system `{sib.system_id}`{host}): {sib.description}")
+            lines.append("")
+
+    # Self-containment: a web entity that leaks creds FOR a service on ANOTHER host must
+    # not be wired as a client of that service. The remote service is the attacker's
+    # downstream target (reached over the chain network during the chain test), not this
+    # app's backend — and it is not reachable during this app's isolated build, so a 2-tier
+    # runtime dependency just makes the app hang/fail. Host the data locally and seed the
+    # exact leaked creds (now resolved on the edge) so the vulnerability exposes them.
+    if entity.runtime.value != "system":
+        remote_cred_targets = []
+        for eid in entity.provides:
+            edge = graph.edge_by_id(eid)
+            if edge is None or edge.type.value not in ("creds_for", "db_session"):
+                continue
+            tgt = graph.entity_by_id(edge.to_entity) if edge.to_entity else None
+            if tgt is not None and tgt.system_id != entity.system_id:
+                tsys = graph.system_by_id(tgt.system_id)
+                thost = tsys.network.hostname if tsys is not None else tgt.system_id
+                remote_cred_targets.append((thost, _edge_cred_hint(edge)))
+        if remote_cred_targets:
+            lines += [
+                "",
+                "**Your data store is LOCAL.** The credentials you leak are for a service on "
+                "ANOTHER host — a DOWNSTREAM attacker target, NOT this app's backend. Do NOT "
+                "connect this app to that remote service: a 2-tier runtime dependency is not "
+                "required and the remote host is not reachable during this isolated build. "
+                "Host your own local data store (e.g. a local SQLite/MySQL or a file) and SEED "
+                "it with the exact leaked credentials below so the vulnerability exposes them:",
+            ]
+            for thost, hint in remote_cred_targets:
+                lines.append(f"- credentials for the service on `{thost}`: {hint}")
             lines.append("")
 
     # The edges this entity consumes/provides describe exactly which link it owns.

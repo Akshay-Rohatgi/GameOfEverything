@@ -9,9 +9,28 @@ def main():
     parser = argparse.ArgumentParser(description="Run GoE v2 evaluation suite")
     parser.add_argument(
         "--suite",
-        choices=["planning", "build", "full"],
+        choices=["planning", "build", "full", "scenarios"],
         default="full",
-        help="Which eval suite to run (default: full)",
+        help="Which eval suite to run (default: full). 'scenarios' drives the full "
+             "prompt->multi-host pipeline N times and reports success rate + failure buckets.",
+    )
+    parser.add_argument(
+        "--requests",
+        help="Path to a file of prompts (one per line, # comments ok) for the "
+             "scenarios suite. Combine with or use instead of --request.",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=5,
+        help="Scenarios suite: how many times to run each prompt (default: 5).",
+    )
+    parser.add_argument(
+        "--os",
+        dest="os_override",
+        default=None,
+        help="Scenarios suite: pin every system to this distro (skips OS-assignment). "
+             "Omit to let the planner assign a distro mix.",
     )
     parser.add_argument(
         "--fixtures",
@@ -66,7 +85,35 @@ def main():
         print("Error: --fixtures is required for build eval", file=sys.stderr)
         sys.exit(1)
 
+    if args.suite == "scenarios" and not (args.request or args.requests):
+        print("Error: --request or --requests is required for the scenarios suite", file=sys.stderr)
+        sys.exit(1)
+
     output_dir = Path(args.output)
+
+    if args.suite == "scenarios":
+        from goe.eval.scenario import run_scenario_suite, load_requests
+
+        requests = []
+        if args.requests:
+            requests.extend(load_requests(args.requests))
+        if args.request:
+            requests.append(args.request)
+
+        scenario_run_dir = None
+        if capture_artifacts:
+            from goe.artifacts.run import _make_timestamp
+            scenario_run_dir = output_dir / _make_timestamp()
+            scenario_run_dir.mkdir(parents=True, exist_ok=True)
+
+        run_scenario_suite(
+            requests,
+            repeats=args.repeats,
+            os_override=args.os_override,
+            capture_artifacts=capture_artifacts,
+            run_dir=scenario_run_dir,
+        )
+        return
 
     if args.suite == "planning":
         from goe.eval.runner import run_planning_eval

@@ -2,6 +2,9 @@
 id: motd_command_injection
 description: Makes a script in /etc/update-motd.d/ world-writable, allowing a low-privilege user to inject arbitrary commands that execute as root whenever any user logs in via SSH or su.
 required_vars: [motd_script_name]
+# Debian/Ubuntu only: the dynamic-MOTD mechanism (/etc/update-motd.d run by pam_motd)
+# does not exist on the Red Hat family, so this technique has no RHEL/Rocky equivalent.
+families: [debian]
 ---
 # Atom: MOTD Command Injection
 Scripts in `/etc/update-motd.d/` are executed as root each time a user logs in and the dynamic MOTD is generated. A world-writable script in this directory allows any local user to inject commands that run as root on the next login event.

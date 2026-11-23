@@ -26,6 +26,26 @@ def _frontmatter(atom_id: str) -> dict:
         return {}
 
 
+def supported_families(atom_id: str) -> list[str]:
+    """Distro families this atom supports, from the frontmatter ``families`` field.
+
+    Returns ``[]`` when the atom declares none, which means *universal* — the atom
+    works on every distro family. A non-empty list (e.g. ``["debian"]``) restricts the
+    atom to those families: the planner must not place it on a host whose
+    ``DistroProfile.family`` is not listed, and the build fails fast if it would.
+
+    Used for atoms whose technique is inherently tied to one family and cannot be made
+    portable (e.g. ``motd_command_injection`` relies on Debian/Ubuntu's
+    ``/etc/update-motd.d`` dynamic MOTD, which does not exist on the Red Hat family).
+    """
+    value = _frontmatter(atom_id).get("families")
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value]
+
+
 def required_services(atom_id: str) -> list[str]:
     """Static service recipe IDs this atom always needs pre-installed.
 
